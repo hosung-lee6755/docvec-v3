@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 
 
 class Settings(BaseSettings):
@@ -69,6 +69,12 @@ class Settings(BaseSettings):
             raise ValueError(f"environment must be one of {allowed}")
         return v
 
+    # Comma-separated list of allowed frontend origins in production (e.g.
+    # "https://app.example.com,https://example.com"). Falls back to a
+    # deliberately-invalid placeholder so a missing env var fails CORS loudly
+    # instead of silently trusting an unrelated domain.
+    cors_allowed_origins: str = ""
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
@@ -76,6 +82,17 @@ class Settings(BaseSettings):
     @property
     def qdrant_url(self) -> str:
         return f"http://{self.qdrant_host}:{self.qdrant_port}"
+
+    _INSECURE_SECRET_KEYS = {"change-me-in-production", ""}
+
+    @model_validator(mode="after")
+    def _enforce_production_secret_key(self) -> "Settings":
+        if self.is_production and self.secret_key in self._INSECURE_SECRET_KEYS:
+            raise ValueError(
+                "SECRET_KEY must be set to a strong random value in production "
+                '(e.g. `python -c "import secrets; print(secrets.token_hex(32))"`).'
+            )
+        return self
 
 
 settings = Settings()

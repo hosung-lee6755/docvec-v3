@@ -13,6 +13,7 @@ from app.core.security import get_password_hash, verify_password
 from app.db.models.user import User
 from app.db.models.user_api_key import UserApiKey
 from app.db.session import get_db
+from app.services.audit import log_audit
 
 SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -59,7 +60,7 @@ class ProfileUpdate(BaseModel):
 
 class PasswordChange(BaseModel):
     current_password: str
-    new_password: str = Field(min_length=8)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 # Registered before PATCH "/{user_id}" below — Starlette matches routes in
@@ -131,6 +132,10 @@ async def update_user(
         user.role = data.role
     if data.is_active is not None:
         user.is_active = data.is_active
+    log_audit(
+        db, str(current_user.id), "user.update", "user", str(user.id),
+        detail={"role": data.role, "is_active": data.is_active},
+    )
     await db.commit()
     await db.refresh(user)
     return UserResponse.model_validate(user)
@@ -149,6 +154,7 @@ async def delete_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    log_audit(db, str(current_user.id), "user.delete", "user", str(user.id))
     await db.delete(user)
     await db.commit()
 
@@ -213,6 +219,7 @@ async def set_my_api_key(
                 encrypted_key=encrypted,
             )
         )
+    log_audit(db, str(current_user.id), "api_key.set", "user_api_key", provider)
     await db.commit()
     return {"message": "저장되었습니다", "provider": provider}
 
@@ -223,6 +230,7 @@ async def delete_my_api_key(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    log_audit(db, str(current_user.id), "api_key.delete", "user_api_key", provider)
     await db.execute(
         delete(UserApiKey).where(
             UserApiKey.user_id == str(current_user.id),

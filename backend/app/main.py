@@ -55,7 +55,12 @@ app = FastAPI(
 )
 
 if settings.is_production:
-    origins = ["https://example.com"]
+    origins = [o.strip() for o in settings.cors_allowed_origins.split(",") if o.strip()]
+    if not origins:
+        raise RuntimeError(
+            "CORS_ALLOWED_ORIGINS must be set to the real frontend origin(s) in "
+            "production (comma-separated) — refusing to start with no allowed origin."
+        )
 else:
     origins = [
         "http://localhost:3000",
