@@ -12,6 +12,8 @@ from app.db.models.chat_conversation import ChatConversation
 from app.db.models.chat_message import ChatMessage
 from app.db.models.golden_query import GoldenQuery
 from app.db.models.golden_eval_run import GoldenEvalRun
+from app.db.models.audit_log import AuditLog
+from app.db.models.llm_usage_log import LLMUsageLog
 
 __all__ = [
     "User",
@@ -28,4 +30,6 @@ __all__ = [
     "ChatMessage",
     "GoldenQuery",
     "GoldenEvalRun",
+    "AuditLog",
+    "LLMUsageLog",
 ]

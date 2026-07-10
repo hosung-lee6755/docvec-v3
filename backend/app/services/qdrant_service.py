@@ -118,6 +118,19 @@ class QdrantService:
             ),
         )
 
+    def count_by_collection(self, collection: str, collection_id: str) -> int:
+        """Live count of searchable (non-disabled) vectors for a collection --
+        backs the embedding-status summary, not a cached/derived number."""
+        result = self._client.count(
+            collection_name=collection,
+            count_filter=Filter(
+                must=[FieldCondition(key="collection_id", match=MatchValue(value=collection_id))],
+                must_not=[FieldCondition(key="disabled", match=MatchValue(value=True))],
+            ),
+            exact=True,
+        )
+        return result.count
+
     def scroll_by_document(self, document_id: str, limit: int = 10000) -> list[dict]:
         points, _ = self._client.scroll(
             collection_name=settings.qdrant_collection_name,

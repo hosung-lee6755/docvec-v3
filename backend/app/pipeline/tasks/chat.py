@@ -527,6 +527,26 @@ def generate_answer(self, chat_message_id: str) -> dict:
                 context = _build_context(chunks)
                 answer = _generate(context)
 
+        usage = getattr(provider, "last_usage", None)
+        if usage:
+            from app.db.models.llm_usage_log import LLMUsageLog
+            from app.services.llm import estimate_cost_usd
+
+            db.add(
+                LLMUsageLog(
+                    user_id=str(conversation.user_id),
+                    project_id=project_id_str,
+                    conversation_id=str(conversation.id),
+                    provider=spec["backend"],
+                    model_key=conversation.model_key,
+                    input_tokens=usage["input_tokens"],
+                    output_tokens=usage["output_tokens"],
+                    estimated_cost_usd=estimate_cost_usd(
+                        conversation.model_key, usage["input_tokens"], usage["output_tokens"]
+                    ),
+                )
+            )
+
         msg.answer = answer
         msg.citations = [
             {

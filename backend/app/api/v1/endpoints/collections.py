@@ -237,6 +237,41 @@ async def get_collection(
     return await check_collection_access(db, collection_id, current_user, min_role="viewer")
 
 
+@router.get("/{collection_id}/vector-stats")
+async def get_collection_vector_stats(
+    collection_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    collection = await check_collection_access(db, collection_id, current_user, min_role="viewer")
+
+    from app.services.qdrant_service import qdrant_service
+
+    total_documents = await db.scalar(
+        select(func.count(Document.id)).where(Document.collection_id == collection_id)
+    ) or 0
+    indexed_documents = await db.scalar(
+        select(func.count(Document.id)).where(
+            Document.collection_id == collection_id, Document.status == "INDEXED"
+        )
+    ) or 0
+    total_vectors = qdrant_service.count_by_collection(
+        settings.qdrant_collection_name, str(collection_id)
+    )
+    spec = EMBEDDING_MODEL_REGISTRY.get(collection.embedding_model)
+
+    return {
+        "embedding_model": collection.embedding_model,
+        "embedding_model_label": spec["label"] if spec else collection.embedding_model,
+        "dimension": spec["dimension"] if spec else None,
+        "total_documents": total_documents,
+        "indexed_documents": indexed_documents,
+        "total_vectors": total_vectors,
+        "reembed_status": collection.reembed_status,
+        "reembed_progress": collection.reembed_progress,
+    }
+
+
 @router.patch("/{collection_id}", response_model=CollectionResponse)
 async def update_collection(
     collection_id: UUID,

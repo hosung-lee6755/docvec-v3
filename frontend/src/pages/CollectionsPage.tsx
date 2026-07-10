@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { FolderOpen, FolderPlus, Trash2, X, Loader2, Pencil, Users, UserPlus, UserMinus, BarChart3 } from 'lucide-react'
+import { FolderOpen, FolderPlus, Trash2, X, Loader2, Pencil, Users, UserPlus, UserMinus, BarChart3, Layers } from 'lucide-react'
 import {
   useCollectionMembers,
   useCollections,
@@ -16,6 +16,7 @@ import {
 import { useProjects } from '../hooks/useProjects'
 import { apiClient } from '../lib/apiClient'
 import GoldenEvalModal from '../components/GoldenEvalModal'
+import VectorStatsModal from '../components/VectorStatsModal'
 
 const DEFAULT_CHUNK_MAX = 512
 const DEFAULT_CHUNK_MIN = 50
@@ -101,6 +102,7 @@ export default function CollectionsPage() {
   const [editChunkStrategy, setEditChunkStrategy] = useState<'size' | 'semantic'>('size')
   const [editDocCount, setEditDocCount] = useState(0)
   const [goldenEvalCollection, setGoldenEvalCollection] = useState<Collection | null>(null)
+  const [vectorStatsCollection, setVectorStatsCollection] = useState<Collection | null>(null)
   const editingCollection = data?.items.find((c) => c.id === editId)
   const editingReembedStatus = editingCollection?.reembed_status
   const editingReembedProgress = editingCollection?.reembed_progress
@@ -400,6 +402,15 @@ export default function CollectionsPage() {
                           aria-label="골든 쿼리 평가"
                         >
                           <BarChart3 size={17} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setVectorStatsCollection(col)}
+                          className="row-action-btn accent"
+                          title="벡터 DB 현황"
+                          aria-label="벡터 DB 현황"
+                        >
+                          <Layers size={17} />
                         </button>
                         {col.is_owner && (
                           <button
@@ -1105,6 +1116,14 @@ export default function CollectionsPage() {
           collectionId={goldenEvalCollection.id}
           collectionName={goldenEvalCollection.name}
           onClose={() => setGoldenEvalCollection(null)}
+        />
+      )}
+
+      {vectorStatsCollection && (
+        <VectorStatsModal
+          collectionId={vectorStatsCollection.id}
+          collectionName={vectorStatsCollection.name}
+          onClose={() => setVectorStatsCollection(null)}
         />
       )}
     </div>

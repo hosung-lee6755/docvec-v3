@@ -1,5 +1,5 @@
 import { Outlet, NavLink } from 'react-router-dom'
-import { LayoutDashboard, FileText, FolderKanban, FolderOpen, Search, LogOut, Users, MessageSquare, Settings } from 'lucide-react'
+import { LayoutDashboard, FileText, FolderKanban, FolderOpen, Search, LogOut, Users, MessageSquare, Settings, ScrollText, DollarSign } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 
 const navItems = [
@@ -10,6 +10,8 @@ const navItems = [
   { to: '/search', icon: Search, label: '검색' },
   { to: '/chat', icon: MessageSquare, label: '채팅' },
   { to: '/users', icon: Users, label: '사용자', adminOnly: true },
+  { to: '/audit-logs', icon: ScrollText, label: '감사 로그', adminOnly: true },
+  { to: '/usage', icon: DollarSign, label: '사용량', adminOnly: true },
 ]
 
 export default function Layout() {

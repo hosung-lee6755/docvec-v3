@@ -104,12 +104,20 @@ class OpenAILLMProvider(LLMProvider):
 
         self._client = OpenAI(api_key=api_key)
         self._model = model
+        # Populated after each generate() call so callers can log token usage
+        # for cost tracking -- None until the first call completes.
+        self.last_usage: dict[str, int] | None = None
 
     def generate(self, system_prompt: str, messages: list[dict[str, str]]) -> str:
         response = self._client.chat.completions.create(
             model=self._model,
             messages=[{"role": "system", "content": system_prompt}, *messages],
         )
+        if response.usage:
+            self.last_usage = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+            }
         return response.choices[0].message.content or ""
 
     def generate_vision(
@@ -140,6 +148,7 @@ class AnthropicLLMProvider(LLMProvider):
 
         self._client = Anthropic(api_key=api_key)
         self._model = model
+        self.last_usage: dict[str, int] | None = None
 
     def generate(self, system_prompt: str, messages: list[dict[str, str]]) -> str:
         response = self._client.messages.create(
@@ -148,6 +157,11 @@ class AnthropicLLMProvider(LLMProvider):
             system=system_prompt,
             messages=messages,
         )
+        if response.usage:
+            self.last_usage = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            }
         return "".join(block.text for block in response.content if block.type == "text")
 
     def generate_vision(
@@ -219,6 +233,23 @@ LLM_MODEL_REGISTRY: dict[str, LLMModelSpec] = {
 # request and are keyed by the calling user's own API key, so caching them would
 # either leak one user's client across requests or require a cache key per user.
 _local_provider_cache: dict[str, LLMProvider] = {}
+
+# USD per 1M tokens, publicly listed provider rates as of this writing -- approximate,
+# for the usage dashboard's cost estimate only, not a billing-grade computation.
+_TOKEN_PRICING_PER_MILLION: dict[str, tuple[float, float]] = {
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4o": (2.50, 10.00),
+    "claude-3-5-haiku": (0.80, 4.00),
+    "claude-3-5-sonnet": (3.00, 15.00),
+}
+
+
+def estimate_cost_usd(model_key: str, input_tokens: int, output_tokens: int) -> float:
+    pricing = _TOKEN_PRICING_PER_MILLION.get(model_key)
+    if pricing is None:
+        return 0.0
+    input_rate, output_rate = pricing
+    return (input_tokens / 1_000_000) * input_rate + (output_tokens / 1_000_000) * output_rate
 
 
 def get_llm_provider(model_key: str, api_key: str | None = None) -> LLMProvider:

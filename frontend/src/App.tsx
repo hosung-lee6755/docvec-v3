@@ -13,6 +13,8 @@ import DocumentDetailPage from './pages/DocumentDetailPage'
 import UsersPage from './pages/UsersPage'
 import ChatPage from './pages/ChatPage'
 import SettingsPage from './pages/SettingsPage'
+import AuditLogPage from './pages/AuditLogPage'
+import UsageDashboardPage from './pages/UsageDashboardPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -52,6 +54,8 @@ export default function App() {
         <Route path="chat/:conversationId" element={<ChatPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="users" element={<UsersPage />} />
+        <Route path="audit-logs" element={<AuditLogPage />} />
+        <Route path="usage" element={<UsageDashboardPage />} />
       </Route>
     </Routes>
   )

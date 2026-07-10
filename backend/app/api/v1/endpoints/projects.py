@@ -16,6 +16,7 @@ from app.db.models.project_api_key import ProjectApiKey
 from app.db.models.project_member import ProjectMember
 from app.db.models.user import User
 from app.db.session import get_db
+from app.services.audit import log_audit
 
 router = APIRouter()
 
@@ -259,6 +260,10 @@ async def invite_project_member(
             role=data.role,
             invited_by=str(current_user.id),
         ))
+    log_audit(
+        db, str(current_user.id), "project.member_invite", "project", str(project_id),
+        detail={"invitee_email": invitee.email, "role": data.role},
+    )
     await db.commit()
     return {"message": "초대되었습니다", "email": invitee.email, "role": data.role}
 
@@ -319,7 +324,9 @@ async def list_project_api_keys(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    project = await check_project_access(db, project_id, current_user, min_role="viewer")
+    project = await db.scalar(select(Project).where(Project.id == project_id))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
     if str(project.created_by) != str(current_user.id):
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -424,6 +431,10 @@ async def remove_project_member(
             ProjectMember.project_id == project_id,
             ProjectMember.user_id == str(user_id),
         )
+    )
+    log_audit(
+        db, str(current_user.id), "project.member_remove", "project", str(project_id),
+        detail={"removed_user_id": str(user_id)},
     )
     await db.commit()
     return {"message": "멤버가 제거되었습니다"}

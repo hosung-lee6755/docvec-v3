@@ -21,6 +21,7 @@ from app.db.models.processing_job import ProcessingJob
 from app.db.models.user import User
 from app.db.session import get_db
 from app.db.models.document_revision import DocumentTextRevision
+from app.services.audit import log_audit
 from app.schemas.document import (
     ChunkUpdateRequest,
     DocumentChunksResponse,
@@ -410,6 +411,10 @@ async def delete_document(
     storage_service.delete_file(settings.minio_bucket_originals, doc.minio_key)
     for record in doc.images or []:
         storage_service.delete_file(settings.minio_bucket_artifacts, record["storage_key"])
+    log_audit(
+        db, str(current_user.id), "document.delete", "document", str(doc.id),
+        detail={"filename": doc.filename},
+    )
     await db.delete(doc)
     await db.commit()
     return {"message": "Document deleted"}
