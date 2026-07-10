@@ -17,7 +17,7 @@ def _make_hit(chunk_id: str, score: float, document_id: str, text: str) -> dict:
 
 @pytest.mark.asyncio
 async def test_perform_search_vector_mode_returns_results_and_logs_history():
-    user_id = uuid4()
+    user = MagicMock(id=uuid4())
     document_id = str(uuid4())
     db = AsyncMock()
     db.add = MagicMock()  # AsyncSession.add() is sync; avoid an unawaited-coroutine warning
@@ -25,6 +25,10 @@ async def test_perform_search_vector_mode_returns_results_and_logs_history():
     with (
         patch("app.services.search_service.get_embedding_provider") as mock_provider,
         patch("app.services.search_service.qdrant_service") as mock_qdrant,
+        patch(
+            "app.services.search_service.accessible_collection_ids",
+            new=AsyncMock(return_value=["col-1"]),
+        ),
     ):
         mock_provider.return_value.embed.return_value = [[0.1, 0.2, 0.3]]
         mock_qdrant.search.return_value = [
@@ -32,7 +36,7 @@ async def test_perform_search_vector_mode_returns_results_and_logs_history():
         ]
 
         results = await search_service.perform_search(
-            db, user_id, SearchRequest(query="hello", limit=5, mode="vector")
+            db, user, SearchRequest(query="hello", limit=5, mode="vector")
         )
 
     assert len(results) == 1
@@ -48,7 +52,7 @@ async def test_perform_search_vector_mode_returns_results_and_logs_history():
 
 @pytest.mark.asyncio
 async def test_perform_search_hybrid_mode_reranks_and_trims_to_limit():
-    user_id = uuid4()
+    user = MagicMock(id=uuid4())
     document_id = str(uuid4())
     db = AsyncMock()
     db.add = MagicMock()  # AsyncSession.add() is sync; avoid an unawaited-coroutine warning
@@ -56,6 +60,10 @@ async def test_perform_search_hybrid_mode_reranks_and_trims_to_limit():
     with (
         patch("app.services.search_service.get_embedding_provider") as mock_provider,
         patch("app.services.search_service.qdrant_service") as mock_qdrant,
+        patch(
+            "app.services.search_service.accessible_collection_ids",
+            new=AsyncMock(return_value=["col-1"]),
+        ),
     ):
         mock_provider.return_value.embed.return_value = [[0.1, 0.2, 0.3]]
         mock_qdrant.search.return_value = [
@@ -64,7 +72,7 @@ async def test_perform_search_hybrid_mode_reranks_and_trims_to_limit():
         ]
 
         results = await search_service.perform_search(
-            db, user_id, SearchRequest(query="content number 3", limit=3, mode="hybrid")
+            db, user, SearchRequest(query="content number 3", limit=3, mode="hybrid")
         )
 
     assert len(results) == 3
