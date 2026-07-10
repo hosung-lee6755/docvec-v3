@@ -1,0 +1,104 @@
+[tool.poetry]
+name = "docvec-backend"
+version = "0.1.0"
+description = "Document Vectorization Platform - Backend"
+authors = ["DocVec Team"]
+packages = [{include = "app"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# Web framework
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.32.0"}
+python-multipart = "^0.0.17"
+websockets = "^13.1"
+
+# Database
+sqlalchemy = {extras = ["asyncio"], version = "^2.0.36"}
+alembic = "^1.14.0"
+asyncpg = "^0.30.0"
+psycopg2-binary = "^2.9.10"
+
+# Redis / Celery
+celery = {extras = ["redis"], version = "^5.4.0"}
+redis = {extras = ["hiredis"], version = "^5.2.0"}
+flower = "^2.0.1"
+
+# Auth
+python-jose = {extras = ["cryptography"], version = "^3.3.0"}
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+cryptography = "^44.0.0"
+
+# Pydantic / Settings
+pydantic = {extras = ["email"], version = "^2.10.0"}
+pydantic-settings = "^2.6.0"
+
+# Vector DB
+qdrant-client = "^1.12.0"
+
+# File storage
+minio = "^7.2.11"
+
+# Document parsing
+pdfplumber = "^0.11.4"
+pymupdf = "^1.25.0"
+python-docx = "^1.1.2"
+
+# HWP/HWPX parsing
+olefile = "^0.47"
+
+# OCR
+pillow = "^11.0.0"
+pytesseract = "^0.3.13"
+
+# Text processing
+langdetect = "^1.0.9"
+regex = "^2024.11.6"
+rank-bm25 = "^0.2.2"
+
+# UUID v7
+uuid6 = "^2024.1.12"
+
+# HTTP client
+httpx = "^0.28.0"
+
+# Logging
+structlog = "^24.4.0"
+pyhwp = "^0.1b15"
+mammoth = "^1.12.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.0"
+pytest-asyncio = "^0.24.0"
+pytest-cov = "^6.0.0"
+testcontainers = {extras = ["postgres", "redis"], version = "^4.9.0"}
+factory-boy = "^3.3.1"
+freezegun = "^1.5.1"
+ruff = "^0.8.0"
+
+[tool.poetry.group.embed.dependencies]
+# Heavy ML dependencies — install only on worker nodes
+FlagEmbedding = "^1.3.3"
+torch = {version = "^2.5.0", extras = ["cpu"]}
+transformers = "^4.47.0"
+sentence-transformers = "^3.3.0"
+openai = "^1.57.0"
+anthropic = "^0.40.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=80"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "S"]
+ignore = ["S101"]

@@ -1,0 +1,30 @@
+# Secrets
+.env
+*.env.local
+
+# Backend (Python / Poetry)
+backend/.venv/
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/.pytest_cache/
+backend/.ruff_cache/
+backend/htmlcov/
+backend/.coverage
+
+# Frontend (Node)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Data / large binaries not meant for source control
+backups/
+input_pdfs/
+phase5_test.pdf
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

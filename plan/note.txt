@@ -1,0 +1,11 @@
+engine_design.md: block/section/table/figure 복원 규칙, reading order, OCR 개입, provenance
+canonical_schema.md: top-level schema, page/block/section/table/cell/record/fact/chunk/quality/warning/provenance
+refinement.md: refinement 명령, validity 검사, non-destructive 원칙, recompute 영향 범위
+review_spec.md: review bundle 구성, markdown 출력 규칙, ID 표기, OCR 표시, review_hint
+execution_architecture.md: 상태 객체 흐름, 모듈 책임, 인터페이스, review/refinement/recompute/canonical 위치
+folder_structure.md : 폴더 구조 설계
+module_structure.md : 모듈 구조 설계
+module_structure.md : 클래스 설계
+
+
+MASTER_INTEGRATED_KO.md: 문서 간 관계, 읽는 순서, 링크 기반 통합 안내
