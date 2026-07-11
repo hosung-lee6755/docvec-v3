@@ -1,8 +1,6 @@
 from rank_bm25 import BM25Okapi
 
-
-def _tokenize(text: str) -> list[str]:
-    return text.lower().split()
+from app.services.dictionary_service import tokenize_batch
 
 
 def bm25_rerank(
@@ -20,9 +18,13 @@ def bm25_rerank(
     if not candidates:
         return []
 
-    corpus = [_tokenize(c[text_field]) for c in candidates]
+    # Batched in one kiwipiepy call (corpus + query together) — tokenizing
+    # texts one at a time is ~5x slower than batching them.
+    tokenized = tokenize_batch([c[text_field] for c in candidates] + [query])
+    corpus, tokenized_query = tokenized[:-1], tokenized[-1]
+
     bm25 = BM25Okapi(corpus)
-    raw_scores = bm25.get_scores(_tokenize(query))
+    raw_scores = bm25.get_scores(tokenized_query)
 
     max_bm25 = max(raw_scores) if max(raw_scores) > 0 else 1.0
     normalized = [s / max_bm25 for s in raw_scores]

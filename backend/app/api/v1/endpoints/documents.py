@@ -34,6 +34,7 @@ from app.schemas.document import (
     DocumentResponse,
     DocumentRevisionsResponse,
     DocumentTablesResponse,
+    DocumentTagSuggestionRequest,
     DocumentTagsUpdateRequest,
     DocumentUploadResponse,
 )
@@ -771,6 +772,55 @@ async def update_document_tags(
         settings.qdrant_collection_name, str(document_id), {"tags": tags}
     )
     return {"tags": tags}
+
+
+@router.post("/{document_id}/tags/accept-suggestion")
+async def accept_tag_suggestion(
+    document_id: UUID,
+    body: DocumentTagSuggestionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Promotes one LLM-suggested tag into the user-managed tag list and
+    removes it from suggested_tags. Reuses update_document_tags' Qdrant sync
+    since the result is indistinguishable from a manually-added tag."""
+    from app.services.qdrant_service import qdrant_service
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="editor")
+
+    tags = [*(doc.tags or [])]
+    if body.tag not in tags:
+        tags.append(body.tag)
+    doc.tags = tags
+    doc.suggested_tags = [t for t in (doc.suggested_tags or []) if t != body.tag] or None
+    await db.commit()
+
+    qdrant_service.set_payload_by_document(
+        settings.qdrant_collection_name, str(document_id), {"tags": tags}
+    )
+    return {"tags": doc.tags, "suggested_tags": doc.suggested_tags}
+
+
+@router.post("/{document_id}/tags/dismiss-suggestion")
+async def dismiss_tag_suggestion(
+    document_id: UUID,
+    body: DocumentTagSuggestionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Drops one LLM-suggested tag without adding it to tags. Never touches
+    Qdrant — suggestions are never written there in the first place."""
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="editor")
+
+    doc.suggested_tags = [t for t in (doc.suggested_tags or []) if t != body.tag] or None
+    await db.commit()
+    return {"suggested_tags": doc.suggested_tags}
 
 
 @router.get("/{document_id}/images", response_model=DocumentImagesResponse)

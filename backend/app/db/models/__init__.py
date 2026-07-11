@@ -14,6 +14,9 @@ from app.db.models.golden_query import GoldenQuery
 from app.db.models.golden_eval_run import GoldenEvalRun
 from app.db.models.audit_log import AuditLog
 from app.db.models.llm_usage_log import LLMUsageLog
+from app.db.models.dictionary_entry import DictionaryEntry
+from app.db.models.dictionary_entry_variant import DictionaryEntryVariant
+from app.db.models.document_revision import DocumentTextRevision
 
 __all__ = [
     "User",
@@ -32,4 +35,7 @@ __all__ = [
     "GoldenEvalRun",
     "AuditLog",
     "LLMUsageLog",
+    "DictionaryEntry",
+    "DictionaryEntryVariant",
+    "DocumentTextRevision",
 ]

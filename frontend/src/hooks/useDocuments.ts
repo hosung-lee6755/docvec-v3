@@ -16,6 +16,8 @@ export interface Document {
   summary: string | null
   summary_status: string
   tags: string[] | null
+  suggested_tags: string[] | null
+  metadata_status: string
 }
 
 export interface DocumentListResponse {
@@ -313,6 +315,36 @@ export function useUpdateDocumentTags() {
     onSuccess: (data, { docId }) => {
       queryClient.setQueryData<Document>(['documents', docId], (old) =>
         old ? { ...old, tags: data.tags } : old
+      )
+    },
+  })
+}
+
+export function useAcceptTagSuggestion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ docId, tag }: { docId: string; tag: string }) => {
+      const { data } = await apiClient.post(`/documents/${docId}/tags/accept-suggestion`, { tag })
+      return data as { tags: string[]; suggested_tags: string[] | null }
+    },
+    onSuccess: (data, { docId }) => {
+      queryClient.setQueryData<Document>(['documents', docId], (old) =>
+        old ? { ...old, tags: data.tags, suggested_tags: data.suggested_tags } : old
+      )
+    },
+  })
+}
+
+export function useDismissTagSuggestion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ docId, tag }: { docId: string; tag: string }) => {
+      const { data } = await apiClient.post(`/documents/${docId}/tags/dismiss-suggestion`, { tag })
+      return data as { suggested_tags: string[] | null }
+    },
+    onSuccess: (data, { docId }) => {
+      queryClient.setQueryData<Document>(['documents', docId], (old) =>
+        old ? { ...old, suggested_tags: data.suggested_tags } : old
       )
     },
   })

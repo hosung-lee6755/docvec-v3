@@ -44,6 +44,11 @@ async def lifespan(app: FastAPI):
             db.add(system_user)
             await db.commit()
 
+    from app.services.dictionary_service import refresh_dictionary_cache
+
+    async with async_session_maker() as db:
+        await refresh_dictionary_cache(db)
+
     yield
 
 

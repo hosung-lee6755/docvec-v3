@@ -24,3 +24,8 @@ async def get_current_user(
     if not user.is_active:
         raise HTTPException(status_code=401, detail="User account is disabled")
     return user
+
+
+def require_admin(current_user: User) -> None:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")

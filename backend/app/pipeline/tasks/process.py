@@ -681,6 +681,8 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
             db.commit()
             from app.pipeline.tasks.summary import generate_summary
             generate_summary.delay(document_id)
+            from app.pipeline.tasks.metadata import extract_metadata
+            extract_metadata.delay(document_id)
             return {"document_id": document_id, "status": "INDEXED", "chunks": 0}
         strategy_label = " (의미 기준)" if chunk_strategy == "semantic" else ""
         complete_job(db, current_job, f"{len(chunks)}개 청크 생성{strategy_label}")
@@ -728,6 +730,8 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
 
         from app.pipeline.tasks.summary import generate_summary
         generate_summary.delay(document_id)
+        from app.pipeline.tasks.metadata import extract_metadata
+        extract_metadata.delay(document_id)
 
         return {"document_id": document_id, "status": "INDEXED", "chunks": len(chunks)}
 

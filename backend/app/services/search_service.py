@@ -8,13 +8,17 @@ from app.api.v1.permissions import accessible_collection_ids
 from app.core.config import settings
 from app.db.models.search_history import SearchHistory
 from app.db.models.user import User
-from app.schemas.search import SearchRequest, SearchResultItem
+from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
 from app.services.bm25_service import bm25_rerank
 from app.services.chunk_stats import record_hits
+from app.services.dictionary_service import expand_query
 from app.services.embedding import get_embedding_provider
+from app.services.mmr_service import mmr_rerank
 from app.services.qdrant_service import qdrant_service
 
 _HYBRID_CANDIDATE_MULTIPLIER = 4
+_MMR_CANDIDATE_MULTIPLIER = 3
+_MMR_LAMBDA = 0.7
 
 
 def _embed_query(query: str) -> list[float]:
@@ -24,16 +28,24 @@ def _embed_query(query: str) -> list[float]:
 
 async def perform_search(
     db: AsyncSession, user: User, request: SearchRequest
-) -> list[SearchResultItem]:
+) -> SearchResponse:
+    # Dictionary-driven synonym rewrite (SEARCH_EXPAND entries only) — cheap
+    # in-memory dict lookups, so run inline like bm25_rerank below rather than
+    # via asyncio.to_thread (that's reserved for the genuinely CPU-heavy
+    # embedding call, which blocks the whole process — see comment below).
+    expanded_query, added_terms = expand_query(request.query)
+
     # Model load (cold start) and inference are synchronous/CPU-bound; running them
     # inline would block the single event loop for the whole API process, freezing
     # every other request (this caused a real incident: a cold-start model download
     # froze uploads and document listing for all users). Offload to a worker thread.
-    query_vector = await asyncio.to_thread(_embed_query, request.query)
+    query_vector = await asyncio.to_thread(_embed_query, expanded_query)
 
-    fetch_limit = (
-        request.limit * _HYBRID_CANDIDATE_MULTIPLIER if request.mode == "hybrid" else request.limit
-    )
+    fetch_limit = request.limit
+    if request.mode == "hybrid":
+        fetch_limit = max(fetch_limit, request.limit * _HYBRID_CANDIDATE_MULTIPLIER)
+    if request.diversify:
+        fetch_limit = max(fetch_limit, request.limit * _MMR_CANDIDATE_MULTIPLIER)
 
     # With no collection_id ("search all my documents"), every collection shares one
     # physical Qdrant collection, so an unscoped query must be restricted to this
@@ -54,6 +66,7 @@ async def perform_search(
         collection_id=str(request.collection_id) if request.collection_id else None,
         collection_ids=collection_ids,
         filters=request.filters,
+        with_vectors=request.diversify,
     )
     if hits:
         await asyncio.to_thread(record_hits, [h["id"] for h in hits])
@@ -69,12 +82,21 @@ async def perform_search(
             "metadata": {
                 k: v for k, v in h["payload"].items() if k not in ("text", "document_id")
             },
+            "vector": h.get("vector"),
         }
         for h in hits
     ]
 
     if request.mode == "hybrid" and candidates:
-        candidates = bm25_rerank(request.query, candidates, text_field="content")[: request.limit]
+        candidates = bm25_rerank(expanded_query, candidates, text_field="content")
+
+    if request.diversify and candidates:
+        relevance_field = "final_score" if request.mode == "hybrid" else "score"
+        candidates = mmr_rerank(
+            candidates, k=request.limit, relevance_field=relevance_field, lambda_param=_MMR_LAMBDA
+        )
+    else:
+        candidates = candidates[: request.limit]
 
     results = [
         SearchResultItem(
@@ -100,7 +122,7 @@ async def perform_search(
     )
     await db.commit()
 
-    return results
+    return SearchResponse(items=results, expanded_query=expanded_query, added_terms=added_terms)
 
 
 async def list_search_history(

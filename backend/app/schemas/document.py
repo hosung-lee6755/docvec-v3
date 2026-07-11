@@ -28,6 +28,8 @@ class DocumentResponse(BaseModel):
     summary: str | None
     summary_status: str
     tags: list[str] | None = None
+    suggested_tags: list[str] | None = None
+    metadata_status: str
 
     class Config:
         from_attributes = True
@@ -121,3 +123,7 @@ class DocumentRevisionsResponse(BaseModel):
 
 class DocumentTagsUpdateRequest(BaseModel):
     tags: list[str] = Field(..., max_length=20)
+
+
+class DocumentTagSuggestionRequest(BaseModel):
+    tag: str = Field(..., min_length=1, max_length=100)

@@ -44,6 +44,7 @@ class QdrantService:
         collection_id: str | None = None,
         collection_ids: list[str] | None = None,
         filters: dict | None = None,
+        with_vectors: bool = False,
     ) -> list[dict]:
         must_conditions: list[FieldCondition] = []
         if collection_id:
@@ -74,9 +75,15 @@ class QdrantService:
             limit=limit,
             query_filter=query_filter,
             with_payload=True,
+            with_vectors=with_vectors,
         )
         return [
-            {"id": str(r.id), "score": r.score, "payload": r.payload or {}}
+            {
+                "id": str(r.id),
+                "score": r.score,
+                "payload": r.payload or {},
+                **({"vector": r.vector} if with_vectors else {}),
+            }
             for r in response.points
         ]
 

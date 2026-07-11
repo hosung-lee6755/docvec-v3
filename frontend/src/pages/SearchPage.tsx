@@ -17,6 +17,12 @@ interface SearchResult {
   final_score: number | null
 }
 
+interface SearchResponse {
+  items: SearchResult[]
+  expanded_query: string
+  added_terms: string[]
+}
+
 type SearchMode = 'vector' | 'hybrid'
 
 export default function SearchPage() {
@@ -25,6 +31,7 @@ export default function SearchPage() {
   const [query, setQuery] = useState('')
   const [collectionId, setCollectionId] = useState('')
   const [mode, setMode] = useState<SearchMode>('vector')
+  const [diversify, setDiversify] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [tagFilter, setTagFilter] = useState('')
   const [showScores, setShowScores] = useState(false)
@@ -41,9 +48,10 @@ export default function SearchPage() {
         project_id: projectId || null,
         limit: 10,
         mode: m,
+        diversify,
         filters: tagFilter.trim() ? { tags: tagFilter.trim() } : null,
       })
-      return data as SearchResult[]
+      return data as SearchResponse
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['search-history'] })
@@ -97,6 +105,15 @@ export default function SearchPage() {
                 </button>
               ))}
             </div>
+
+            <button
+              type="button"
+              onClick={() => setDiversify((v) => !v)}
+              title="비슷한 청크가 중복 노출되지 않도록 결과를 다양화합니다"
+              className={`krds-btn small ${diversify ? 'primary' : 'tertiary'}`}
+            >
+              다양성 검색
+            </button>
 
             <input
               value={tagFilter}
@@ -201,18 +218,23 @@ export default function SearchPage() {
         </div>
       )}
 
-      {!search.isPending && search.isSuccess && search.data.length === 0 && (
+      {!search.isPending && search.isSuccess && search.data.items.length === 0 && (
         <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
           <p>검색 결과가 없습니다.</p>
         </div>
       )}
 
-      {!search.isPending && (search.data?.length ?? 0) > 0 && (
+      {!search.isPending && (search.data?.items.length ?? 0) > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: 0 }}>
-            {search.data!.length}개 결과
+            {search.data!.items.length}개 결과
+            {!!search.data!.added_terms.length && (
+              <span style={{ marginLeft: 'var(--space-2)', color: 'var(--color-text-muted)' }}>
+                · 사전에 등록된 동의어로 확장됨: {search.data!.added_terms.join(', ')}
+              </span>
+            )}
           </p>
-          {search.data!.map((result) => (
+          {search.data!.items.map((result) => (
             <div key={result.chunk_id} style={{
               background: '#fff', border: '1px solid #e2e8f0',
               borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',

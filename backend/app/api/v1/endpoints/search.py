@@ -5,13 +5,13 @@ from app.api.v1.deps import get_current_user
 from app.api.v1.permissions import check_collection_access, check_project_access
 from app.db.models.user import User
 from app.db.session import get_db
-from app.schemas.search import SearchHistoryResponse, SearchRequest, SearchResultItem
+from app.schemas.search import SearchHistoryResponse, SearchRequest, SearchResponse
 from app.services.search_service import list_search_history, perform_search
 
 router = APIRouter()
 
 
-@router.post("/search", response_model=list[SearchResultItem])
+@router.post("/search", response_model=SearchResponse)
 async def search(
     request: SearchRequest,
     db: AsyncSession = Depends(get_db),

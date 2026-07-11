@@ -1,22 +1,17 @@
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import get_current_user
+from app.api.v1.deps import get_current_user, require_admin
 from app.db.models.audit_log import AuditLog
 from app.db.models.llm_usage_log import LLMUsageLog
 from app.db.models.user import User
 from app.db.session import get_db
 
 router = APIRouter()
-
-
-def _require_admin(current_user: User) -> None:
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
 
 
 @router.get("/admin/audit-logs")
@@ -31,7 +26,7 @@ async def list_audit_logs(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_admin(current_user)
+    require_admin(current_user)
 
     filters = []
     if user_id is not None:
@@ -82,7 +77,7 @@ async def get_usage_summary(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_admin(current_user)
+    require_admin(current_user)
 
     filters = []
     if project_id is not None:

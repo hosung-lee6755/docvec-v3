@@ -128,6 +128,24 @@ def _preprocess_for_ocr(image):
     return Image.fromarray(((arr > threshold) * 255).astype("uint8"))
 
 
+def _text_block_bbox(page) -> tuple[float, float, float, float] | None:
+    """Bounding box enclosing every extracted word on the page. Native text
+    only — OCR'd pages have no word-level geometry without pytesseract's
+    image_to_data, which this adapter doesn't call."""
+    try:
+        words = page.extract_words()
+    except Exception:
+        return None
+    if not words:
+        return None
+    return (
+        min(w["x0"] for w in words),
+        min(w["top"] for w in words),
+        max(w["x1"] for w in words),
+        max(w["bottom"] for w in words),
+    )
+
+
 def _image_area_ratio(page) -> float:
     page_area = page.width * page.height
     if page_area <= 0:
@@ -232,6 +250,7 @@ class PDFAdapter(BaseAdapter):
                             RawTextBlock(
                                 text=text,
                                 page_number=page_num,
+                                bbox=_text_block_bbox(page) if block_type != "ocr" else None,
                                 block_type=block_type,
                             )
                         )
@@ -284,13 +303,18 @@ class PDFAdapter(BaseAdapter):
                         try:
                             if fitz_doc is None:
                                 fitz_doc = fitz.open(str(file_path))
-                            for img_info in fitz_doc[page_num - 1].get_images(full=True):
-                                extracted = fitz_doc.extract_image(img_info[0])
+                            seen_xrefs: set[int] = set()
+                            for img_info in fitz_doc[page_num - 1].get_image_info(xrefs=True):
+                                xref = img_info.get("xref")
+                                if not xref or xref in seen_xrefs:
+                                    continue
+                                seen_xrefs.add(xref)
+                                extracted = fitz_doc.extract_image(xref)
                                 if extracted and extracted.get("image"):
                                     image_regions.append(
                                         RawImageRegion(
                                             page_number=page_num,
-                                            bbox=(0, 0, 0, 0),
+                                            bbox=tuple(img_info.get("bbox", (0, 0, 0, 0))),
                                             image_bytes=extracted["image"],
                                         )
                                     )

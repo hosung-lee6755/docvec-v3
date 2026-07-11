@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, CheckCircle2, Circle, Download, Loader2, Save, X, XCircle } from 'lucide-react'
-import { useDeleteChunk, useDocument, useDocumentChunks, useDocumentContent, useDocumentImages, useDocumentPagesText, useDocumentPreview, useDocumentRevisions, useDocumentTables, useDownloadDocument, useProceedDocument, useReprocessDocument, useRestoreRevision, useRetryDocument, useUpdateChunk, useUpdateDocumentTags } from '../hooks/useDocuments'
+import { useAcceptTagSuggestion, useDeleteChunk, useDismissTagSuggestion, useDocument, useDocumentChunks, useDocumentContent, useDocumentImages, useDocumentPagesText, useDocumentPreview, useDocumentRevisions, useDocumentTables, useDownloadDocument, useProceedDocument, useReprocessDocument, useRestoreRevision, useRetryDocument, useUpdateChunk, useUpdateDocumentTags } from '../hooks/useDocuments'
 import { useProcessingJobs } from '../hooks/useProcessingJobs'
 
 type TabKey = 'summary' | 'edit' | 'tables' | 'images' | 'chunks' | 'original'
@@ -118,6 +118,8 @@ export default function DocumentDetailPage() {
   const restoreRevision = useRestoreRevision()
   const retryDoc = useRetryDocument()
   const updateTags = useUpdateDocumentTags()
+  const acceptSuggestion = useAcceptTagSuggestion()
+  const dismissSuggestion = useDismissTagSuggestion()
   const [chunkEditId, setChunkEditId] = useState<string | null>(null)
   const [chunkEditText, setChunkEditText] = useState('')
   const [tagInput, setTagInput] = useState('')
@@ -255,6 +257,48 @@ export default function DocumentDetailPage() {
             />
           </span>
         </Row>
+        {doc.metadata_status === 'GENERATING' && (
+          <Row label="추천 태그">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--color-text-muted)' }}>
+              <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+              자동 추출 중...
+            </span>
+          </Row>
+        )}
+        {!!doc.suggested_tags?.length && (
+          <Row label="추천 태그">
+            <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+              {doc.suggested_tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="krds-badge small"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    border: '1px dashed #94a3b8', background: 'transparent', color: 'var(--color-text-muted)',
+                  }}
+                >
+                  {tag}
+                  <button
+                    onClick={() => acceptSuggestion.mutate({ docId: id, tag })}
+                    aria-label={`추천 태그 ${tag} 추가`}
+                    title="태그로 추가"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--color-success, #16a34a)', lineHeight: 1, fontWeight: 700 }}
+                  >
+                    +
+                  </button>
+                  <button
+                    onClick={() => dismissSuggestion.mutate({ docId: id, tag })}
+                    aria-label={`추천 태그 ${tag} 무시`}
+                    title="제안 무시"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit', lineHeight: 1 }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </span>
+          </Row>
+        )}
       </div>
 
       {!!jobsData?.items.length && (

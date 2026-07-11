@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import get_current_user
+from app.api.v1.deps import get_current_user, require_admin
 from app.core.crypto import encrypt_secret
 from app.core.security import get_password_hash, verify_password
 from app.db.models.user import User
@@ -38,17 +38,12 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
 
 
-def _require_admin(current_user: User) -> None:
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-
 @router.get("")
 async def list_users(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_admin(current_user)
+    require_admin(current_user)
     result = await db.execute(select(User))
     users = result.scalars().all()
     return {"items": [UserResponse.model_validate(u) for u in users]}
@@ -121,7 +116,7 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_admin(current_user)
+    require_admin(current_user)
     if str(user_id) == SYSTEM_USER_ID:
         raise HTTPException(status_code=403, detail="System user cannot be modified")
     result = await db.execute(select(User).where(User.id == user_id))
@@ -147,7 +142,7 @@ async def delete_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_admin(current_user)
+    require_admin(current_user)
     if str(user_id) == SYSTEM_USER_ID:
         raise HTTPException(status_code=403, detail="System user cannot be deleted")
     result = await db.execute(select(User).where(User.id == user_id))

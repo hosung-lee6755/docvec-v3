@@ -17,6 +17,7 @@ class SearchRequest(BaseModel):
     limit: int = Field(10, gt=0, le=100)
     filters: dict | None = None
     mode: SearchMode = "vector"
+    diversify: bool = False
 
     @field_validator("filters")
     @classmethod
@@ -34,6 +35,12 @@ class SearchResultItem(BaseModel):
     metadata: dict
     bm25_score: float | None = None
     final_score: float | None = None
+
+
+class SearchResponse(BaseModel):
+    items: list[SearchResultItem]
+    expanded_query: str
+    added_terms: list[str] = Field(default_factory=list)
 
 
 class SearchHistoryItem(BaseModel):

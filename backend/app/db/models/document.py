@@ -86,3 +86,14 @@ class Document(Base):
     # User-managed labels (list[str]) copied into each chunk's Qdrant payload at
     # index time so retrieval can filter by tag — see continue_processing.
     tags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # LLM-proposed labels (list[str]) awaiting user accept/dismiss — never
+    # written to Qdrant directly; a suggestion only reaches the chunk payload
+    # once promoted into `tags` via POST /{id}/tags/accept-suggestion. See
+    # app/pipeline/tasks/metadata.py::extract_metadata.
+    suggested_tags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Plain string, not SQLEnum: PENDING -> GENERATING -> DONE | FAILED, set by
+    # app/pipeline/tasks/metadata.py::extract_metadata, triggered automatically
+    # alongside generate_summary once a document reaches INDEXED.
+    metadata_status: Mapped[str] = mapped_column(
+        String(20), default="PENDING", server_default="PENDING"
+    )
