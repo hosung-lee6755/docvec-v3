@@ -44,7 +44,7 @@ We'll know we're right when **데모 시연에서 실제 잠재 고객으로부�
 | 1 | 저장소 분기 (Project_1 → Project_2) | Project_1(GitHub `docvec`, main 브랜치)을 git fork하여 Project_2를 독립 저장소로 확보, Project_1은 롤백/비교 기준점으로 보존 | complete | 2026-07-13: `docvec-v2` 저장소로 mirror push 완료, 기존 설계문서/PRD `docs/design/`, `.claude/prds/`로 병합 후 push 완료 |
 | 2 | 문서인식 노출 UI | 사용자가 하이브리드 검색 결과 근거, OCR 신뢰도, 사전 적용 결과 등을 화면에서 확인·설정 가능 | pending | — |
 | 3 | 데이터관리 고도화 | 문서 버전 lifecycle 정식화 + 골든쿼리 평가/회귀 체계 도입 | pending | — |
-| 4 | 워크플로우 에디터 | 사용자가 고정 처리 블록을 조합해 문서 처리 흐름을 구성·실행 가능 | in-progress | `.claude/plans/workflow-editor.plan.md` |
+| 4 | 워크플로우 에디터 | 사용자가 고정 처리 블록을 조합해 문서 처리 흐름을 구성·실행 가능 | in-progress (구현 완료, 백엔드 테스트 미검증) | `.claude/plans/workflow-editor.plan.md` |
 | 5 | UI/UX 전면 개편 | 신규 디자인 시스템 기반으로 전체 화면 재설계 | pending | — |
 
 ## Open Questions
