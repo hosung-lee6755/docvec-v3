@@ -17,6 +17,13 @@ from app.db.models.llm_usage_log import LLMUsageLog
 from app.db.models.dictionary_entry import DictionaryEntry
 from app.db.models.dictionary_entry_variant import DictionaryEntryVariant
 from app.db.models.document_revision import DocumentTextRevision
+from app.db.models.workflow import (
+    WorkflowDefinition,
+    WorkflowVersion,
+    WorkflowBlockInstance,
+    WorkflowEdge,
+)
+from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 
 __all__ = [
     "User",
@@ -38,4 +45,10 @@ __all__ = [
     "DictionaryEntry",
     "DictionaryEntryVariant",
     "DocumentTextRevision",
+    "WorkflowDefinition",
+    "WorkflowVersion",
+    "WorkflowBlockInstance",
+    "WorkflowEdge",
+    "WorkflowRun",
+    "WorkflowRunStep",
 ]

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import admin, auth, chat, collections, dictionary, documents, golden_queries, projects, search, stats, users
+from app.api.v1.endpoints import admin, auth, chat, collections, dictionary, documents, golden_queries, projects, search, stats, users, workflows
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -17,3 +17,4 @@ api_router.include_router(search.router, tags=["search"])
 api_router.include_router(stats.router, tags=["stats"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(chat.router, tags=["chat"])
+api_router.include_router(workflows.router, prefix="/workflows", tags=["workflows"])

@@ -16,6 +16,8 @@ import SettingsPage from './pages/SettingsPage'
 import AuditLogPage from './pages/AuditLogPage'
 import UsageDashboardPage from './pages/UsageDashboardPage'
 import DictionaryPage from './pages/DictionaryPage'
+import WorkflowsPage from './pages/WorkflowsPage'
+import WorkflowEditorPage from './pages/WorkflowEditorPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -47,12 +49,16 @@ export default function App() {
             <Route path="search" element={<SearchPage />} />
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/:conversationId" element={<ChatPage />} />
+            <Route path="workflows" element={<WorkflowsPage />} />
+            <Route path="workflows/:id/edit" element={<WorkflowEditorPage />} />
           </Route>
         </Route>
         <Route path="collections" element={<CollectionsPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="chat" element={<ChatPage />} />
         <Route path="chat/:conversationId" element={<ChatPage />} />
+        <Route path="workflows" element={<WorkflowsPage />} />
+        <Route path="workflows/:id/edit" element={<WorkflowEditorPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="audit-logs" element={<AuditLogPage />} />

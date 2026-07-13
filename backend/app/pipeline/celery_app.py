@@ -33,6 +33,7 @@ celery_app.conf.include = [
     "app.pipeline.tasks.summary",
     "app.pipeline.tasks.chunks",
     "app.pipeline.tasks.reembed",
+    "app.pipeline.tasks.workflow",
 ]
 
 default_exchange = Exchange("celery", type="direct")
