@@ -17,10 +17,12 @@ interface WorkflowCanvasProps {
   onSelectBlock: (blockId: string | null) => void
   onMoveBlock: (blockId: string, position: { x: number; y: number }) => void
   onConnect: (fromBlockId: string, toBlockId: string) => void
+  onDeleteBlock: (blockId: string) => void
+  onDeleteEdge: (edgeId: string) => void
 }
 
 export default function WorkflowCanvas({
-  blocks, edges, selectedBlockId, onSelectBlock, onMoveBlock, onConnect,
+  blocks, edges, selectedBlockId, onSelectBlock, onMoveBlock, onConnect, onDeleteBlock, onDeleteEdge,
 }: WorkflowCanvasProps) {
   const nodes: Node[] = useMemo(() => blocks.map((block) => ({
     id: block.id,
@@ -62,6 +64,11 @@ export default function WorkflowCanvas({
     onSelectBlock(node.id)
   }
 
+  const handleDelete = ({ nodes: removedNodes, edges: removedEdges }: { nodes: Node[]; edges: Edge[] }) => {
+    removedNodes.forEach((node) => onDeleteBlock(node.id))
+    removedEdges.forEach((edge) => onDeleteEdge(edge.id))
+  }
+
   return (
     <div
       style={{
@@ -83,6 +90,8 @@ export default function WorkflowCanvas({
         onConnect={handleConnect}
         onNodeClick={handleNodeClick}
         onPaneClick={() => onSelectBlock(null)}
+        onDelete={handleDelete}
+        deleteKeyCode={['Backspace', 'Delete']}
         fitView
         proOptions={{ hideAttribution: true }}
       >

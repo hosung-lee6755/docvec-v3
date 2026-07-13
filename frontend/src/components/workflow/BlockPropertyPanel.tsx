@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, Trash2 } from 'lucide-react'
 import type { WorkflowBlock } from '../../hooks/useWorkflows'
 import { getBlockMeta } from '../../lib/workflowBlocks'
 
 interface BlockPropertyPanelProps {
   block: WorkflowBlock | null
   onChange: (blockId: string, updates: { label?: string; config?: Record<string, unknown> }) => void
+  onDelete?: (blockId: string) => void
 }
 
 const fieldLabelStyle: React.CSSProperties = {
@@ -13,7 +14,7 @@ const fieldLabelStyle: React.CSSProperties = {
   textTransform: 'uppercase', letterSpacing: 0.4,
 }
 
-export default function BlockPropertyPanel({ block, onChange }: BlockPropertyPanelProps) {
+export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockPropertyPanelProps) {
   const [configText, setConfigText] = useState('{}')
   const [configError, setConfigError] = useState<string | null>(null)
 
@@ -43,12 +44,29 @@ export default function BlockPropertyPanel({ block, onChange }: BlockPropertyPan
         }}>
           <Icon size={16} />
         </div>
-        <div style={{ minWidth: 0 }}>
+        <div style={{ minWidth: 0, flex: '1 1 auto' }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-text)' }}>{meta.label}</div>
           <div style={{ fontSize: 11, color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {meta.description}
           </div>
         </div>
+        {onDelete && (
+          <button
+            type="button"
+            onClick={() => onDelete(block.id)}
+            title="블록 삭제"
+            aria-label="블록 삭제"
+            style={{
+              flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 26, height: 26, borderRadius: 'var(--radius-sm)', border: 'none',
+              background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.15)'; e.currentTarget.style.color = 'var(--color-danger)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-muted)' }}
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
       </div>
 
       <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>

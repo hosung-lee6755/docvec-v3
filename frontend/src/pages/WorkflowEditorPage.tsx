@@ -59,6 +59,7 @@ export default function WorkflowEditorPage() {
   }
 
   const handleConnect = (fromBlockId: string, toBlockId: string) => {
+    if (isReadOnly) return
     const newEdge: WorkflowEdgeType = {
       id: `temp-${crypto.randomUUID()}`,
       from_block_id: fromBlockId,
@@ -66,6 +67,18 @@ export default function WorkflowEditorPage() {
       condition: null,
     }
     setEdges((prev) => [...prev, newEdge])
+  }
+
+  const handleDeleteBlock = (blockId: string) => {
+    if (isReadOnly) return
+    setBlocks((prev) => prev.filter((b) => b.id !== blockId))
+    setEdges((prev) => prev.filter((e) => e.from_block_id !== blockId && e.to_block_id !== blockId))
+    setSelectedBlockId((prev) => (prev === blockId ? null : prev))
+  }
+
+  const handleDeleteEdge = (edgeId: string) => {
+    if (isReadOnly) return
+    setEdges((prev) => prev.filter((e) => e.id !== edgeId))
   }
 
   const handleBlockChange = (blockId: string, updates: { label?: string; config?: Record<string, unknown> }) => {
@@ -171,10 +184,16 @@ export default function WorkflowEditorPage() {
             onSelectBlock={setSelectedBlockId}
             onMoveBlock={handleMoveBlock}
             onConnect={handleConnect}
+            onDeleteBlock={handleDeleteBlock}
+            onDeleteEdge={handleDeleteEdge}
           />
         </div>
         <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'auto', background: 'var(--color-surface)' }}>
-          <BlockPropertyPanel block={selectedBlock} onChange={handleBlockChange} />
+          <BlockPropertyPanel
+            block={selectedBlock}
+            onChange={handleBlockChange}
+            onDelete={isReadOnly ? undefined : handleDeleteBlock}
+          />
         </div>
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
