@@ -7,7 +7,6 @@ import {
   useCreateDraftVersion,
   useDeleteVersion,
   usePublishVersion,
-  useRunWorkflow,
   useSaveWorkflowGraph,
   useWorkflowGraph,
   useWorkflowVersions,
@@ -17,10 +16,11 @@ import {
 import BlockPalette from '../components/workflow/BlockPalette'
 import WorkflowCanvas from '../components/workflow/WorkflowCanvas'
 import BlockPropertyPanel from '../components/workflow/BlockPropertyPanel'
+import RunWorkflowModal from '../components/workflow/RunWorkflowModal'
 import { getBlockMeta } from '../lib/workflowBlocks'
 
 export default function WorkflowEditorPage() {
-  const { id: workflowId } = useParams<{ id: string }>()
+  const { id: workflowId, projectId } = useParams<{ id: string; projectId?: string }>()
   const { data: versionsData } = useWorkflowVersions(workflowId ?? null)
   // User-picked version from the header select; null = auto-pick.
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
@@ -39,8 +39,8 @@ export default function WorkflowEditorPage() {
   const createDraftVersion = useCreateDraftVersion()
   const deleteVersion = useDeleteVersion()
   const publishVersion = usePublishVersion()
-  const runWorkflow = useRunWorkflow()
   const [confirmDeleteVersion, setConfirmDeleteVersion] = useState(false)
+  const [showRunModal, setShowRunModal] = useState(false)
 
   const [blocks, setBlocks] = useState<WorkflowBlock[]>([])
   const [edges, setEdges] = useState<WorkflowEdgeType[]>([])
@@ -143,10 +143,6 @@ export default function WorkflowEditorPage() {
     await publishVersion.mutateAsync({ workflowId, versionId })
   }
 
-  const handleRun = async () => {
-    if (!workflowId || !versionId) return
-    await runWorkflow.mutateAsync({ workflowId, versionId })
-  }
 
   const selectedBlock = blocks.find((b) => b.id === selectedBlockId) ?? null
   const selectedEdge = edges.find((e) => e.id === selectedEdgeId) ?? null
@@ -235,10 +231,11 @@ export default function WorkflowEditorPage() {
             </>
           )}
           <button
-            type="button" onClick={handleRun} disabled={!isReadOnly || runWorkflow.isPending}
+            type="button" onClick={() => setShowRunModal(true)} disabled={!isReadOnly}
+            title={isReadOnly ? undefined : '게시된 버전만 실행할 수 있습니다'}
             className="krds-btn small primary" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
           >
-            {runWorkflow.isPending ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Play size={14} />}
+            <Play size={14} />
             실행
           </button>
         </div>
@@ -329,6 +326,15 @@ export default function WorkflowEditorPage() {
           )}
         </div>
       </div>
+      {showRunModal && workflowId && versionId && (
+        <RunWorkflowModal
+          workflowId={workflowId}
+          versionId={versionId}
+          blocks={blocks}
+          projectId={projectId}
+          onClose={() => setShowRunModal(false)}
+        />
+      )}
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
   )

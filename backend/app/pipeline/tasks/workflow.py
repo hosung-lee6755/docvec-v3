@@ -68,6 +68,8 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
             block_instance_id=block_instance_id,
             upstream_outputs=upstream_outputs,
             config=block.config or {},
+            document_id=str(run.document_id) if run.document_id else None,
+            collection_id=str(run.collection_id) if run.collection_id else None,
         ))
 
         step.status = "COMPLETED"

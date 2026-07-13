@@ -13,6 +13,10 @@ class BlockContext:
     # This block instance's saved config (validated against input_schema by
     # workflow_service.validate_graph before the run is ever started).
     config: dict = field(default_factory=dict)
+    # What this run was started against (WorkflowRun.document_id /
+    # .collection_id) — how the 입력 block knows which document to load.
+    document_id: str | None = None
+    collection_id: str | None = None
 
 
 @dataclass
