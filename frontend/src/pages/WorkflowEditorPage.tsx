@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { AlertTriangle, Loader2, Play, Save, UploadCloud } from 'lucide-react'
+import {
+  AlertTriangle, Loader2, Play, Save, Trash2, UploadCloud,
+} from 'lucide-react'
 import {
   useCreateDraftVersion,
   usePublishVersion,
@@ -14,6 +16,7 @@ import {
 import BlockPalette from '../components/workflow/BlockPalette'
 import WorkflowCanvas from '../components/workflow/WorkflowCanvas'
 import BlockPropertyPanel from '../components/workflow/BlockPropertyPanel'
+import { getBlockMeta } from '../lib/workflowBlocks'
 
 export default function WorkflowEditorPage() {
   const { id: workflowId } = useParams<{ id: string }>()
@@ -33,6 +36,7 @@ export default function WorkflowEditorPage() {
   const [blocks, setBlocks] = useState<WorkflowBlock[]>([])
   const [edges, setEdges] = useState<WorkflowEdgeType[]>([])
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [validationErrors, setValidationErrors] = useState<string[]>([])
 
   useEffect(() => {
@@ -79,6 +83,17 @@ export default function WorkflowEditorPage() {
   const handleDeleteEdge = (edgeId: string) => {
     if (isReadOnly) return
     setEdges((prev) => prev.filter((e) => e.id !== edgeId))
+    setSelectedEdgeId((prev) => (prev === edgeId ? null : prev))
+  }
+
+  const handleSelectBlock = (blockId: string | null) => {
+    setSelectedBlockId(blockId)
+    if (blockId) setSelectedEdgeId(null)
+  }
+
+  const handleSelectEdge = (edgeId: string | null) => {
+    setSelectedEdgeId(edgeId)
+    if (edgeId) setSelectedBlockId(null)
   }
 
   const handleBlockChange = (blockId: string, updates: { label?: string; config?: Record<string, unknown> }) => {
@@ -108,6 +123,9 @@ export default function WorkflowEditorPage() {
   }
 
   const selectedBlock = blocks.find((b) => b.id === selectedBlockId) ?? null
+  const selectedEdge = edges.find((e) => e.id === selectedEdgeId) ?? null
+  const selectedEdgeFromBlock = selectedEdge ? blocks.find((b) => b.id === selectedEdge.from_block_id) : null
+  const selectedEdgeToBlock = selectedEdge ? blocks.find((b) => b.id === selectedEdge.to_block_id) : null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -181,7 +199,9 @@ export default function WorkflowEditorPage() {
             blocks={blocks}
             edges={edges}
             selectedBlockId={selectedBlockId}
-            onSelectBlock={setSelectedBlockId}
+            onSelectBlock={handleSelectBlock}
+            selectedEdgeId={selectedEdgeId}
+            onSelectEdge={handleSelectEdge}
             onMoveBlock={handleMoveBlock}
             onConnect={handleConnect}
             onDeleteBlock={handleDeleteBlock}
@@ -189,11 +209,43 @@ export default function WorkflowEditorPage() {
           />
         </div>
         <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'auto', background: 'var(--color-surface)' }}>
-          <BlockPropertyPanel
-            block={selectedBlock}
-            onChange={handleBlockChange}
-            onDelete={isReadOnly ? undefined : handleDeleteBlock}
-          />
+          {selectedEdge ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', padding: 'var(--space-3)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                <div style={{ minWidth: 0, flex: '1 1 auto' }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-text)' }}>연결</div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {selectedEdgeFromBlock ? getBlockMeta(selectedEdgeFromBlock.block_type).label : '?'}
+                    {' → '}
+                    {selectedEdgeToBlock ? getBlockMeta(selectedEdgeToBlock.block_type).label : '?'}
+                  </div>
+                </div>
+                {!isReadOnly && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteEdge(selectedEdge.id)}
+                    title="연결 삭제"
+                    aria-label="연결 삭제"
+                    style={{
+                      flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: 26, height: 26, borderRadius: 'var(--radius-sm)', border: 'none',
+                      background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer',
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.15)'; e.currentTarget.style.color = 'var(--color-danger)' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-muted)' }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <BlockPropertyPanel
+              block={selectedBlock}
+              onChange={handleBlockChange}
+              onDelete={isReadOnly ? undefined : handleDeleteBlock}
+            />
+          )}
         </div>
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>

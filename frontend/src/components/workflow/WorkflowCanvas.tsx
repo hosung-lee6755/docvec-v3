@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import {
   ReactFlow, Background, BackgroundVariant, Controls, MiniMap,
   type Node, type Edge, type Connection, type NodeChange, type NodeMouseHandler, type EdgeMouseHandler,
@@ -15,6 +15,8 @@ interface WorkflowCanvasProps {
   edges: WorkflowEdge[]
   selectedBlockId: string | null
   onSelectBlock: (blockId: string | null) => void
+  selectedEdgeId: string | null
+  onSelectEdge: (edgeId: string | null) => void
   onMoveBlock: (blockId: string, position: { x: number; y: number }) => void
   onConnect: (fromBlockId: string, toBlockId: string) => void
   onDeleteBlock: (blockId: string) => void
@@ -22,10 +24,9 @@ interface WorkflowCanvasProps {
 }
 
 export default function WorkflowCanvas({
-  blocks, edges, selectedBlockId, onSelectBlock, onMoveBlock, onConnect, onDeleteBlock, onDeleteEdge,
+  blocks, edges, selectedBlockId, onSelectBlock, selectedEdgeId, onSelectEdge,
+  onMoveBlock, onConnect, onDeleteBlock, onDeleteEdge,
 }: WorkflowCanvasProps) {
-  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
-
   const nodes: Node[] = useMemo(() => blocks.map((block) => ({
     id: block.id,
     type: 'blockNode',
@@ -68,25 +69,25 @@ export default function WorkflowCanvas({
   }
 
   const handleNodeClick: NodeMouseHandler = (_event, node) => {
-    setSelectedEdgeId(null)
+    onSelectEdge(null)
     onSelectBlock(node.id)
   }
 
   const handleEdgeClick: EdgeMouseHandler = (_event, edge) => {
     onSelectBlock(null)
-    setSelectedEdgeId(edge.id)
+    onSelectEdge(edge.id)
   }
 
   const handlePaneClick = () => {
     onSelectBlock(null)
-    setSelectedEdgeId(null)
+    onSelectEdge(null)
   }
 
   const handleDelete = ({ nodes: removedNodes, edges: removedEdges }: { nodes: Node[]; edges: Edge[] }) => {
     removedNodes.forEach((node) => onDeleteBlock(node.id))
     removedEdges.forEach((edge) => {
       onDeleteEdge(edge.id)
-      if (edge.id === selectedEdgeId) setSelectedEdgeId(null)
+      if (edge.id === selectedEdgeId) onSelectEdge(null)
     })
   }
 
