@@ -27,6 +27,7 @@ const TABS = [
   { to: 'documents', label: '문서' },
   { to: 'search', label: '검색' },
   { to: 'chat', label: '채팅' },
+  { to: 'workflows', label: '워크플로우' },
 ]
 
 export default function ProjectWorkspace() {
