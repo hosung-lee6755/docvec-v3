@@ -1,7 +1,7 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import {
   ReactFlow, Background, BackgroundVariant, Controls, MiniMap,
-  type Node, type Edge, type Connection, type NodeChange, type NodeMouseHandler,
+  type Node, type Edge, type Connection, type NodeChange, type NodeMouseHandler, type EdgeMouseHandler,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type { WorkflowBlock, WorkflowEdge } from '../../hooks/useWorkflows'
@@ -24,6 +24,8 @@ interface WorkflowCanvasProps {
 export default function WorkflowCanvas({
   blocks, edges, selectedBlockId, onSelectBlock, onMoveBlock, onConnect, onDeleteBlock, onDeleteEdge,
 }: WorkflowCanvasProps) {
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
+
   const nodes: Node[] = useMemo(() => blocks.map((block) => ({
     id: block.id,
     type: 'blockNode',
@@ -35,6 +37,7 @@ export default function WorkflowCanvas({
   const flowEdges: Edge[] = useMemo(() => edges.map((edge) => {
     const sourceBlock = blocks.find((b) => b.id === edge.from_block_id)
     const color = sourceBlock ? getBlockMeta(sourceBlock.block_type).color : 'var(--color-text-muted)'
+    const isSelected = edge.id === selectedEdgeId
     return {
       id: edge.id,
       source: edge.from_block_id,
@@ -42,9 +45,13 @@ export default function WorkflowCanvas({
       label: edge.condition ? '조건부' : undefined,
       labelStyle: { fill: 'var(--color-text)', fontSize: 11 },
       labelBgStyle: { fill: 'var(--color-surface)' },
-      style: { stroke: color, strokeWidth: 2 },
+      selected: isSelected,
+      style: {
+        stroke: isSelected ? 'var(--color-accent)' : color,
+        strokeWidth: isSelected ? 3 : 2,
+      },
     }
-  }), [edges, blocks])
+  }), [edges, blocks, selectedEdgeId])
 
   const handleNodesChange = (changes: NodeChange[]) => {
     for (const change of changes) {
@@ -61,12 +68,26 @@ export default function WorkflowCanvas({
   }
 
   const handleNodeClick: NodeMouseHandler = (_event, node) => {
+    setSelectedEdgeId(null)
     onSelectBlock(node.id)
+  }
+
+  const handleEdgeClick: EdgeMouseHandler = (_event, edge) => {
+    onSelectBlock(null)
+    setSelectedEdgeId(edge.id)
+  }
+
+  const handlePaneClick = () => {
+    onSelectBlock(null)
+    setSelectedEdgeId(null)
   }
 
   const handleDelete = ({ nodes: removedNodes, edges: removedEdges }: { nodes: Node[]; edges: Edge[] }) => {
     removedNodes.forEach((node) => onDeleteBlock(node.id))
-    removedEdges.forEach((edge) => onDeleteEdge(edge.id))
+    removedEdges.forEach((edge) => {
+      onDeleteEdge(edge.id)
+      if (edge.id === selectedEdgeId) setSelectedEdgeId(null)
+    })
   }
 
   return (
@@ -89,7 +110,8 @@ export default function WorkflowCanvas({
         onNodesChange={handleNodesChange}
         onConnect={handleConnect}
         onNodeClick={handleNodeClick}
-        onPaneClick={() => onSelectBlock(null)}
+        onEdgeClick={handleEdgeClick}
+        onPaneClick={handlePaneClick}
         onDelete={handleDelete}
         deleteKeyCode={['Backspace', 'Delete']}
         fitView

@@ -183,7 +183,11 @@ async def create_draft_version(
     current_user: User = Depends(get_current_user),
 ):
     """Always creates a NEW draft version — never mutates a published one
-    (활성 버전은 직접 수정하지 않고 새 버전으로 저장한다)."""
+    (활성 버전은 직접 수정하지 않고 새 버전으로 저장한다).
+
+    Clones the latest version's blocks/edges into the new draft so editing
+    continues from where the previous version left off, rather than
+    starting from a blank canvas."""
     workflow = await _get_workflow_or_404(db, workflow_id)
     await check_project_access(db, workflow.project_id, current_user, min_role="editor")
 
@@ -197,6 +201,39 @@ async def create_draft_version(
         workflow_id=workflow_id, version_number=next_number, created_by=str(current_user.id)
     )
     db.add(version)
+    await db.flush()
+
+    if latest is not None:
+        source_blocks = (
+            await db.scalars(
+                select(WorkflowBlockInstance).where(WorkflowBlockInstance.version_id == latest.id)
+            )
+        ).all()
+        source_edges = (
+            await db.scalars(select(WorkflowEdge).where(WorkflowEdge.version_id == latest.id))
+        ).all()
+
+        id_map: dict[str, str] = {}
+        for block in source_blocks:
+            new_block = WorkflowBlockInstance(
+                version_id=version.id,
+                block_type=block.block_type,
+                label=block.label,
+                position=block.position,
+                config=block.config,
+            )
+            db.add(new_block)
+            await db.flush()
+            id_map[str(block.id)] = str(new_block.id)
+
+        for edge in source_edges:
+            db.add(WorkflowEdge(
+                version_id=version.id,
+                from_block_id=id_map[str(edge.from_block_id)],
+                to_block_id=id_map[str(edge.to_block_id)],
+                condition=edge.condition,
+            ))
+
     await db.commit()
     await db.refresh(version)
     return version
