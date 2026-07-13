@@ -4,7 +4,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
-from app.pipeline.blocks.registry import BLOCK_REGISTRY
+from app.pipeline.blocks.registry import BLOCK_REGISTRY, BLOCK_TYPE_LABELS
+
+
+def _display_names(blocks: list[WorkflowBlockInstance]) -> dict[str, str]:
+    """Human-readable name per block id for error messages: the user-given
+    label if set, otherwise the Korean block-type name — numbered ("전처리 2")
+    when the same unlabeled type appears more than once."""
+    type_counts: dict[str, int] = {}
+    for b in blocks:
+        if not b.label:
+            type_counts[b.block_type] = type_counts.get(b.block_type, 0) + 1
+
+    names: dict[str, str] = {}
+    type_seen: dict[str, int] = {}
+    for b in blocks:
+        if b.label:
+            names[str(b.id)] = b.label
+            continue
+        base = BLOCK_TYPE_LABELS.get(b.block_type, b.block_type)
+        type_seen[b.block_type] = type_seen.get(b.block_type, 0) + 1
+        if type_counts.get(b.block_type, 0) > 1:
+            names[str(b.id)] = f"{base} {type_seen[b.block_type]}"
+        else:
+            names[str(b.id)] = base
+    return names
 
 
 async def validate_graph(db: AsyncSession, version_id: str) -> list[str]:
@@ -31,13 +55,15 @@ async def validate_graph(db: AsyncSession, version_id: str) -> list[str]:
         outgoing.setdefault(str(e.from_block_id), []).append(e)
         incoming.setdefault(str(e.to_block_id), []).append(e)
 
+    names = _display_names(list(blocks))
     for block in blocks:
+        name = names[str(block.id)]
         if block.block_type not in BLOCK_REGISTRY:
-            errors.append(f"'{block.label or block.id}' 블록의 유형이 올바르지 않습니다: {block.block_type}")
+            errors.append(f"'{name}' 블록의 유형이 올바르지 않습니다: {block.block_type}")
         if block.block_type != "input" and not incoming.get(str(block.id)):
-            errors.append(f"'{block.label or block.id}' 블록에 연결된 입력이 없습니다")
+            errors.append(f"'{name}' 블록에 연결된 입력이 없습니다")
         if block.block_type != "output" and not outgoing.get(str(block.id)):
-            errors.append(f"'{block.label or block.id}' 블록에 연결된 출력이 없습니다")
+            errors.append(f"'{name}' 블록에 연결된 출력이 없습니다")
 
     cycle_error = _find_cycle(block_by_id, outgoing)
     if cycle_error:
