@@ -24,7 +24,7 @@ export default function WorkflowsPage() {
     setShowCreateModal(false)
     setNewName('')
     setNewDescription('')
-    navigate(`workflows/${workflow.id}/edit`)
+    navigate(`/projects/${projectId}/workflows/${workflow.id}/edit`)
   }
 
   if (!projectId) {
@@ -83,7 +83,7 @@ export default function WorkflowsPage() {
                 <td style={{ padding: 'var(--space-2)', textAlign: 'right' }}>
                   <button
                     type="button"
-                    onClick={() => navigate(`workflows/${workflow.id}/edit`)}
+                    onClick={() => navigate(`/projects/${projectId}/workflows/${workflow.id}/edit`)}
                     style={{ fontSize: 13, color: 'var(--color-accent)', background: 'none', border: 'none', cursor: 'pointer' }}
                   >
                     편집

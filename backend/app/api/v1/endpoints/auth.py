@@ -58,6 +58,7 @@ async def register(
         is_active=True,
     )
     db.add(user)
+    await db.flush()
     log_audit(db, str(user.id), "auth.register", "user", str(user.id), ip_address=http_request.client.host)
     await db.commit()
     await db.refresh(user)
