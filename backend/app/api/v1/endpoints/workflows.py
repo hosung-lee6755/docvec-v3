@@ -158,6 +158,44 @@ async def get_workflow(
     return workflow
 
 
+@router.delete("/{workflow_id}")
+async def delete_workflow(
+    workflow_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Deletes the workflow and everything under it (versions, blocks, edges,
+    runs, run steps). No FK cascades are defined on these tables, so children
+    are removed explicitly in dependency order before the definition row."""
+    workflow = await _get_workflow_or_404(db, workflow_id)
+    await check_project_access(db, workflow.project_id, current_user, min_role="editor")
+
+    version_ids = (
+        await db.scalars(
+            select(WorkflowVersion.id).where(WorkflowVersion.workflow_id == workflow_id)
+        )
+    ).all()
+
+    if version_ids:
+        run_ids = (
+            await db.scalars(
+                select(WorkflowRun.id).where(WorkflowRun.version_id.in_(version_ids))
+            )
+        ).all()
+        if run_ids:
+            await db.execute(delete(WorkflowRunStep).where(WorkflowRunStep.run_id.in_(run_ids)))
+            await db.execute(delete(WorkflowRun).where(WorkflowRun.id.in_(run_ids)))
+        await db.execute(delete(WorkflowEdge).where(WorkflowEdge.version_id.in_(version_ids)))
+        await db.execute(
+            delete(WorkflowBlockInstance).where(WorkflowBlockInstance.version_id.in_(version_ids))
+        )
+        await db.execute(delete(WorkflowVersion).where(WorkflowVersion.id.in_(version_ids)))
+
+    await db.delete(workflow)
+    await db.commit()
+    return {"deleted": True}
+
+
 @router.get("/{workflow_id}/versions")
 async def list_versions(
     workflow_id: UUID,

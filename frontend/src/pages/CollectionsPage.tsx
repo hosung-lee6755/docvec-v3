@@ -304,7 +304,15 @@ export default function CollectionsPage() {
               {data?.items.map((col) => (
                 <tr key={col.id}>
                   <td style={{ fontWeight: 500 }}>
-                    {col.name}
+                    <span
+                      onClick={() => navigate(
+                        `${routeProjectId ? `/projects/${routeProjectId}` : ''}/documents?collection=${col.id}`
+                      )}
+                      title="이 컬렉션의 문서 보기"
+                      style={{ cursor: 'pointer', color: 'var(--color-accent)' }}
+                    >
+                      {col.name}
+                    </span>
                     {col.project_name && (
                       <span
                         className="krds-badge xsmall bg-secondary"

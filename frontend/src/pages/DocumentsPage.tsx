@@ -1,5 +1,5 @@
 ﻿import { useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Upload, Trash2, Loader2, ArrowUp, ArrowDown, X } from 'lucide-react'
 import { useDocuments, useUploadDocument, useUploadZip, useDeleteDocument, useBatchDeleteDocuments, type DocumentSortBy, type SortOrder, type BulkUploadResponse } from '../hooks/useDocuments'
 import { useCollections } from '../hooks/useCollections'
@@ -10,6 +10,7 @@ export default function DocumentsPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { projectId } = useParams<{ projectId?: string }>()
+  const [searchParams] = useSearchParams()
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [uploadCollectionId, setUploadCollectionId] = useState('')
   const [skipReview, setSkipReview] = useState(false)
@@ -20,7 +21,7 @@ export default function DocumentsPage() {
   const zipFileRef = useRef<HTMLInputElement>(null)
   const [zipFile, setZipFile] = useState<File | null>(null)
   const [zipResult, setZipResult] = useState<BulkUploadResponse | null>(null)
-  const [filterCollectionId, setFilterCollectionId] = useState('')
+  const [filterCollectionId, setFilterCollectionId] = useState(() => searchParams.get('collection') ?? '')
   const [filterStatus, setFilterStatus] = useState('')
   const [filenameInput, setFilenameInput] = useState('')
   const [filenameFilter, setFilenameFilter] = useState('')
@@ -31,6 +32,13 @@ export default function DocumentsPage() {
     const id = setTimeout(() => setFilenameFilter(filenameInput.trim()), 300)
     return () => clearTimeout(id)
   }, [filenameInput])
+
+  // Deep-link support: ?collection=<id> (e.g. clicking a collection name in the
+  // collections list). Sync on change too, in case the page is already mounted.
+  useEffect(() => {
+    const fromUrl = searchParams.get('collection')
+    if (fromUrl) setFilterCollectionId(fromUrl)
+  }, [searchParams])
 
   useEffect(() => {
     if ((location.state as { openUpload?: boolean } | null)?.openUpload) {

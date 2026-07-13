@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { GitBranch, Loader2, Plus, X } from 'lucide-react'
-import { useCreateWorkflow, useWorkflows } from '../hooks/useWorkflows'
+import { GitBranch, Loader2, Plus, Trash2, X } from 'lucide-react'
+import { useCreateWorkflow, useDeleteWorkflow, useWorkflows } from '../hooks/useWorkflows'
 
 const STATUS_BADGE: Record<string, { label: string; className: string }> = {
   DRAFT: { label: '초안', className: 'bg-secondary' },
@@ -14,9 +14,11 @@ export default function WorkflowsPage() {
   const { projectId } = useParams<{ projectId?: string }>()
   const { data, isLoading, isError } = useWorkflows(projectId ?? null)
   const createWorkflow = useCreateWorkflow()
+  const deleteWorkflow = useDeleteWorkflow()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   const handleCreate = async () => {
     if (!projectId || !newName.trim()) return
@@ -74,9 +76,15 @@ export default function WorkflowsPage() {
           <tbody>
             {data.items.map((workflow) => {
               const badge = STATUS_BADGE[workflow.status] ?? { label: workflow.status, className: 'bg-secondary' }
+              const editPath = `/projects/${projectId}/workflows/${workflow.id}/edit`
               return (
                 <tr key={workflow.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                  <td style={{ padding: 'var(--space-2)', fontWeight: 600 }}>{workflow.name}</td>
+                  <td
+                    style={{ padding: 'var(--space-2)', fontWeight: 600, cursor: 'pointer', color: 'var(--color-accent)' }}
+                    onClick={() => navigate(editPath)}
+                  >
+                    {workflow.name}
+                  </td>
                   <td style={{ padding: 'var(--space-2)', color: '#94a3b8' }}>
                     {workflow.description || '-'}
                   </td>
@@ -87,13 +95,45 @@ export default function WorkflowsPage() {
                     {new Date(workflow.created_at).toLocaleDateString('ko-KR')}
                   </td>
                   <td style={{ padding: 'var(--space-2)', textAlign: 'right' }}>
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/projects/${projectId}/workflows/${workflow.id}/edit`)}
-                      className="krds-btn xsmall text"
-                    >
-                      편집
-                    </button>
+                    {confirmDeleteId === workflow.id ? (
+                      <div style={{ display: 'inline-flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+                        <span style={{ fontSize: 12, color: '#dc2626' }}>모든 버전·실행 이력이 함께 삭제됩니다</span>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!projectId) return
+                            await deleteWorkflow.mutateAsync({ workflowId: workflow.id, projectId })
+                            setConfirmDeleteId(null)
+                          }}
+                          disabled={deleteWorkflow.isPending}
+                          className="krds-btn xsmall primary"
+                        >확인</button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="krds-btn xsmall secondary"
+                        >취소</button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'inline-flex', gap: 'var(--space-1)' }}>
+                        <button
+                          type="button"
+                          onClick={() => navigate(editPath)}
+                          className="krds-btn xsmall text"
+                        >
+                          편집
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(workflow.id)}
+                          className="krds-btn xsmall text"
+                          title="삭제"
+                          aria-label="워크플로우 삭제"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )

@@ -102,6 +102,19 @@ export function useCreateWorkflow() {
   })
 }
 
+export function useDeleteWorkflow() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ workflowId }: { workflowId: string; projectId: string }) => {
+      const { data } = await apiClient.delete(`/workflows/${workflowId}`)
+      return data as { deleted: boolean }
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['workflows', variables.projectId] })
+    },
+  })
+}
+
 export function useWorkflowVersions(workflowId: string | null) {
   return useQuery<{ items: WorkflowVersion[] }>({
     queryKey: ['workflow-versions', workflowId],
