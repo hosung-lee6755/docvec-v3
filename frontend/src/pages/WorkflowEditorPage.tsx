@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
-  AlertTriangle, Loader2, Play, Save, Trash2, UploadCloud,
+  AlertTriangle, Info, Loader2, Play, Save, Trash2, UploadCloud,
 } from 'lucide-react'
 import {
   useCreateDraftVersion,
@@ -174,6 +174,18 @@ export default function WorkflowEditorPage() {
           </button>
         </div>
       </div>
+
+      {isReadOnly && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+          padding: 'var(--space-2) var(--space-3)', background: '#eff6ff',
+          border: '1px solid #bfdbfe', color: '#1d4ed8',
+          borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
+        }}>
+          <Info size={14} style={{ flexShrink: 0 }} />
+          게시된 버전은 읽기 전용입니다. 블록·연결을 추가하거나 삭제하려면 "새 버전으로 저장"을 눌러 초안을 만드세요.
+        </div>
+      )}
 
       {validationErrors.length > 0 && (
         <div style={{
