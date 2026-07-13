@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import {
   useCreateDraftVersion,
+  useDeleteVersion,
   usePublishVersion,
   useRunWorkflow,
   useSaveWorkflowGraph,
@@ -36,8 +37,10 @@ export default function WorkflowEditorPage() {
   const { data: graph } = useWorkflowGraph(workflowId ?? null, versionId)
   const saveGraph = useSaveWorkflowGraph()
   const createDraftVersion = useCreateDraftVersion()
+  const deleteVersion = useDeleteVersion()
   const publishVersion = usePublishVersion()
   const runWorkflow = useRunWorkflow()
+  const [confirmDeleteVersion, setConfirmDeleteVersion] = useState(false)
 
   const [blocks, setBlocks] = useState<WorkflowBlock[]>([])
   const [edges, setEdges] = useState<WorkflowEdgeType[]>([])
@@ -55,6 +58,7 @@ export default function WorkflowEditorPage() {
     setSelectedBlockId(null)
     setSelectedEdgeId(null)
     setValidationErrors([])
+    setConfirmDeleteVersion(false)
   }, [versionId])
 
   const isReadOnly = !!editableVersion?.published_at
@@ -125,6 +129,14 @@ export default function WorkflowEditorPage() {
     setSelectedVersionId(created.id)
   }
 
+  const handleDeleteVersion = async () => {
+    if (!workflowId || !versionId) return
+    await deleteVersion.mutateAsync({ workflowId, versionId })
+    // Fall back to auto-pick (latest draft, else latest version).
+    setSelectedVersionId(null)
+    setConfirmDeleteVersion(false)
+  }
+
   const handlePublish = async () => {
     if (!workflowId || !versionId) return
     await handleSave()
@@ -160,6 +172,39 @@ export default function WorkflowEditorPage() {
                 </option>
               ))}
             </select>
+          )}
+          {editableVersion && (versionsData?.items.length ?? 0) > 1 && (
+            confirmDeleteVersion ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                <span style={{ fontSize: 12, color: '#dc2626' }}>
+                  v{editableVersion.version_number}을(를) 삭제할까요?
+                </span>
+                <button
+                  type="button" onClick={handleDeleteVersion} disabled={deleteVersion.isPending}
+                  className="krds-btn xsmall primary"
+                >확인</button>
+                <button
+                  type="button" onClick={() => setConfirmDeleteVersion(false)}
+                  className="krds-btn xsmall secondary"
+                >취소</button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteVersion(true)}
+                title="이 버전 삭제"
+                aria-label="이 버전 삭제"
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 28, height: 28, borderRadius: 'var(--radius-sm)', border: 'none',
+                  background: 'transparent', color: '#94a3b8', cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.color = '#dc2626' }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8' }}
+              >
+                <Trash2 size={15} />
+              </button>
+            )
           )}
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>

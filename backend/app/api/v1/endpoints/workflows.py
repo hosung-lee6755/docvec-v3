@@ -277,6 +277,48 @@ async def create_draft_version(
     return version
 
 
+@router.delete("/{workflow_id}/versions/{version_id}")
+async def delete_version(
+    workflow_id: UUID,
+    version_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Deletes one version and its children (blocks, edges, runs, run steps).
+    The last remaining version cannot be deleted — delete the workflow itself
+    instead."""
+    workflow = await _get_workflow_or_404(db, workflow_id)
+    await check_project_access(db, workflow.project_id, current_user, min_role="editor")
+    version = await _get_version_or_404(db, workflow_id, version_id)
+
+    version_count = len(
+        (
+            await db.scalars(
+                select(WorkflowVersion.id).where(WorkflowVersion.workflow_id == workflow_id)
+            )
+        ).all()
+    )
+    if version_count <= 1:
+        raise HTTPException(
+            status_code=409,
+            detail="마지막 남은 버전은 삭제할 수 없습니다. 워크플로우 자체를 삭제하세요.",
+        )
+
+    run_ids = (
+        await db.scalars(select(WorkflowRun.id).where(WorkflowRun.version_id == version_id))
+    ).all()
+    if run_ids:
+        await db.execute(delete(WorkflowRunStep).where(WorkflowRunStep.run_id.in_(run_ids)))
+        await db.execute(delete(WorkflowRun).where(WorkflowRun.id.in_(run_ids)))
+    await db.execute(delete(WorkflowEdge).where(WorkflowEdge.version_id == version_id))
+    await db.execute(
+        delete(WorkflowBlockInstance).where(WorkflowBlockInstance.version_id == version_id)
+    )
+    await db.delete(version)
+    await db.commit()
+    return {"deleted": True}
+
+
 @router.get("/{workflow_id}/versions/{version_id}/graph")
 async def get_graph(
     workflow_id: UUID,

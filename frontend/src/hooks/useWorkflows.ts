@@ -139,6 +139,19 @@ export function useCreateDraftVersion() {
   })
 }
 
+export function useDeleteVersion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ workflowId, versionId }: { workflowId: string; versionId: string }) => {
+      const { data } = await apiClient.delete(`/workflows/${workflowId}/versions/${versionId}`)
+      return data as { deleted: boolean }
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['workflow-versions', variables.workflowId] })
+    },
+  })
+}
+
 export function useWorkflowGraph(workflowId: string | null, versionId: string | null) {
   return useQuery<WorkflowGraph>({
     queryKey: ['workflow-graph', workflowId, versionId],
