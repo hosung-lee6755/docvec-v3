@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: docvec_postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-docvec}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docvec_secret}
@@ -9,7 +8,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docvec}"]
       interval: 10s
@@ -18,12 +17,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: docvec_redis
     command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "6380:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -32,12 +30,11 @@ services:
 
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: docvec_qdrant
     volumes:
       - qdrant_data:/qdrant/storage
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "6335:6333"
+      - "6336:6334"
     environment:
       QDRANT__SERVICE__GRPC_PORT: 6334
     healthcheck:
@@ -48,7 +45,6 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: docvec_minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -56,8 +52,8 @@ services:
     volumes:
       - minio_data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9002:9000"
+      - "9003:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -68,7 +64,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: docvec_api
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-docvec}:${POSTGRES_PASSWORD:-docvec_secret}@postgres:5432/${POSTGRES_DB:-docvec}
       - REDIS_URL=redis://redis:6379
@@ -89,7 +84,7 @@ services:
       - backend_venv:/app/.venv
       - model_cache:/model_cache
     ports:
-      - "8000:8000"
+      - "8001:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,7 +102,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
-    container_name: docvec_worker
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-docvec}:${POSTGRES_PASSWORD:-docvec_secret}@postgres:5432/${POSTGRES_DB:-docvec}
       - REDIS_URL=redis://redis:6379
@@ -149,12 +143,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
-    container_name: docvec_flower
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
     ports:
-      - "5555:5555"
+      - "5556:5555"
     depends_on:
       redis:
         condition: service_healthy
@@ -164,9 +157,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: docvec_frontend
     ports:
-      - "3000:80"
+      - "3001:80"
     depends_on:
       - api
 
@@ -180,4 +172,4 @@ volumes:
 
 networks:
   default:
-    name: docvec_net
+    name: project2_net
