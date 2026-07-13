@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { GitBranch, Plus } from 'lucide-react'
+import { GitBranch, Loader2, Plus, X } from 'lucide-react'
 import { useCreateWorkflow, useWorkflows } from '../hooks/useWorkflows'
 
-const STATUS_LABELS: Record<string, string> = {
-  DRAFT: '초안', ACTIVE: '활성', INACTIVE: '비활성',
+const STATUS_BADGE: Record<string, { label: string; className: string }> = {
+  DRAFT: { label: '초안', className: 'bg-secondary' },
+  ACTIVE: { label: '활성', className: 'bg-primary' },
+  INACTIVE: { label: '비활성', className: 'bg-tertiary' },
 }
 
 export default function WorkflowsPage() {
@@ -38,21 +40,21 @@ export default function WorkflowsPage() {
         <button
           type="button"
           onClick={() => setShowCreateModal(true)}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)',
-            padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-md)',
-            background: 'var(--color-accent)', color: '#fff', border: 'none', cursor: 'pointer',
-          }}
+          className="krds-btn small primary"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }}
         >
           <Plus size={16} /> 워크플로우 생성
         </button>
       </div>
 
-      {isLoading && <div>불러오는 중...</div>}
-      {isError && <div>워크플로우 목록을 불러오지 못했습니다.</div>}
+      {isLoading && <div style={{ color: '#94a3b8', fontSize: 14 }}>불러오는 중...</div>}
+      {isError && <div style={{ color: '#dc2626', fontSize: 14 }}>워크플로우 목록을 불러오지 못했습니다.</div>}
 
       {!isLoading && data?.items.length === 0 && (
-        <div style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+        <div style={{
+          padding: 'var(--space-8)', textAlign: 'center', color: '#94a3b8',
+          border: '1px dashed #e2e8f0', borderRadius: 'var(--radius-lg)',
+        }}>
           <GitBranch size={32} style={{ marginBottom: 'var(--space-2)' }} />
           <div>등록된 워크플로우가 없습니다.</div>
         </div>
@@ -61,68 +63,100 @@ export default function WorkflowsPage() {
       {!!data?.items.length && (
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead>
-            <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--color-border)' }}>
-              <th style={{ padding: 'var(--space-2)' }}>워크플로우명</th>
-              <th style={{ padding: 'var(--space-2)' }}>설명</th>
-              <th style={{ padding: 'var(--space-2)' }}>상태</th>
-              <th style={{ padding: 'var(--space-2)' }}>생성일</th>
+            <tr style={{ textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>
+              <th style={{ padding: 'var(--space-2)', color: '#94a3b8', fontSize: 12, fontWeight: 700, textTransform: 'uppercase' }}>워크플로우명</th>
+              <th style={{ padding: 'var(--space-2)', color: '#94a3b8', fontSize: 12, fontWeight: 700, textTransform: 'uppercase' }}>설명</th>
+              <th style={{ padding: 'var(--space-2)', color: '#94a3b8', fontSize: 12, fontWeight: 700, textTransform: 'uppercase' }}>상태</th>
+              <th style={{ padding: 'var(--space-2)', color: '#94a3b8', fontSize: 12, fontWeight: 700, textTransform: 'uppercase' }}>생성일</th>
               <th style={{ padding: 'var(--space-2)' }} />
             </tr>
           </thead>
           <tbody>
-            {data.items.map((workflow) => (
-              <tr key={workflow.id} style={{ borderBottom: '1px solid var(--color-border)' }}>
-                <td style={{ padding: 'var(--space-2)' }}>{workflow.name}</td>
-                <td style={{ padding: 'var(--space-2)', color: 'var(--color-text-muted)' }}>
-                  {workflow.description || '-'}
-                </td>
-                <td style={{ padding: 'var(--space-2)' }}>{STATUS_LABELS[workflow.status] ?? workflow.status}</td>
-                <td style={{ padding: 'var(--space-2)' }}>
-                  {new Date(workflow.created_at).toLocaleDateString('ko-KR')}
-                </td>
-                <td style={{ padding: 'var(--space-2)', textAlign: 'right' }}>
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/projects/${projectId}/workflows/${workflow.id}/edit`)}
-                    style={{ fontSize: 13, color: 'var(--color-accent)', background: 'none', border: 'none', cursor: 'pointer' }}
-                  >
-                    편집
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {data.items.map((workflow) => {
+              const badge = STATUS_BADGE[workflow.status] ?? { label: workflow.status, className: 'bg-secondary' }
+              return (
+                <tr key={workflow.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                  <td style={{ padding: 'var(--space-2)', fontWeight: 600 }}>{workflow.name}</td>
+                  <td style={{ padding: 'var(--space-2)', color: '#94a3b8' }}>
+                    {workflow.description || '-'}
+                  </td>
+                  <td style={{ padding: 'var(--space-2)' }}>
+                    <span className={`krds-badge small ${badge.className}`}>{badge.label}</span>
+                  </td>
+                  <td style={{ padding: 'var(--space-2)', color: '#94a3b8' }}>
+                    {new Date(workflow.created_at).toLocaleDateString('ko-KR')}
+                  </td>
+                  <td style={{ padding: 'var(--space-2)', textAlign: 'right' }}>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/projects/${projectId}/workflows/${workflow.id}/edit`)}
+                      className="krds-btn xsmall text"
+                    >
+                      편집
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       )}
 
       {showCreateModal && (
         <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50,
         }}>
-          <div style={{ background: 'var(--color-surface)', padding: 'var(--space-5)', borderRadius: 'var(--radius-md)', width: 400 }}>
-            <h3 style={{ marginBottom: 'var(--space-3)' }}>새 워크플로우</h3>
-            <input
-              placeholder="이름"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              style={{ width: '100%', padding: 'var(--space-2)', marginBottom: 'var(--space-2)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)' }}
-            />
-            <textarea
-              placeholder="설명 (선택)"
-              value={newDescription}
-              onChange={(e) => setNewDescription(e.target.value)}
-              style={{ width: '100%', padding: 'var(--space-2)', marginBottom: 'var(--space-3)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)' }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
-              <button type="button" onClick={() => setShowCreateModal(false)}>취소</button>
-              <button type="button" onClick={handleCreate} disabled={!newName.trim() || createWorkflow.isPending}>
-                생성
-              </button>
+          <section className="krds-modal fade shown in" role="dialog">
+            <div className="modal-dialog modal-md">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <h2 className="modal-title">새 워크플로우</h2>
+                </div>
+                <div className="modal-conts">
+                  <div className="conts-area" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                    <input
+                      placeholder="이름"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      className="krds-input"
+                      autoFocus
+                    />
+                    <textarea
+                      placeholder="설명 (선택)"
+                      value={newDescription}
+                      onChange={(e) => setNewDescription(e.target.value)}
+                      className="krds-input"
+                      rows={3}
+                    />
+                    <div className="modal-btn btn-wrap">
+                      <button type="button" className="krds-btn medium secondary" onClick={() => setShowCreateModal(false)}>
+                        취소
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCreate}
+                        disabled={!newName.trim() || createWorkflow.isPending}
+                        className="krds-btn medium primary"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }}
+                      >
+                        {createWorkflow.isPending && <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />}
+                        생성
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <button type="button" className="krds-btn medium icon btn-close close-modal" onClick={() => setShowCreateModal(false)}>
+                  <span className="sr-only">닫기</span>
+                  <X size={20} />
+                </button>
+              </div>
             </div>
-          </div>
+            <div className="modal-back"></div>
+          </section>
         </div>
       )}
+      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { AlertTriangle, Loader2, Play, Save, UploadCloud } from 'lucide-react'
 import {
   useCreateDraftVersion,
   usePublishVersion,
@@ -98,35 +99,71 @@ export default function WorkflowEditorPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
-        <h2 style={{ fontSize: 18, fontWeight: 700 }}>
-          워크플로우 편집 {editableVersion && `(v${editableVersion.version_number}${isReadOnly ? ' · 게시됨' : ' · 초안'})`}
-        </h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>워크플로우 편집</h2>
+          {editableVersion && (
+            <span className={`krds-badge small ${isReadOnly ? 'bg-primary' : 'bg-secondary'}`}>
+              v{editableVersion.version_number} · {isReadOnly ? '게시됨' : '초안'}
+            </span>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           {isReadOnly ? (
-            <button type="button" onClick={handleNewDraft} disabled={createDraftVersion.isPending}>
+            <button
+              type="button" onClick={handleNewDraft} disabled={createDraftVersion.isPending}
+              className="krds-btn small secondary" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+            >
+              {createDraftVersion.isPending ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={14} />}
               새 버전으로 저장
             </button>
           ) : (
             <>
-              <button type="button" onClick={handleSave} disabled={saveGraph.isPending}>저장</button>
-              <button type="button" onClick={handlePublish} disabled={publishVersion.isPending}>게시</button>
+              <button
+                type="button" onClick={handleSave} disabled={saveGraph.isPending}
+                className="krds-btn small secondary" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+              >
+                {saveGraph.isPending ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={14} />}
+                저장
+              </button>
+              <button
+                type="button" onClick={handlePublish} disabled={publishVersion.isPending}
+                className="krds-btn small secondary" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+              >
+                {publishVersion.isPending ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <UploadCloud size={14} />}
+                게시
+              </button>
             </>
           )}
-          <button type="button" onClick={handleRun} disabled={!isReadOnly || runWorkflow.isPending}>실행</button>
+          <button
+            type="button" onClick={handleRun} disabled={!isReadOnly || runWorkflow.isPending}
+            className="krds-btn small primary" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+          >
+            {runWorkflow.isPending ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Play size={14} />}
+            실행
+          </button>
         </div>
       </div>
 
       {validationErrors.length > 0 && (
-        <div style={{ padding: 'var(--space-2) var(--space-3)', background: '#fef2f2', color: '#b91c1c', borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13 }}>
-          {validationErrors.map((err) => <div key={err}>{err}</div>)}
+        <div style={{
+          display: 'flex', flexDirection: 'column', gap: 'var(--space-1)',
+          padding: 'var(--space-2) var(--space-3)', background: '#fef2f2',
+          border: '1px solid #fecaca', color: '#b91c1c',
+          borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
+        }}>
+          {validationErrors.map((err) => (
+            <div key={err} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+              <AlertTriangle size={14} style={{ flexShrink: 0 }} /> {err}
+            </div>
+          ))}
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr 260px', gap: 'var(--space-3)', flex: 1, minHeight: 500 }}>
-        <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', overflow: 'auto' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr 280px', gap: 'var(--space-3)', flex: 1, minHeight: 500 }}>
+        <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'auto', background: 'var(--color-surface)' }}>
           <BlockPalette onAddBlock={handleAddBlock} />
         </div>
-        <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)' }}>
+        <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
           <WorkflowCanvas
             blocks={blocks}
             edges={edges}
@@ -136,10 +173,11 @@ export default function WorkflowEditorPage() {
             onConnect={handleConnect}
           />
         </div>
-        <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', overflow: 'auto' }}>
+        <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'auto', background: 'var(--color-surface)' }}>
           <BlockPropertyPanel block={selectedBlock} onChange={handleBlockChange} />
         </div>
       </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
   )
 }
