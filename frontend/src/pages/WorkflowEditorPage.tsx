@@ -21,10 +21,16 @@ import { getBlockMeta } from '../lib/workflowBlocks'
 export default function WorkflowEditorPage() {
   const { id: workflowId } = useParams<{ id: string }>()
   const { data: versionsData } = useWorkflowVersions(workflowId ?? null)
-  // Edit the latest DRAFT version if one exists, otherwise the latest version overall
-  // (a version list with only published entries means the user must create a new
-  // draft before editing — enforced by the 409 the API already returns).
-  const editableVersion = versionsData?.items.find((v) => !v.published_at) ?? versionsData?.items[0]
+  // User-picked version from the header select; null = auto-pick.
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
+  // Auto-pick: the latest DRAFT version if one exists, otherwise the latest
+  // version overall (a version list with only published entries means the user
+  // must create a new draft before editing — enforced by the 409 the API
+  // already returns).
+  const editableVersion =
+    versionsData?.items.find((v) => v.id === selectedVersionId) ??
+    versionsData?.items.find((v) => !v.published_at) ??
+    versionsData?.items[0]
   const versionId = editableVersion?.id ?? null
 
   const { data: graph } = useWorkflowGraph(workflowId ?? null, versionId)
@@ -43,6 +49,13 @@ export default function WorkflowEditorPage() {
     setBlocks(graph?.blocks ?? [])
     setEdges(graph?.edges ?? [])
   }, [graph])
+
+  // Selections and stale validation errors don't carry over across versions.
+  useEffect(() => {
+    setSelectedBlockId(null)
+    setSelectedEdgeId(null)
+    setValidationErrors([])
+  }, [versionId])
 
   const isReadOnly = !!editableVersion?.published_at
 
@@ -108,7 +121,8 @@ export default function WorkflowEditorPage() {
 
   const handleNewDraft = async () => {
     if (!workflowId) return
-    await createDraftVersion.mutateAsync(workflowId)
+    const created = await createDraftVersion.mutateAsync(workflowId)
+    setSelectedVersionId(created.id)
   }
 
   const handlePublish = async () => {
@@ -133,9 +147,19 @@ export default function WorkflowEditorPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
           <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>워크플로우 편집</h2>
           {editableVersion && (
-            <span className={`krds-badge small ${isReadOnly ? 'bg-primary' : 'bg-secondary'}`}>
-              v{editableVersion.version_number} · {isReadOnly ? '게시됨' : '초안'}
-            </span>
+            <select
+              value={editableVersion.id}
+              onChange={(e) => setSelectedVersionId(e.target.value)}
+              className="krds-form-select small"
+              aria-label="버전 선택"
+              style={{ width: 'auto', minWidth: 130 }}
+            >
+              {versionsData?.items.map((v) => (
+                <option key={v.id} value={v.id}>
+                  v{v.version_number} · {v.published_at ? '게시됨' : '초안'}
+                </option>
+              ))}
+            </select>
           )}
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
