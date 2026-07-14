@@ -19,27 +19,33 @@ const helpStyle: React.CSSProperties = {
 }
 
 function ConfigFieldInput({
-  field, value, onValueChange,
+  field, inputId, value, onValueChange,
 }: {
   field: ConfigField
+  inputId: string
   value: unknown
   onValueChange: (value: unknown) => void
 }) {
   if (field.type === 'boolean') {
     const checked = value === undefined ? !!field.default : !!value
+    // KRDS hides native checkboxes — it only styles its own
+    // .krds-form-check > .chk + label pattern (same as DocumentsPage).
     return (
-      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', cursor: 'pointer' }}>
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => onValueChange(e.target.checked)}
-          style={{ marginTop: 2, flexShrink: 0 }}
-        />
-        <span style={{ minWidth: 0 }}>
-          <span style={{ fontSize: 13, color: 'var(--color-text)' }}>{field.label}</span>
-          {field.help && <div style={helpStyle}>{field.help}</div>}
-        </span>
-      </label>
+      <div>
+        <div className="krds-form-check">
+          <input
+            type="checkbox"
+            className="chk"
+            id={inputId}
+            checked={checked}
+            onChange={(e) => onValueChange(e.target.checked)}
+          />
+          <label htmlFor={inputId} style={{ fontSize: 13, color: 'var(--color-text)' }}>
+            {field.label}
+          </label>
+        </div>
+        {field.help && <div style={{ ...helpStyle, marginTop: 2 }}>{field.help}</div>}
+      </div>
     )
   }
 
@@ -212,6 +218,7 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
             <ConfigFieldInput
               key={field.key}
               field={field}
+              inputId={`cfg_${block.id}_${field.key}`}
               value={block.config?.[field.key]}
               onValueChange={(value) => setConfigValue(field.key, value)}
             />
