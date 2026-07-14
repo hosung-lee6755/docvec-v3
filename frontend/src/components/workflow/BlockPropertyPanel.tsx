@@ -105,6 +105,24 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
             <AlertCircle size={13} /> {configError}
           </span>
         )}
+        {meta.configHint ? (
+          <div style={{ fontSize: 11, color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
+            {meta.configHint}
+            {meta.configExample && (
+              <pre style={{
+                margin: 'var(--space-1) 0 0', padding: 'var(--space-2)',
+                background: 'rgba(148, 163, 184, 0.1)', borderRadius: 'var(--radius-sm)',
+                fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              }}>
+                예시: {JSON.stringify(meta.configExample)}
+              </pre>
+            )}
+          </div>
+        ) : (
+          <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+            이 블록은 별도 설정이 필요 없습니다. 비워 두세요 ({'{}'}).
+          </span>
+        )}
       </label>
     </div>
   )
