@@ -517,17 +517,59 @@ async def list_runs(
     workflow = await _get_workflow_or_404(db, workflow_id)
     await check_project_access(db, workflow.project_id, current_user, min_role="viewer")
 
-    version_ids = (
-        await db.scalars(select(WorkflowVersion.id).where(WorkflowVersion.workflow_id == workflow_id))
+    versions = (
+        await db.scalars(select(WorkflowVersion).where(WorkflowVersion.workflow_id == workflow_id))
     ).all()
+    version_numbers = {str(v.id): v.version_number for v in versions}
     runs = (
         await db.scalars(
             select(WorkflowRun)
-            .where(WorkflowRun.version_id.in_(version_ids))
+            .where(WorkflowRun.version_id.in_([v.id for v in versions]))
             .order_by(WorkflowRun.created_at.desc())
         )
     ).all()
-    return {"items": [RunResponse.model_validate(r) for r in runs]}
+
+    from app.db.models.document import Document
+
+    doc_ids = {run.document_id for run in runs if run.document_id}
+    doc_names: dict[str, str] = {}
+    if doc_ids:
+        docs = (await db.scalars(select(Document).where(Document.id.in_(doc_ids)))).all()
+        doc_names = {str(d.id): d.original_filename for d in docs}
+
+    items = []
+    for run in runs:
+        item = RunResponse.model_validate(run).model_dump()
+        item["version_number"] = version_numbers.get(str(run.version_id))
+        item["document_id"] = run.document_id
+        item["collection_id"] = run.collection_id
+        item["document_filename"] = doc_names.get(str(run.document_id)) if run.document_id else None
+        items.append(item)
+    return {"items": items}
+
+
+@router.delete("/runs/{run_id}")
+async def delete_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Deletes one run record and its step outputs. Running/queued runs are
+    protected — they would keep writing steps after the delete."""
+    run = await db.get(WorkflowRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    version = await db.get(WorkflowVersion, run.version_id)
+    workflow = await db.get(WorkflowDefinition, version.workflow_id)
+    await check_project_access(db, workflow.project_id, current_user, min_role="editor")
+
+    if run.status in ("QUEUED", "RUNNING"):
+        raise HTTPException(status_code=409, detail="실행 중인 기록은 삭제할 수 없습니다")
+
+    await db.execute(delete(WorkflowRunStep).where(WorkflowRunStep.run_id == run_id))
+    await db.delete(run)
+    await db.commit()
+    return {"deleted": True}
 
 
 @router.get("/runs/{run_id}/export")

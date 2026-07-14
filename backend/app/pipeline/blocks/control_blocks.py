@@ -23,6 +23,15 @@ class MergeBlock(BaseBlock):
         return "merge"
 
     def run(self, context: BlockContext) -> BlockResult:
-        # Keep each upstream branch's output addressable by source block id
-        # rather than silently overwriting on key collision.
-        return BlockResult(output={"merged": dict(context.upstream_outputs)})
+        # Flatten the branches into one result downstream blocks can consume
+        # directly (they look for top-level text/summary/keywords/...):
+        # first branch wins for scalars (including text), lists are unioned
+        # in branch order.
+        merged: dict = {}
+        for output in context.upstream_outputs.values():
+            for key, value in output.items():
+                if key not in merged:
+                    merged[key] = value
+                elif isinstance(merged[key], list) and isinstance(value, list):
+                    merged[key] = merged[key] + [v for v in value if v not in merged[key]]
+        return BlockResult(output=merged)

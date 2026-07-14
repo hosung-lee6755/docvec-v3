@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
-  AlertTriangle, Info, Loader2, Play, Save, Trash2, UploadCloud,
+  AlertTriangle, History, Info, Loader2, Play, Save, Trash2, UploadCloud,
 } from 'lucide-react'
 import {
   useCreateDraftVersion,
@@ -20,6 +20,7 @@ import RunWorkflowModal from '../components/workflow/RunWorkflowModal'
 import { getBlockMeta } from '../lib/workflowBlocks'
 
 export default function WorkflowEditorPage() {
+  const navigate = useNavigate()
   const { id: workflowId, projectId } = useParams<{ id: string; projectId?: string }>()
   const { data: versionsData } = useWorkflowVersions(workflowId ?? null)
   // User-picked version from the header select; null = auto-pick.
@@ -204,6 +205,15 @@ export default function WorkflowEditorPage() {
           )}
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <button
+            type="button"
+            onClick={() => navigate(`${projectId ? `/projects/${projectId}` : ''}/workflows/${workflowId}/runs`)}
+            className="krds-btn small text"
+            style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+          >
+            <History size={14} />
+            실행 이력
+          </button>
           {isReadOnly ? (
             <button
               type="button" onClick={handleNewDraft} disabled={createDraftVersion.isPending}

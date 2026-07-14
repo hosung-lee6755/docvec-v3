@@ -122,7 +122,9 @@ def _advance(db, run_id: str, block, output: dict) -> None:
                     run_id=run_id, block_instance_id=target.id, status="PENDING"
                 )
                 db.add(target_step)
-            target_step.completed_incoming_edges += 1
+            # `or 0`: the column default only lands on flush, so a freshly
+            # constructed step still has None here.
+            target_step.completed_incoming_edges = (target_step.completed_incoming_edges or 0) + 1
             db.commit()
             if target_step.completed_incoming_edges >= incoming_to_target:
                 run_workflow_step.delay(run_id, str(target.id))

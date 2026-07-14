@@ -46,6 +46,11 @@ export interface WorkflowRun {
   completed_at: string | null
   error_message: string | null
   created_at: string
+  // Enriched by GET /{workflow_id}/runs (absent on the run-detail endpoint).
+  version_number?: number
+  document_id?: string | null
+  collection_id?: string | null
+  document_filename?: string | null
 }
 
 export interface WorkflowRunStep {
@@ -213,6 +218,19 @@ export function useRunWorkflow() {
       // One run per target document — a collection target fans out into
       // multiple runs (items.length > 1).
       return data as { items: WorkflowRun[]; count: number }
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['workflow-runs', variables.workflowId] })
+    },
+  })
+}
+
+export function useDeleteRun() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ runId }: { workflowId: string; runId: string }) => {
+      const { data } = await apiClient.delete(`/workflows/runs/${runId}`)
+      return data as { deleted: boolean }
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['workflow-runs', variables.workflowId] })

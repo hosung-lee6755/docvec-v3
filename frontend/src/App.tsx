@@ -18,6 +18,7 @@ import UsageDashboardPage from './pages/UsageDashboardPage'
 import DictionaryPage from './pages/DictionaryPage'
 import WorkflowsPage from './pages/WorkflowsPage'
 import WorkflowEditorPage from './pages/WorkflowEditorPage'
+import WorkflowRunsPage from './pages/WorkflowRunsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -51,6 +52,7 @@ export default function App() {
             <Route path="chat/:conversationId" element={<ChatPage />} />
             <Route path="workflows" element={<WorkflowsPage />} />
             <Route path="workflows/:id/edit" element={<WorkflowEditorPage />} />
+            <Route path="workflows/:id/runs" element={<WorkflowRunsPage />} />
           </Route>
         </Route>
         <Route path="collections" element={<CollectionsPage />} />
@@ -59,6 +61,7 @@ export default function App() {
         <Route path="chat/:conversationId" element={<ChatPage />} />
         <Route path="workflows" element={<WorkflowsPage />} />
         <Route path="workflows/:id/edit" element={<WorkflowEditorPage />} />
+        <Route path="workflows/:id/runs" element={<WorkflowRunsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="audit-logs" element={<AuditLogPage />} />

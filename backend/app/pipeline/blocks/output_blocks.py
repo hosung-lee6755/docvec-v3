@@ -53,6 +53,10 @@ class OutputBlock(BaseBlock):
         upstream = next(iter(context.upstream_outputs.values()), {})
         result = {k: v for k, v in upstream.items() if k != "text"}
         saved_fields: list[str] = []
+        # Before/after per modified document field, so the run history screen
+        # can show exactly what this run changed (원본 보존·이력 추적 원칙 —
+        # see 문서데이터 전처리 방안.md).
+        changes: list[dict] = []
 
         # Default destination: write results onto the document the run was
         # started against. Opt out per block with config {"save_to_document": false}.
@@ -63,6 +67,11 @@ class OutputBlock(BaseBlock):
                 if doc is not None:
                     summary = upstream.get("summary")
                     if isinstance(summary, str) and summary.strip():
+                        changes.append({
+                            "field": "summary",
+                            "before": doc.summary,
+                            "after": summary.strip(),
+                        })
                         doc.summary = summary.strip()
                         doc.summary_status = "DONE"
                         saved_fields.append("summary")
@@ -75,15 +84,23 @@ class OutputBlock(BaseBlock):
                     if isinstance(category, str) and category.strip():
                         tags.append(category.strip())
                     if tags:
+                        before_tags = list(doc.suggested_tags or [])
                         existing = {t.lower() for t in (doc.tags or [])}
-                        merged = _dedup((doc.suggested_tags or []) + tags)
+                        merged = _dedup(before_tags + tags)
                         doc.suggested_tags = [t for t in merged if t.lower() not in existing] or None
                         doc.metadata_status = "DONE"
                         saved_fields.append("suggested_tags")
+                        changes.append({
+                            "field": "suggested_tags",
+                            "before": before_tags,
+                            "after": list(doc.suggested_tags or []),
+                        })
 
                     if saved_fields:
                         db.commit()
             finally:
                 db.close()
 
-        return BlockResult(output={**result, "saved_to_document": saved_fields})
+        return BlockResult(output={
+            **result, "saved_to_document": saved_fields, "changes": changes,
+        })
