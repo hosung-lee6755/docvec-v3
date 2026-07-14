@@ -2,6 +2,8 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -420,32 +422,68 @@ async def publish_version(
     return {"message": "게시되었습니다", "version_number": version.version_number}
 
 
-@router.post("/{workflow_id}/run", response_model=RunResponse)
+# Fan-out safety cap for collection runs: each document becomes its own
+# WorkflowRun, so an unbounded collection would flood the queue.
+_MAX_COLLECTION_RUN_DOCUMENTS = 50
+
+
+@router.post("/{workflow_id}/run")
 async def run_workflow(
     workflow_id: UUID,
     data: RunCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Starts one run per target document. A document_id targets that one
+    document; a collection_id fans out into one run per parsed document in
+    the collection (capped at _MAX_COLLECTION_RUN_DOCUMENTS)."""
     workflow = await _get_workflow_or_404(db, workflow_id)
     await check_project_access(db, workflow.project_id, current_user, min_role="editor")
     version = await _get_version_or_404(db, workflow_id, data.version_id)
     if version.published_at is None:
         raise HTTPException(status_code=409, detail="게시되지 않은 버전은 실행할 수 없습니다")
+    if not data.document_id and not data.collection_id:
+        raise HTTPException(status_code=400, detail="실행 대상(문서 또는 컬렉션)을 지정하세요")
 
     errors = await validate_graph(db, str(data.version_id))
     if errors:
         raise HTTPException(status_code=409, detail={"message": "워크플로우 유효성 검사 실패", "errors": errors})
 
-    run = WorkflowRun(
-        version_id=data.version_id,
-        document_id=data.document_id,
-        collection_id=data.collection_id,
-        status="QUEUED",
-    )
-    db.add(run)
+    if data.document_id:
+        target_document_ids = [data.document_id]
+    else:
+        from app.db.models.document import Document
+
+        target_document_ids = (
+            await db.scalars(
+                select(Document.id)
+                .where(
+                    Document.collection_id == data.collection_id,
+                    Document.parsed_text.is_not(None),
+                )
+                .order_by(Document.created_at)
+                .limit(_MAX_COLLECTION_RUN_DOCUMENTS)
+            )
+        ).all()
+        if not target_document_ids:
+            raise HTTPException(
+                status_code=409,
+                detail="컬렉션에 파싱 완료된 문서가 없습니다",
+            )
+
+    runs = []
+    for document_id in target_document_ids:
+        run = WorkflowRun(
+            version_id=data.version_id,
+            document_id=document_id,
+            collection_id=data.collection_id,
+            status="QUEUED",
+        )
+        db.add(run)
+        runs.append(run)
     await db.commit()
-    await db.refresh(run)
+    for run in runs:
+        await db.refresh(run)
 
     blocks = (
         await db.scalars(
@@ -460,10 +498,14 @@ async def run_workflow(
 
     from app.pipeline.tasks.workflow import run_workflow_step
 
-    for block in entry_blocks:
-        run_workflow_step.delay(str(run.id), str(block.id))
+    for run in runs:
+        for block in entry_blocks:
+            run_workflow_step.delay(str(run.id), str(block.id))
 
-    return run
+    return {
+        "items": [RunResponse.model_validate(r) for r in runs],
+        "count": len(runs),
+    }
 
 
 @router.get("/{workflow_id}/runs")
@@ -486,6 +528,70 @@ async def list_runs(
         )
     ).all()
     return {"items": [RunResponse.model_validate(r) for r in runs]}
+
+
+@router.get("/runs/{run_id}/export")
+async def export_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Downloads the run's final result (every terminal/output step's output,
+    plus per-step outputs) as a JSON attachment."""
+    run = await db.get(WorkflowRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    version = await db.get(WorkflowVersion, run.version_id)
+    workflow = await db.get(WorkflowDefinition, version.workflow_id)
+    await check_project_access(db, workflow.project_id, current_user, min_role="viewer")
+
+    steps = (
+        await db.scalars(select(WorkflowRunStep).where(WorkflowRunStep.run_id == run_id))
+    ).all()
+    blocks_by_id = {
+        str(b.id): b
+        for b in (
+            await db.scalars(
+                select(WorkflowBlockInstance).where(WorkflowBlockInstance.version_id == run.version_id)
+            )
+        ).all()
+    }
+    final_outputs = [
+        (s.output or {})
+        for s in steps
+        if blocks_by_id.get(str(s.block_instance_id)) is not None
+        and blocks_by_id[str(s.block_instance_id)].block_type == "output"
+        and s.status == "COMPLETED"
+    ]
+    payload = {
+        "run_id": str(run.id),
+        "workflow": workflow.name,
+        "version_number": version.version_number,
+        "status": run.status,
+        "document_id": str(run.document_id) if run.document_id else None,
+        "collection_id": str(run.collection_id) if run.collection_id else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "result": final_outputs[0] if len(final_outputs) == 1 else final_outputs,
+        "steps": [
+            {
+                "block": (
+                    blocks_by_id[str(s.block_instance_id)].label
+                    or blocks_by_id[str(s.block_instance_id)].block_type
+                )
+                if str(s.block_instance_id) in blocks_by_id
+                else str(s.block_instance_id),
+                "status": s.status,
+                "output": s.output,
+                "error_message": s.error_message,
+            }
+            for s in steps
+        ],
+    }
+    return JSONResponse(
+        content=jsonable_encoder(payload),
+        headers={"Content-Disposition": f'attachment; filename="workflow-run-{run_id}.json"'},
+    )
 
 
 @router.get("/runs/{run_id}")

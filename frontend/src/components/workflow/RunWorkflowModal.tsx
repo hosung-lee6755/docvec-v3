@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { CheckCircle2, Loader2, Play, X, XCircle } from 'lucide-react'
+import { CheckCircle2, Download, Loader2, Play, X, XCircle } from 'lucide-react'
+import { useCollections } from '../../hooks/useCollections'
 import { useDocuments } from '../../hooks/useDocuments'
+import { apiClient } from '../../lib/apiClient'
 import {
   useRunWorkflow,
   useWorkflowRun,
@@ -30,9 +32,13 @@ export default function RunWorkflowModal({
   workflowId, versionId, blocks, projectId, onClose,
 }: RunWorkflowModalProps) {
   const { data: documentsData } = useDocuments({ projectId, limit: 100 })
+  const { data: collectionsData } = useCollections(projectId)
   const runWorkflow = useRunWorkflow()
   const { data: runsData } = useWorkflowRuns(workflowId)
+  const [targetType, setTargetType] = useState<'document' | 'collection'>('document')
   const [documentId, setDocumentId] = useState('')
+  const [collectionId, setCollectionId] = useState('')
+  const [startedCount, setStartedCount] = useState<number | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const { data: runDetail } = useWorkflowRun(activeRunId)
 
@@ -42,10 +48,28 @@ export default function RunWorkflowModal({
     return block.label || getBlockMeta(block.block_type).label
   }
 
+  const canStart = targetType === 'document' ? !!documentId : !!collectionId
+
   const handleStart = async () => {
-    if (!documentId) return
-    const run = await runWorkflow.mutateAsync({ workflowId, versionId, documentId })
-    setActiveRunId(run.id)
+    if (!canStart) return
+    const result = await runWorkflow.mutateAsync({
+      workflowId,
+      versionId,
+      documentId: targetType === 'document' ? documentId : undefined,
+      collectionId: targetType === 'collection' ? collectionId : undefined,
+    })
+    setStartedCount(result.count)
+    setActiveRunId(result.items[0]?.id ?? null)
+  }
+
+  const handleExport = async (runId: string) => {
+    const { data } = await apiClient.get(`/workflows/runs/${runId}/export`, { responseType: 'blob' })
+    const url = URL.createObjectURL(data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `workflow-run-${runId}.json`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   const activeRun = runDetail?.run
@@ -66,25 +90,50 @@ export default function RunWorkflowModal({
               <div className="conts-area" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
                 <div className="form-group">
                   <div className="form-tit">
-                    <label htmlFor="run_document">대상 문서</label>
+                    <label htmlFor="run_target">실행 대상</label>
                   </div>
                   <div className="form-conts" style={{ display: 'flex', gap: 'var(--space-2)' }}>
                     <select
-                      id="run_document"
                       className="krds-form-select"
-                      style={{ flex: '1 1 auto' }}
-                      value={documentId}
-                      onChange={(e) => setDocumentId(e.target.value)}
+                      style={{ flex: '0 0 110px', width: 110 }}
+                      value={targetType}
+                      onChange={(e) => setTargetType(e.target.value as 'document' | 'collection')}
+                      aria-label="대상 유형"
                     >
-                      <option value="">문서를 선택하세요</option>
-                      {documentsData?.items.map((d) => (
-                        <option key={d.id} value={d.id}>{d.original_filename}</option>
-                      ))}
+                      <option value="document">문서</option>
+                      <option value="collection">컬렉션</option>
                     </select>
+                    {targetType === 'document' ? (
+                      <select
+                        id="run_target"
+                        className="krds-form-select"
+                        style={{ flex: '1 1 auto' }}
+                        value={documentId}
+                        onChange={(e) => setDocumentId(e.target.value)}
+                      >
+                        <option value="">문서를 선택하세요</option>
+                        {documentsData?.items.map((d) => (
+                          <option key={d.id} value={d.id}>{d.original_filename}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <select
+                        id="run_target"
+                        className="krds-form-select"
+                        style={{ flex: '1 1 auto' }}
+                        value={collectionId}
+                        onChange={(e) => setCollectionId(e.target.value)}
+                      >
+                        <option value="">컬렉션을 선택하세요</option>
+                        {collectionsData?.items.map((c) => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    )}
                     <button
                       type="button"
                       onClick={handleStart}
-                      disabled={!documentId || runWorkflow.isPending}
+                      disabled={!canStart || runWorkflow.isPending}
                       className="krds-btn medium primary"
                       style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexShrink: 0 }}
                     >
@@ -94,8 +143,13 @@ export default function RunWorkflowModal({
                       실행
                     </button>
                   </div>
-                  {!documentsData?.items.length && (
-                    <p className="form-hint">실행할 문서가 없습니다. 먼저 문서를 업로드하세요.</p>
+                  {targetType === 'collection' && (
+                    <p className="form-hint">컬렉션 내 파싱 완료된 문서마다 개별 실행이 만들어집니다 (최대 50건).</p>
+                  )}
+                  {startedCount !== null && startedCount > 1 && (
+                    <p className="form-hint" style={{ color: '#1d4ed8' }}>
+                      {startedCount}건의 실행이 시작되었습니다. 아래 실행 이력에서 각각 확인하세요.
+                    </p>
                   )}
                 </div>
 
@@ -111,6 +165,16 @@ export default function RunWorkflowModal({
                       </span>
                       {(activeRun.status === 'QUEUED' || activeRun.status === 'RUNNING') && (
                         <Loader2 size={13} style={{ animation: 'spin 1s linear infinite', color: '#2563eb' }} />
+                      )}
+                      {activeRun.status === 'COMPLETED' && (
+                        <button
+                          type="button"
+                          onClick={() => handleExport(activeRun.id)}
+                          className="krds-btn xsmall text"
+                          style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}
+                        >
+                          <Download size={13} /> 결과 내보내기 (JSON)
+                        </button>
                       )}
                     </div>
                     {activeRun.error_message && (
@@ -162,7 +226,7 @@ export default function RunWorkflowModal({
                   <div>
                     <strong style={{ fontSize: 13 }}>실행 이력</strong>
                     <ul style={{ margin: 'var(--space-2) 0 0', padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {runsData.items.slice(0, 5).map((r) => (
+                      {runsData.items.slice(0, 10).map((r) => (
                         <li key={r.id}>
                           <button
                             type="button"

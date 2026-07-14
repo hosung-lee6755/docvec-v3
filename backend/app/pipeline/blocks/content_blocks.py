@@ -41,6 +41,13 @@ def _upstream_text(context: BlockContext) -> str:
     raise ValueError("상위 블록에서 전달된 텍스트가 없습니다. 입력 블록부터 연결됐는지 확인하세요.")
 
 
+def _carry(context: BlockContext) -> dict:
+    """Accumulated result carried down a linear chain: each block passes its
+    upstream's whole output through and adds its own keys, so e.g.
+    요약 -> 키워드 추출 ends with BOTH summary and keywords."""
+    return dict(next(iter(context.upstream_outputs.values()), {}))
+
+
 def _parse_lines(raw: str, max_items: int) -> list[str]:
     """Line-per-item LLM output -> cleaned, deduped list (same approach as
     tasks/metadata.py's keyword parsing)."""
@@ -104,6 +111,7 @@ class PreprocessBlock(BaseBlock):
         )
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
         return BlockResult(output={
+            **_carry(context),
             "text": cleaned,
             "original_length": len(text),
             "cleaned_length": len(cleaned),
@@ -126,7 +134,7 @@ class ClassifyBlock(BaseBlock):
         # The model may echo punctuation or a sentence — take the first
         # category that appears in its answer, else the last (기타-style) one.
         category = next((c for c in categories if c in raw), categories[-1])
-        return BlockResult(output={"category": category, "text": text})
+        return BlockResult(output={**_carry(context), "category": category, "text": text})
 
 
 class ExtractEntitiesBlock(BaseBlock):
@@ -142,7 +150,7 @@ class ExtractEntitiesBlock(BaseBlock):
             "작성하세요. 최대 15개. 반드시 한국어로 작성하세요.",
             f"다음 문서에서 개체명을 추출하세요:\n\n{text[:_MAX_LLM_INPUT_CHARS]}",
         )
-        return BlockResult(output={"entities": _parse_lines(raw, 15), "text": text})
+        return BlockResult(output={**_carry(context), "entities": _parse_lines(raw, 15), "text": text})
 
 
 class ExtractKeywordsBlock(BaseBlock):
@@ -158,7 +166,7 @@ class ExtractKeywordsBlock(BaseBlock):
             "최대 10개. 반드시 한국어(한글)로만 작성하세요.",
             f"다음 문서에서 핵심 키워드를 추출하세요:\n\n{text[:_MAX_LLM_INPUT_CHARS]}",
         )
-        return BlockResult(output={"keywords": _parse_lines(raw, 10), "text": text})
+        return BlockResult(output={**_carry(context), "keywords": _parse_lines(raw, 10), "text": text})
 
 
 class SummarizeBlock(BaseBlock):
@@ -180,7 +188,7 @@ class SummarizeBlock(BaseBlock):
                 f"다음 문서를 요약하세요. 반드시 한국어(한글)로만 작성하세요. 중국어(한자) 사용 금지.\n\n"
                 f"{text[:_MAX_LLM_INPUT_CHARS]}",
             )
-        return BlockResult(output={"summary": summary.strip(), "text": text})
+        return BlockResult(output={**_carry(context), "summary": summary.strip(), "text": text})
 
 
 class ValidateBlock(BaseBlock):

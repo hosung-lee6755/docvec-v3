@@ -210,7 +210,9 @@ export function useRunWorkflow() {
         document_id: documentId,
         collection_id: collectionId,
       })
-      return data as WorkflowRun
+      // One run per target document — a collection target fans out into
+      // multiple runs (items.length > 1).
+      return data as { items: WorkflowRun[]; count: number }
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['workflow-runs', variables.workflowId] })
