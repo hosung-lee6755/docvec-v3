@@ -103,13 +103,21 @@ class PreprocessBlock(BaseBlock):
 
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
-        # Normalize whitespace: strip control chars, collapse runs of blank
-        # lines to one, collapse intra-line whitespace runs to single spaces.
+        # Control chars are always stripped; the rest is config-driven.
         cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
-        cleaned = "\n".join(
-            re.sub(r"[ \t]+", " ", line).strip() for line in cleaned.splitlines()
-        )
-        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+        if context.config.get("remove_urls", False):
+            cleaned = re.sub(r"https?://\S+|www\.\S+", "", cleaned)
+        if context.config.get("remove_emails", False):
+            cleaned = re.sub(r"\S+@\S+\.\S+", "", cleaned)
+        if context.config.get("remove_special_chars", False):
+            # Keep Korean/alphanumeric/space and basic sentence punctuation.
+            cleaned = re.sub(r"[^\w\s가-힣.,!?%()·\-]", "", cleaned)
+        if context.config.get("collapse_whitespace", True):
+            cleaned = "\n".join(
+                re.sub(r"[ \t]+", " ", line).strip() for line in cleaned.splitlines()
+            )
+            cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        cleaned = cleaned.strip()
         return BlockResult(output={
             **_carry(context),
             "text": cleaned,
@@ -144,13 +152,17 @@ class ExtractEntitiesBlock(BaseBlock):
 
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
+        max_entities = max(1, min(int(context.config.get("max_entities", 15)), 30))
+        entity_types = context.config.get("entity_types") or ["인명", "기관명", "지명", "제품명", "날짜"]
         raw = _generate(
-            "당신은 문서에서 개체명(인명, 기관명, 지명, 제품명, 날짜)을 추출하는 어시스턴트입니다. "
+            f"당신은 문서에서 개체명({', '.join(entity_types)})을 추출하는 어시스턴트입니다. "
             "문서에 실제로 등장하는 개체명만 한 줄에 하나씩 나열하세요. 번호, 설명 없이 개체명만 "
-            "작성하세요. 최대 15개. 반드시 한국어로 작성하세요.",
+            f"작성하세요. 최대 {max_entities}개. 반드시 한국어로 작성하세요.",
             f"다음 문서에서 개체명을 추출하세요:\n\n{text[:_MAX_LLM_INPUT_CHARS]}",
         )
-        return BlockResult(output={**_carry(context), "entities": _parse_lines(raw, 15), "text": text})
+        return BlockResult(output={
+            **_carry(context), "entities": _parse_lines(raw, max_entities), "text": text,
+        })
 
 
 class ExtractKeywordsBlock(BaseBlock):
@@ -160,13 +172,16 @@ class ExtractKeywordsBlock(BaseBlock):
 
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
+        max_keywords = max(1, min(int(context.config.get("max_keywords", 10)), 30))
         raw = _generate(
             "당신은 문서에서 핵심 키워드를 추출하는 어시스턴트입니다. 이 문서를 대표하는 "
             "키워드를 한 줄에 하나씩만 나열하세요. 번호, 설명 없이 키워드만 작성하세요. "
-            "최대 10개. 반드시 한국어(한글)로만 작성하세요.",
+            f"최대 {max_keywords}개. 반드시 한국어(한글)로만 작성하세요.",
             f"다음 문서에서 핵심 키워드를 추출하세요:\n\n{text[:_MAX_LLM_INPUT_CHARS]}",
         )
-        return BlockResult(output={**_carry(context), "keywords": _parse_lines(raw, 10), "text": text})
+        return BlockResult(output={
+            **_carry(context), "keywords": _parse_lines(raw, max_keywords), "text": text,
+        })
 
 
 class SummarizeBlock(BaseBlock):
@@ -176,17 +191,32 @@ class SummarizeBlock(BaseBlock):
 
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
+        style = context.config.get("format", "paragraph")
+        custom_prompt = (context.config.get("prompt") or "").strip()
+
+        style_instruction = (
+            "글머리표(-) 목록으로 항목별로 요약하세요."
+            if style == "bullets"
+            else "자연스러운 문단 형태로 요약하세요."
+        )
         system = (
             "당신은 문서를 간결하게 요약하는 어시스턴트입니다. 핵심 주제와 주요 내용을 "
-            "요약하세요. 문서에 없는 내용을 추측해서 덧붙이지 마세요. 반드시 한국어(한글)로만 "
+            f"요약하세요. {style_instruction} "
+            "문서에 없는 내용을 추측해서 덧붙이지 마세요. 반드시 한국어(한글)로만 "
             "작성하세요. 중국어(한자)나 영어 문장으로 작성하는 것은 금지됩니다."
         )
-        summary = _generate(system, f"다음 문서를 한국어로 요약하세요:\n\n{text[:_MAX_LLM_INPUT_CHARS]}")
+        # User-supplied instruction rides in the user turn so it can steer
+        # focus/format without being able to unset the Korean-only guard above.
+        user_prefix = f"{custom_prompt}\n\n" if custom_prompt else ""
+        summary = _generate(
+            system,
+            f"{user_prefix}다음 문서를 한국어로 요약하세요:\n\n{text[:_MAX_LLM_INPUT_CHARS]}",
+        )
         if _han_ratio(summary) > 0.05:
             summary = _generate(
                 system,
-                f"다음 문서를 요약하세요. 반드시 한국어(한글)로만 작성하세요. 중국어(한자) 사용 금지.\n\n"
-                f"{text[:_MAX_LLM_INPUT_CHARS]}",
+                f"{user_prefix}다음 문서를 요약하세요. 반드시 한국어(한글)로만 작성하세요. "
+                f"중국어(한자) 사용 금지.\n\n{text[:_MAX_LLM_INPUT_CHARS]}",
             )
         return BlockResult(output={**_carry(context), "summary": summary.strip(), "text": text})
 
