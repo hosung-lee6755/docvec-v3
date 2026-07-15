@@ -332,6 +332,20 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
     return records
 
 
+def _clean_rag_text(text: str) -> str:
+    """Always-on RAG-side cleaning applied to each chunk before embedding —
+    the standing subset of 문서데이터 전처리 방안.md §8.2 (제어문자 제거,
+    공백/빈 줄 정규화). Runs on chunk TEXT after span boundaries were
+    computed against the raw text, so page attribution offsets stay valid,
+    and parsed_text itself is never modified (원본 보존)."""
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    cleaned = "\n".join(
+        re.sub(r"[ \t]+", " ", line).strip() for line in cleaned.splitlines()
+    )
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def _normalize_ws(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
@@ -673,6 +687,30 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
                 overlap=chunk_overlap_tokens,
                 min_chars=chunk_min_tokens,
             )
+        strategy_label_pre = " (의미 기준)" if chunk_strategy == "semantic" else ""
+        complete_job(db, current_job, f"{len(chunk_spans)}개 청크 생성{strategy_label_pre}")
+
+        # 정제 단계 (문서데이터 전처리 방안.md §8) — chunk boundaries were
+        # computed on the raw text above, so cleaning per-chunk here keeps
+        # page_number attribution intact while the RAG store gets clean text.
+        current_job = start_job(db, document_id, "NORMALIZE")
+        doc.status = "NORMALIZING"
+        doc.updated_at = datetime.utcnow()
+        db.commit()
+        cleaned_spans = []
+        dropped_empty = 0
+        for text, start, end in chunk_spans:
+            cleaned = _clean_rag_text(text)
+            if cleaned:
+                cleaned_spans.append((cleaned, start, end))
+            else:
+                dropped_empty += 1
+        chunk_spans = cleaned_spans
+        complete_job(
+            db, current_job,
+            f"텍스트 정제 완료 ({dropped_empty}개 빈 청크 제거)" if dropped_empty else "텍스트 정제 완료",
+        )
+
         chunks = [text for text, _start, _end in chunk_spans]
         if not chunks:
             complete_job(db, current_job, "청크 없음 (빈 문서)")
@@ -684,9 +722,6 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
             from app.pipeline.tasks.metadata import extract_metadata
             extract_metadata.delay(document_id)
             return {"document_id": document_id, "status": "INDEXED", "chunks": 0}
-        strategy_label = " (의미 기준)" if chunk_strategy == "semantic" else ""
-        complete_job(db, current_job, f"{len(chunks)}개 청크 생성{strategy_label}")
-
         current_job = start_job(db, document_id, "EMBED")
         doc.status = "EMBEDDING"
         doc.updated_at = datetime.utcnow()
