@@ -375,16 +375,34 @@ async def batch_delete_documents(
         d for d in candidates
         if str(d.created_by) == str(current_user.id) or d.collection_id in owned_collection_ids
     ]
+    from sqlalchemy import update as sa_update
+
+    from app.db.models.workflow_run import WorkflowRun
+
     doc_ids = [doc.id for doc in docs]
     if doc_ids:
         await db.execute(delete(ProcessingJob).where(ProcessingJob.document_id.in_(doc_ids)))
+        # Keep workflow run history but drop the document link — the FK would
+        # otherwise abort the delete (and previous attempts had already wiped
+        # storage before hitting it, leaving zombie documents).
+        await db.execute(
+            sa_update(WorkflowRun)
+            .where(WorkflowRun.document_id.in_(doc_ids))
+            .values(document_id=None)
+        )
+
+    # Commit the DB delete FIRST: external cleanup below is best-effort and
+    # must never resurrect rows by failing mid-way.
+    cleanup = [(str(doc.id), doc.minio_key, list(doc.images or [])) for doc in docs]
     for doc in docs:
-        qdrant_service.delete_by_document(settings.qdrant_collection_name, str(doc.id))
-        storage_service.delete_file(settings.minio_bucket_originals, doc.minio_key)
-        for record in doc.images or []:
-            storage_service.delete_file(settings.minio_bucket_artifacts, record["storage_key"])
         await db.delete(doc)
     await db.commit()
+
+    for doc_id, minio_key, images in cleanup:
+        qdrant_service.delete_by_document(settings.qdrant_collection_name, doc_id)
+        storage_service.delete_file(settings.minio_bucket_originals, minio_key)
+        for record in images:
+            storage_service.delete_file(settings.minio_bucket_artifacts, record["storage_key"])
     return {"deleted": len(docs), "message": f"{len(docs)} documents deleted"}
 
 
@@ -407,17 +425,33 @@ async def delete_document(
         is_collection_owner = bool(collection) and str(collection.created_by) == str(current_user.id)
     if not (is_owner or is_collection_owner):
         raise HTTPException(status_code=403, detail="Access denied")
+
+    from sqlalchemy import update as sa_update
+
+    from app.db.models.workflow_run import WorkflowRun
+
     await db.execute(delete(ProcessingJob).where(ProcessingJob.document_id == document_id))
-    qdrant_service.delete_by_document(settings.qdrant_collection_name, str(doc.id))
-    storage_service.delete_file(settings.minio_bucket_originals, doc.minio_key)
-    for record in doc.images or []:
-        storage_service.delete_file(settings.minio_bucket_artifacts, record["storage_key"])
+    # Keep workflow run history but drop the document link (FK would abort
+    # the delete otherwise).
+    await db.execute(
+        sa_update(WorkflowRun)
+        .where(WorkflowRun.document_id == document_id)
+        .values(document_id=None)
+    )
     log_audit(
         db, str(current_user.id), "document.delete", "document", str(doc.id),
         detail={"filename": doc.filename},
     )
+    # Commit the DB delete FIRST — external cleanup is best-effort and must
+    # never leave a half-deleted zombie row behind.
+    minio_key, images = doc.minio_key, list(doc.images or [])
     await db.delete(doc)
     await db.commit()
+
+    qdrant_service.delete_by_document(settings.qdrant_collection_name, str(document_id))
+    storage_service.delete_file(settings.minio_bucket_originals, minio_key)
+    for record in images:
+        storage_service.delete_file(settings.minio_bucket_artifacts, record["storage_key"])
     return {"message": "Document deleted"}
 
 
