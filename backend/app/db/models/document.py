@@ -44,6 +44,13 @@ class Document(Base):
             "INDEXED",
             "FAILED",
             "CANCELLED",
+            # Added for the workflow-driven preprocessing pipeline (전처리
+            # 워크플로우 통합 설계서 §7.2 status mapping) — VALIDATING covers
+            # file_validate/format_detect, MASKING covers pii_detect,
+            # WAITING_REVIEW is the quality_check review gate.
+            "VALIDATING",
+            "MASKING",
+            "WAITING_REVIEW",
             name="document_status",
         ),
         default="QUEUED",
@@ -97,3 +104,15 @@ class Document(Base):
     metadata_status: Mapped[str] = mapped_column(
         String(20), default="PENDING", server_default="PENDING"
     )
+    # The workflow run currently driving this document's status, or the most
+    # recent one once the run finishes — see 전처리 워크플로우 통합 설계서 §7.2.
+    # SET NULL (not CASCADE): deleting a run must not delete the document.
+    active_run_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    # Copy of the latest QualityReport.status for this document, kept here so
+    # the document list can filter/sort by quality without a join.
+    quality_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Snapshot of {block_type: block_version, embedding_model, ...} from the
+    # last successful run — 설계서 §16.2 처리 버전 예시.
+    pipeline_version: Mapped[dict | None] = mapped_column(JSON, nullable=True)

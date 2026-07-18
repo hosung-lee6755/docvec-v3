@@ -6,11 +6,35 @@ walked one block at a time: each completed block resolves its own outgoing
 WorkflowEdges and enqueues whatever comes next, rather than being composed
 into one static chain up front.
 """
+import hashlib
+import json
 from datetime import datetime
 
-from app.pipeline.blocks.base import BlockContext
+from app.pipeline.blocks.base import BlockContext, BlockExecutionError
 from app.pipeline.blocks.registry import BLOCK_REGISTRY
 from app.pipeline.celery_app import celery_app
+
+# 대용량 산출물은 인라인 대신 MinIO artifacts 버킷에 저장 (통합 설계서 §2.3).
+_ARTIFACT_INLINE_THRESHOLD_BYTES = 16_000
+
+# 실행 중 블록 -> Document.status 파생 매핑 (통합 설계서 §7.2). 현재 등록된 11개
+# 블록 타입은 이 매핑에 없으므로 지금은 사실상 no-op — Phase 3+에서 신규 블록
+# 타입이 추가되는 즉시 실행기 재수정 없이 자동으로 작동한다.
+_STATUS_FOR_BLOCK_TYPE: dict[str, str] = {
+    "file_validate": "VALIDATING",
+    "format_detect": "VALIDATING",
+    "text_extract": "PARSING",
+    "ocr": "PARSING",
+    "structure_analyze": "STRUCTURING",
+    "text_clean": "REFINING",
+    "stopword": "NORMALIZING",
+    "synonym": "NORMALIZING",
+    "user_dict": "NORMALIZING",
+    "pii_detect": "MASKING",
+    "chunk_split": "CHUNKING",
+    "quality_check": "VALIDATING",
+    "rag_store": "EMBEDDING",
+}
 
 
 def _evaluate_condition(condition: dict | None, output: dict) -> bool:
@@ -19,13 +43,136 @@ def _evaluate_condition(condition: dict | None, output: dict) -> bool:
     return output.get(condition.get("output_field")) == condition.get("equals")
 
 
+def _serialize(obj) -> bytes:
+    return json.dumps(obj, sort_keys=True, default=str).encode()
+
+
+def _hash_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _store_step_output(run_id: str, step, output: dict) -> dict:
+    """Inlines `output` on `step` when small, or offloads it to the MinIO
+    artifacts bucket and stores a reference (통합 설계서 §2.3). Returns the
+    fully-resolved output dict (never the reduced summary) so callers can use
+    it for edge-condition evaluation without caring which path was taken."""
+    from app.core.config import settings
+    from app.services.storage import storage_service
+
+    data = _serialize(output)
+    step.output_hash = _hash_bytes(data)
+    if len(data) <= _ARTIFACT_INLINE_THRESHOLD_BYTES:
+        step.output = output
+        step.artifact_key = None
+    else:
+        key = f"runs/{run_id}/{step.id}/output.json"
+        storage_service.upload_file(settings.minio_bucket_artifacts, key, data, "application/json")
+        step.artifact_key = key
+        step.output = {"artifact": key, "output_hash": step.output_hash, "_artifact_only": True}
+    return output
+
+
+def _resolve_output(output: dict | None) -> dict:
+    """Loads an `_artifact_only`-marked step output back from MinIO; passes
+    through inline outputs unchanged. Blocks never see the reduced form."""
+    from app.core.config import settings
+    from app.services.storage import storage_service
+
+    if not output:
+        return {}
+    if output.get("_artifact_only") and output.get("artifact"):
+        return json.loads(storage_service.download_file(settings.minio_bucket_artifacts, output["artifact"]))
+    return output
+
+
+# These 3 block types read dictionary_entries as of WorkflowRun.dictionary_version
+# (통합 설계서 §5) — their cache key must fold that version in so an edited
+# dictionary busts the cache for exactly these blocks, per §2.4's cache key
+# formula ("... + 사전 버전(사전 블록만) + ..."). Every other block type ignores
+# the dictionary entirely, so including it there would only cause needless
+# cache misses whenever anyone edits an unrelated dictionary entry.
+_DICTIONARY_BLOCK_TYPES = frozenset({"stopword", "synonym", "user_dict", "pii_detect"})
+
+
+def _compute_cache_key(
+    document_id: str | None,
+    input_hash: str,
+    block_type: str,
+    block_version: str,
+    config: dict,
+    dictionary_version: int | None = None,
+) -> str:
+    # document_id is required even though most blocks derive their output from
+    # upstream_outputs: an entry block (e.g. file_validate) has NO upstream, so
+    # its input_hash is identical ({} serialized) across every document — without
+    # document_id, two unrelated documents' entry-block runs would collide on
+    # the same cache key and each would replay the other's cached output.
+    config_hash = _hash_bytes(_serialize(config or {}))
+    dict_version_part = dictionary_version if block_type in _DICTIONARY_BLOCK_TYPES else None
+    return _hash_bytes(
+        f"{document_id}:{input_hash}:{block_type}:{block_version}:{config_hash}:{dict_version_part}".encode()
+    )
+
+
+def _update_document_status(db, run, block_type: str) -> None:
+    from app.db.models.document import Document
+
+    new_status = _STATUS_FOR_BLOCK_TYPE.get(block_type)
+    if new_status is None or not run.document_id:
+        return
+    doc = db.get(Document, run.document_id)
+    if doc is not None:
+        doc.status = new_status
+        db.commit()
+
+
+def _fail_document(db, run, error_message: str) -> None:
+    """Mirrors the retired fixed pipeline's failure behavior (parse_document/
+    continue_processing always set Document.status="FAILED" on error) so the
+    document list/detail UI still surfaces workflow-driven failures."""
+    from app.db.models.document import Document
+
+    if not run.document_id:
+        return
+    doc = db.get(Document, run.document_id)
+    if doc is not None:
+        doc.status = "FAILED"
+        doc.error_message = error_message[:500]
+
+
+def _find_paused_step(db, run_id: str):
+    """Finds the step a WAITING_REVIEW run halted at — the run stops
+    _advance() the instant a block requests review, so exactly one COMPLETED
+    step exists whose taken outgoing edges point at blocks with no step row
+    yet (every other completed step already had _advance() run for it,
+    which always creates a step row for each taken edge's target)."""
+    from app.db.models.workflow import WorkflowEdge
+    from app.db.models.workflow_run import WorkflowRunStep
+
+    all_steps = db.query(WorkflowRunStep).filter(WorkflowRunStep.run_id == run_id).all()
+    existing_targets = {str(s.block_instance_id) for s in all_steps}
+    for step in all_steps:
+        if step.status != "COMPLETED":
+            continue
+        outgoing = db.query(WorkflowEdge).filter(
+            WorkflowEdge.from_block_id == step.block_instance_id
+        ).all()
+        taken = [e for e in outgoing if _evaluate_condition(e.condition, _resolve_output(step.output))]
+        if taken and all(str(e.to_block_id) not in existing_targets for e in taken):
+            return step
+    return None
+
+
 @celery_app.task(name="tasks.run_workflow_step", queue="normal", bind=True, max_retries=3)
 def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
+    from app.db.models.block_execution_cache import BlockExecutionCache
+    from app.db.models.document import Document
     from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
     from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
     from app.db.session import get_sync_db
 
     db = get_sync_db()
+    block = None
     try:
         run = db.get(WorkflowRun, run_id)
         block = db.get(WorkflowBlockInstance, block_instance_id)
@@ -47,6 +194,8 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
             db.commit()
             db.refresh(step)
 
+        _update_document_status(db, run, block.block_type)
+
         incoming_edges = db.query(WorkflowEdge).filter(
             WorkflowEdge.to_block_id == block_instance_id
         ).all()
@@ -55,30 +204,97 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
             WorkflowRunStep.block_instance_id.in_([e.from_block_id for e in incoming_edges]),
         ).all()
         upstream_outputs = {
-            str(s.block_instance_id): (s.output or {}) for s in upstream_steps
+            str(s.block_instance_id): _resolve_output(s.output) for s in upstream_steps
         }
 
         step.status = "RUNNING"
         step.started_at = datetime.utcnow()
+        step.input_hash = _hash_bytes(_serialize(upstream_outputs))
         db.commit()
 
         block_cls = BLOCK_REGISTRY[block.block_type]
-        result = block_cls().run(BlockContext(
-            run_id=run_id,
-            block_instance_id=block_instance_id,
-            upstream_outputs=upstream_outputs,
-            config=block.config or {},
-            document_id=str(run.document_id) if run.document_id else None,
-            collection_id=str(run.collection_id) if run.collection_id else None,
-        ))
+        block_instance = block_cls()
+        cache_key = _compute_cache_key(
+            str(run.document_id) if run.document_id else None,
+            step.input_hash, block.block_type, block_instance.block_version, block.config or {},
+            dictionary_version=run.dictionary_version,
+        )
+        cache_entry = db.get(BlockExecutionCache, cache_key)
 
-        step.status = "COMPLETED"
-        step.output = result.output
-        step.completed_at = datetime.utcnow()
+        if cache_entry is not None:
+            resolved_output = _resolve_output(cache_entry.output_summary)
+            step.output = cache_entry.output_summary
+            step.output_hash = _hash_bytes(_serialize(resolved_output))
+            step.artifact_key = (cache_entry.output_summary or {}).get("artifact")
+            step.cached = True
+            step.status = "COMPLETED"
+            step.completed_at = datetime.utcnow()
+            cache_entry.hit_count = (cache_entry.hit_count or 0) + 1
+            cache_entry.last_hit_at = datetime.utcnow()
+            db.commit()
+        else:
+            result = block_instance.run(BlockContext(
+                run_id=run_id,
+                block_instance_id=block_instance_id,
+                step_id=str(step.id),
+                upstream_outputs=upstream_outputs,
+                config=block.config or {},
+                document_id=str(run.document_id) if run.document_id else None,
+                collection_id=str(run.collection_id) if run.collection_id else None,
+            ))
+
+            resolved_output = result.output
+            step.status = "COMPLETED"
+            step.warnings = result.warnings or None
+            step.metrics = result.metrics or None
+            step.completed_at = datetime.utcnow()
+            _store_step_output(run_id, step, result.output)
+            db.commit()
+
+            db.add(BlockExecutionCache(
+                cache_key=cache_key,
+                artifact_key=step.artifact_key or "",
+                output_summary=step.output,
+                created_at=datetime.utcnow(),
+                hit_count=0,
+            ))
+            db.commit()
+
+            if result.requires_review:
+                run.status = "WAITING_REVIEW"
+                if run.document_id:
+                    doc = db.get(Document, run.document_id)
+                    if doc is not None:
+                        doc.status = "WAITING_REVIEW"
+                db.commit()
+                return {"status": "WAITING_REVIEW", "output": resolved_output}
+
+        _advance(db, run_id, block, resolved_output)
+        return {"status": "COMPLETED", "output": resolved_output}
+
+    except BlockExecutionError as exc:
+        step = db.query(WorkflowRunStep).filter(
+            WorkflowRunStep.run_id == run_id,
+            WorkflowRunStep.block_instance_id == block_instance_id,
+        ).first()
+        retry_count = int((block.config or {}).get("retryCount", 2)) if block is not None else 2
+        if step is not None:
+            step.error_code = exc.error_code
+            step.completed_at = datetime.utcnow()
+        if not exc.permanent and self.request.retries < retry_count:
+            db.commit()
+            raise self.retry(exc=exc, max_retries=retry_count)
+        if step is not None:
+            step.status = "FAILED"
+            step.error_message = str(exc)[:500]
+        run = db.get(WorkflowRun, run_id)
+        if run is not None:
+            run.status = "FAILED"
+            run.error_message = str(exc)[:500]
+            run.completed_at = datetime.utcnow()
+            _fail_document(db, run, str(exc))
         db.commit()
-
-        _advance(db, run_id, block, result.output)
-        return {"status": "COMPLETED", "output": result.output}
+        raise
 
     except Exception as exc:
         step = db.query(WorkflowRunStep).filter(
@@ -94,6 +310,7 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
             run.status = "FAILED"
             run.error_message = str(exc)[:500]
             run.completed_at = datetime.utcnow()
+            _fail_document(db, run, str(exc))
         db.commit()
         raise
 
@@ -109,6 +326,7 @@ def _advance(db, run_id: str, block, output: dict) -> None:
 
     for edge in taken_edges:
         target = db.get(WorkflowBlockInstance, edge.to_block_id)
+        timeout_seconds = (target.config or {}).get("timeoutSeconds", 300)
         if target.block_type == "merge":
             incoming_to_target = db.query(WorkflowEdge).filter(
                 WorkflowEdge.to_block_id == target.id
@@ -127,9 +345,9 @@ def _advance(db, run_id: str, block, output: dict) -> None:
             target_step.completed_incoming_edges = (target_step.completed_incoming_edges or 0) + 1
             db.commit()
             if target_step.completed_incoming_edges >= incoming_to_target:
-                run_workflow_step.delay(run_id, str(target.id))
+                run_workflow_step.apply_async(args=[run_id, str(target.id)], time_limit=timeout_seconds)
         else:
-            run_workflow_step.delay(run_id, str(target.id))
+            run_workflow_step.apply_async(args=[run_id, str(target.id)], time_limit=timeout_seconds)
 
     if not taken_edges:
         # Terminal block for this branch. If no other step in the run is still
@@ -139,7 +357,48 @@ def _advance(db, run_id: str, block, output: dict) -> None:
             WorkflowRunStep.status.in_(["PENDING", "RUNNING"]),
         ).count()
         if unfinished == 0:
+            from app.db.models.document import Document
+
             run = db.get(WorkflowRun, run_id)
             run.status = "COMPLETED"
             run.completed_at = datetime.utcnow()
+            if run.document_id:
+                # rag_store normally sets Document.status="INDEXED" itself, but that
+                # side effect is skipped whenever rag_store is served from
+                # block_execution_cache instead of actually running (e.g. reprocessing
+                # a document whose input is unchanged) — mirrors _fail_document's
+                # unconditional terminal-status write on the failure side, so a run
+                # that genuinely finishes always leaves the document in a consistent
+                # terminal state regardless of which blocks were cache hits.
+                doc = db.get(Document, run.document_id)
+                if doc is not None and doc.status != "FAILED":
+                    doc.status = "INDEXED"
+                    doc.updated_at = datetime.utcnow()
             db.commit()
+
+
+@celery_app.task(name="tasks.resume_workflow_run", queue="normal", bind=True)
+def resume_workflow_run(self, run_id: str) -> dict:
+    """Resumes a WAITING_REVIEW run from the block it paused at (통합 설계서
+    §7.4, case a/b — 승인/수정 후 승인). The API endpoint only validates
+    permissions/state and enqueues this task; all DAG-walking happens here,
+    in the same sync-session context `_advance`/`run_workflow_step` use."""
+    from app.db.models.workflow import WorkflowBlockInstance
+    from app.db.models.workflow_run import WorkflowRun
+    from app.db.session import get_sync_db
+
+    db = get_sync_db()
+    try:
+        run = db.get(WorkflowRun, run_id)
+        if run is None or run.status != "WAITING_REVIEW":
+            return {"status": "SKIPPED"}
+        step = _find_paused_step(db, run_id)
+        if step is None:
+            return {"status": "NOT_FOUND"}
+        block = db.get(WorkflowBlockInstance, step.block_instance_id)
+        run.status = "RUNNING"
+        db.commit()
+        _advance(db, run_id, block, _resolve_output(step.output))
+        return {"status": "RESUMED"}
+    finally:
+        db.close()

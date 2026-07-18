@@ -3,11 +3,12 @@ import threading
 
 from kiwipiepy import Kiwi
 from kiwipiepy.utils import Stopwords
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models.dictionary_entry import DictionaryEntry
+from app.db.models.dictionary_revision import DictionaryRevision
 
 _lock = threading.Lock()
 # Populated eagerly (not lazily) so tokenize() always has a working analyzer,
@@ -187,3 +188,21 @@ def expand_query(query: str) -> tuple[str, list[str]]:
     if not added:
         return query, []
     return f"{query} {' '.join(added)}", added
+
+
+async def bump_revision(
+    db: AsyncSession, changed_entry_id: str | None, change_type: str, created_by: str | None,
+) -> None:
+    """Adds one DictionaryRevision row in the caller's open transaction —
+    통합 설계서 §4.8/§5. Caller commits; this only stages the row so it lands
+    in the same commit as the dictionary_entries write it's recording."""
+    db.add(DictionaryRevision(
+        changed_entry_id=changed_entry_id, change_type=change_type, created_by=created_by,
+    ))
+
+
+async def current_dictionary_version(db: AsyncSession) -> int | None:
+    """The global dictionary_revisions version to pin on a new WorkflowRun —
+    None means the dictionary has never been written to (사전 블록은 이 경우
+    컷오프 없이 전체 enabled 항목을 그대로 읽는다, §5)."""
+    return await db.scalar(select(func.max(DictionaryRevision.version)))

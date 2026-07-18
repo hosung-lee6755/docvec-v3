@@ -7,7 +7,13 @@ addition to being stored on the run step for the run modal / JSON export.
 """
 import re
 
+from pydantic import BaseModel
+
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
+
+
+class OutputConfig(BaseModel):
+    save_to_document: bool = True
 
 
 def _dedup(items: list) -> list[str]:
@@ -28,6 +34,10 @@ class PostprocessBlock(BaseBlock):
     def block_type(self) -> str:
         return "postprocess"
 
+    @property
+    def category(self) -> str:
+        return "분석"
+
     def run(self, context: BlockContext) -> BlockResult:
         output = dict(next(iter(context.upstream_outputs.values()), {}))
         if isinstance(output.get("summary"), str):
@@ -45,6 +55,14 @@ class OutputBlock(BaseBlock):
     @property
     def block_type(self) -> str:
         return "output"
+
+    @property
+    def category(self) -> str:
+        return "분석"
+
+    @property
+    def config_schema(self) -> type[BaseModel] | None:
+        return OutputConfig
 
     def run(self, context: BlockContext) -> BlockResult:
         from app.db.models.document import Document

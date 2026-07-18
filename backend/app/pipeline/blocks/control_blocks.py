@@ -13,6 +13,10 @@ class BranchBlock(BaseBlock):
     def block_type(self) -> str:
         return "branch"
 
+    @property
+    def category(self) -> str:
+        return "품질·제어"
+
     def run(self, context: BlockContext) -> BlockResult:
         return BlockResult(output=next(iter(context.upstream_outputs.values()), {}))
 
@@ -21,6 +25,10 @@ class MergeBlock(BaseBlock):
     @property
     def block_type(self) -> str:
         return "merge"
+
+    @property
+    def category(self) -> str:
+        return "품질·제어"
 
     def run(self, context: BlockContext) -> BlockResult:
         # Flatten the branches into one result downstream blocks can consume

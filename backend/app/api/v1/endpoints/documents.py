@@ -69,6 +69,81 @@ _ZIP_MAX_ENTRY_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 _ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 
 
+async def _resolve_preprocess_version_id(db: AsyncSession, collection_id: str | None):
+    """Collection.default_workflow_id if set, else the system-seeded standard
+    PREPROCESS workflow (통합 설계서 §13 Task 3) — always its latest published
+    version."""
+    from app.db.models.workflow import WorkflowDefinition, WorkflowVersion
+
+    workflow_id = None
+    if collection_id:
+        collection = await db.get(Collection, collection_id)
+        if collection is not None and collection.default_workflow_id:
+            workflow_id = collection.default_workflow_id
+
+    if workflow_id is None:
+        system_workflow = await db.scalar(
+            select(WorkflowDefinition).where(
+                WorkflowDefinition.project_id.is_(None),
+                WorkflowDefinition.kind == "PREPROCESS",
+            )
+        )
+        if system_workflow is None:
+            raise HTTPException(status_code=500, detail="표준 전처리 워크플로우가 설정되어 있지 않습니다")
+        workflow_id = system_workflow.id
+
+    version = await db.scalar(
+        select(WorkflowVersion)
+        .where(WorkflowVersion.workflow_id == workflow_id, WorkflowVersion.published_at.is_not(None))
+        .order_by(WorkflowVersion.version_number.desc())
+        .limit(1)
+    )
+    if version is None:
+        raise HTTPException(status_code=500, detail="게시된 전처리 워크플로우 버전이 없습니다")
+    return version.id
+
+
+async def _start_preprocess_workflow(db: AsyncSession, document: Document) -> None:
+    """Replaces the retired fixed pipeline's create_processing_chain(...).delay()
+    — creates a WorkflowRun against the resolved PREPROCESS version and
+    enqueues its entry block(s), same pattern as workflows.py's /run endpoint."""
+    from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
+    from app.db.models.workflow_run import WorkflowRun
+    from app.pipeline.tasks.workflow import run_workflow_step
+    from app.services.dictionary_service import current_dictionary_version
+
+    version_id = await _resolve_preprocess_version_id(
+        db, str(document.collection_id) if document.collection_id else None
+    )
+    dictionary_version = await current_dictionary_version(db)
+
+    run = WorkflowRun(
+        version_id=version_id, document_id=document.id, status="QUEUED", trigger="UPLOAD",
+        dictionary_version=dictionary_version,
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+
+    document.active_run_id = run.id
+    await db.commit()
+
+    blocks = (
+        await db.scalars(
+            select(WorkflowBlockInstance).where(WorkflowBlockInstance.version_id == version_id)
+        )
+    ).all()
+    edges = (
+        await db.scalars(select(WorkflowEdge).where(WorkflowEdge.version_id == version_id))
+    ).all()
+    has_incoming = {e.to_block_id for e in edges}
+    entry_blocks = [b for b in blocks if b.id not in has_incoming]
+
+    for block in entry_blocks:
+        timeout_seconds = (block.config or {}).get("timeoutSeconds", 300)
+        run_workflow_step.apply_async(args=[str(run.id), str(block.id)], time_limit=timeout_seconds)
+
+
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
@@ -77,7 +152,6 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.pipeline.tasks.pipeline import create_processing_chain
     from app.services.storage import storage_service
 
     if collection_id is not None:
@@ -125,7 +199,10 @@ async def upload_document(
     await db.commit()
     await db.refresh(document)
 
-    create_processing_chain(str(document.id), skip_review=skip_review).delay()
+    # skip_review: 표준 워크플로우(Phase 3)에는 아직 검토 게이트(quality_check,
+    # Phase 7)가 없어 항상 즉시 진행과 동일하다 — 하위 호환을 위해 파라미터는
+    # 받되 무시한다.
+    await _start_preprocess_workflow(db, document)
 
     return {
         "id": document.id,
@@ -154,7 +231,6 @@ async def upload_documents_zip(
     import zipfile
     from pathlib import PurePosixPath
 
-    from app.pipeline.tasks.pipeline import create_processing_chain
     from app.services.storage import storage_service
 
     if collection_id is not None:
@@ -248,7 +324,9 @@ async def upload_documents_zip(
             await db.commit()
             await db.refresh(document)
 
-            create_processing_chain(str(document.id), skip_review=skip_review).delay()
+            # skip_review: 이번 단계 표준 워크플로우엔 검토 게이트가 없어
+            # 무시됨(단일 업로드와 동일 — 위 주석 참고).
+            await _start_preprocess_workflow(db, document)
             results.append({"filename": entry_name, "status": "queued", "document_id": document.id})
             queued += 1
         except Exception as exc:
@@ -510,8 +588,6 @@ async def reprocess_document(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.pipeline.tasks.process import continue_processing
-
     doc = await db.scalar(select(Document).where(Document.id == document_id))
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -521,6 +597,38 @@ async def reprocess_document(
             status_code=409,
             detail=f"Document is not indexed yet (status={doc.status})",
         )
+
+    if body.start_block_type is not None or body.start_block_instance_id is not None:
+        from app.db.models.workflow_run import WorkflowRun as _WorkflowRun
+        from app.services.reprocess_service import (
+            ReprocessError,
+            resolve_start_block,
+            start_partial_reprocess,
+        )
+
+        parent_run = await db.get(_WorkflowRun, doc.active_run_id) if doc.active_run_id else None
+        if parent_run is None:
+            raise HTTPException(
+                status_code=409,
+                detail="이 문서는 아직 워크플로우로 처리된 적이 없어 이 기능을 사용할 수 없습니다.",
+            )
+
+        try:
+            start_block = await resolve_start_block(
+                db, parent_run.version_id, body.start_block_type, body.start_block_instance_id,
+            )
+            new_run = await start_partial_reprocess(db, doc, start_block, body.reason)
+        except ReprocessError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        return {
+            "message": "부분 재처리가 시작되었습니다",
+            "run_id": str(new_run.id),
+            "status": "QUEUED",
+            "impact": new_run.impact,
+        }
+
+    from app.pipeline.tasks.process import continue_processing
 
     db.add(
         DocumentTextRevision(
@@ -764,8 +872,6 @@ async def retry_failed_document(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.pipeline.tasks.pipeline import create_processing_chain
-
     doc = await db.scalar(select(Document).where(Document.id == document_id))
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -778,7 +884,7 @@ async def retry_failed_document(
     doc.status = "QUEUED"
     doc.error_message = None
     await db.commit()
-    create_processing_chain(str(document_id)).delay()
+    await _start_preprocess_workflow(db, doc)
     return {"message": "Retry started", "status": "QUEUED"}
 
 

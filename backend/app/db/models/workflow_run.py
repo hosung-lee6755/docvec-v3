@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, Enum as SQLEnum, ForeignKey, Integer, Text
+from sqlalchemy import JSON, Boolean, DateTime, Enum as SQLEnum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -22,10 +22,36 @@ class WorkflowRun(Base):
         UUID(as_uuid=True), ForeignKey("collections.id"), nullable=True
     )
     status: Mapped[str] = mapped_column(
-        SQLEnum("QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", name="workflow_run_status"),
+        SQLEnum(
+            "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED",
+            # The quality_check block's review gate — see 통합 설계서 §7.4.
+            "WAITING_REVIEW",
+            name="workflow_run_status",
+        ),
         default="QUEUED",
         index=True,
     )
+    # What started this run — drives IA/UI labeling (통합 설계서 §3.8 처리 이력).
+    trigger: Mapped[str] = mapped_column(
+        SQLEnum("UPLOAD", "MANUAL", "REPROCESS", "COLLECTION_REPROCESS", name="workflow_run_trigger"),
+        default="MANUAL",
+        server_default="MANUAL",
+    )
+    # Non-null only for a partial reprocess run: the block this run starts
+    # from, with everything upstream reused from the cache (§2.4/§8).
+    started_block_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_block_instances.id", ondelete="SET NULL"), nullable=True
+    )
+    parent_run_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    # Global dictionary_revisions version fixed at run start — dictionary
+    # blocks read entries as of this version, not "latest" (§5 재현성).
+    dictionary_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # {block_type: block_version, embedding_model, ...} — §16.2 처리 버전.
+    version_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Partial-reprocess impact preview, computed at request time — §4.10/§15.3.
+    impact: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -41,7 +67,13 @@ class WorkflowRunStep(Base):
         UUID(as_uuid=True), ForeignKey("workflow_block_instances.id")
     )
     status: Mapped[str] = mapped_column(
-        SQLEnum("PENDING", "RUNNING", "COMPLETED", "FAILED", name="workflow_run_step_status"),
+        SQLEnum(
+            "PENDING", "RUNNING", "COMPLETED", "FAILED",
+            # A branch's untaken path, or a step served from cache without
+            # actually running — see 통합 설계서 §4.1/§2.4.
+            "SKIPPED",
+            name="workflow_run_step_status",
+        ),
         default="PENDING",
         index=True,
     )
@@ -51,6 +83,18 @@ class WorkflowRunStep(Base):
     completed_incoming_edges: Mapped[int] = mapped_column(Integer, default=0)
     input: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     output: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    input_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    output_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # MinIO artifacts-bucket key holding this step's large output payload
+    # (structure tree, cleaned text, chunk list, ...) — DB keeps only a
+    # summary in `output`. See §2.3.
+    artifact_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    cached: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # One of the codes in §6 (FILE_UNSUPPORTED, OCR_FAILED, ...); null on
+    # success or when the failure predates this error-code scheme.
+    error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

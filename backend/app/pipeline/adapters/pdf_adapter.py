@@ -146,6 +146,24 @@ def _text_block_bbox(page) -> tuple[float, float, float, float] | None:
     )
 
 
+def _text_excluding_tables(page, table_bboxes: list):
+    """pdfplumber's `extract_text()` walks every character on the page by
+    position — it has no notion of the ruled/bordered tables `find_tables()`
+    detects, so a table's cell text is picked up twice: once here as plain
+    positional text, once more in the dedicated `[표 N]` block built from
+    `table.extract()`. Left unfiltered, that duplicate positional text (e.g.
+    "1 김민준 개발팀", no longer pipe-delimited) reads as ordinary prose to
+    downstream structure analysis, and digit-led rows can even misclassify as
+    phantom headings. Cropping each table's bbox out before extraction keeps
+    table content sourced from exactly one place."""
+    for bbox in table_bboxes:
+        try:
+            page = page.outside_bbox(bbox)
+        except Exception:
+            continue
+    return page.extract_text() or ""
+
+
 def _image_area_ratio(page) -> float:
     page_area = page.width * page.height
     if page_area <= 0:
@@ -203,7 +221,38 @@ class PDFAdapter(BaseAdapter):
         try:
             with pdfplumber.open(file_path) as pdf:
                 for page_num, page in enumerate(pdf.pages, 1):
-                    text = page.extract_text() or ""
+                    # Explicit-grid table detection (engine_design.md §11.3):
+                    # pdfplumber's line-intersection based find_tables() covers the
+                    # ruled/bordered table case; implicit (line-less) alignment
+                    # detection is not attempted in this pass. Run this before
+                    # native text extraction so table regions can be excluded
+                    # from it (see _text_excluding_tables).
+                    table_candidates: list[RawTableCandidate] = []
+                    try:
+                        found_tables = _dedupe_tables(page.find_tables(), page.width * page.height)
+                    except Exception as table_exc:
+                        found_tables = []
+                        warnings.append(f"page {page_num} table detection failed: {table_exc}")
+                    for table in found_tables:
+                        try:
+                            rows = table.extract()
+                        except Exception:
+                            continue
+                        cleaned_rows = [
+                            [(cell or "").strip() for cell in row]
+                            for row in rows
+                            if any((cell or "").strip() for cell in row)
+                        ]
+                        if cleaned_rows:
+                            table_candidates.append(
+                                RawTableCandidate(
+                                    page_number=page_num,
+                                    rows=cleaned_rows,
+                                    bbox=table.bbox,
+                                )
+                            )
+
+                    text = _text_excluding_tables(page, [t.bbox for t in table_candidates])
                     block_type = "paragraph"
                     coverage = _text_coverage(text, page.width, page.height)
                     image_ratio = _image_area_ratio(page)
@@ -254,35 +303,6 @@ class PDFAdapter(BaseAdapter):
                                 block_type=block_type,
                             )
                         )
-
-                    # Explicit-grid table detection (engine_design.md §11.3):
-                    # pdfplumber's line-intersection based find_tables() covers the
-                    # ruled/bordered table case; implicit (line-less) alignment
-                    # detection is not attempted in this pass.
-                    table_candidates: list[RawTableCandidate] = []
-                    try:
-                        found_tables = _dedupe_tables(page.find_tables(), page.width * page.height)
-                    except Exception as table_exc:
-                        found_tables = []
-                        warnings.append(f"page {page_num} table detection failed: {table_exc}")
-                    for table in found_tables:
-                        try:
-                            rows = table.extract()
-                        except Exception:
-                            continue
-                        cleaned_rows = [
-                            [(cell or "").strip() for cell in row]
-                            for row in rows
-                            if any((cell or "").strip() for cell in row)
-                        ]
-                        if cleaned_rows:
-                            table_candidates.append(
-                                RawTableCandidate(
-                                    page_number=page_num,
-                                    rows=cleaned_rows,
-                                    bbox=table.bbox,
-                                )
-                            )
 
                     for i, table in enumerate(table_candidates):
                         table_text = "\n".join(" | ".join(row) for row in table.rows)

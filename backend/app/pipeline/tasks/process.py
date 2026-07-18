@@ -24,7 +24,7 @@ def _chunk_text(
     chunk back to a source page via _page_number_for_offset.
 
     Prefers cutting at a paragraph boundary ("\n\n", inserted between blocks by
-    parse_document — see _build_page_map) near the target size, so a [표 N] table
+    text_extract block — see _build_page_map) near the target size, so a [표 N] table
     block or a paragraph isn't split mid-way. Falls back to a hard character cut
     when no boundary is found within the lookback window.
     """
@@ -112,7 +112,7 @@ def _chunk_text_semantic(
 
 def _build_page_map(pages) -> list[list[int]]:
     """Builds [[end_offset, page_number], ...] pairs matching the exact character
-    offsets that `"\n\n".join(...)` (see parse_document) produces, so a chunk's
+    offsets that `"\n\n".join(...)` (see the text_extract block) produces, so a chunk's
     start_offset into parsed_text can be mapped back to a source page number via
     bisect. One entry per page transition, in ascending end_offset order."""
     blocks = [
@@ -480,154 +480,6 @@ def _repaginate_hwp_like(document_id: str, doc, parsed) -> None:
 
     parsed.pages = [pages_by_number[n] for n in sorted(pages_by_number)]
     parsed.page_count = len(parsed.pages)
-
-
-@celery_app.task(name="tasks.parse_document", queue="high", bind=True, max_retries=3)
-def parse_document(self, document_id: str) -> dict:
-    from app.db.models.document import Document
-    from app.db.session import get_sync_db
-    from app.pipeline.adapters import UnsupportedFileTypeError, get_adapter
-    from app.pipeline.job_tracker import complete_job, fail_job, start_job
-    from app.services.storage import storage_service
-
-    db = get_sync_db()
-    current_job = None
-    try:
-        doc = db.get(Document, document_id)
-        if doc is None:
-            return {"document_id": document_id, "status": "NOT_FOUND"}
-
-        current_job = start_job(db, document_id, "PARSE")
-        doc.status = "PARSING"
-        doc.updated_at = datetime.utcnow()
-        db.commit()
-
-        raw_bytes = storage_service.download_file(
-            settings.minio_bucket_originals, doc.minio_key
-        )
-
-        with tempfile.NamedTemporaryFile(
-            suffix=Path(doc.filename).suffix, delete=False
-        ) as tmp:
-            tmp.write(raw_bytes)
-            tmp_path = Path(tmp.name)
-
-        try:
-            adapter = get_adapter(tmp_path, doc.mime_type or "")
-            vision_options = _resolve_vision_credentials(db, doc)
-            parsed = adapter.extract(tmp_path, vision_options)
-        finally:
-            tmp_path.unlink(missing_ok=True)
-
-        if parsed.format_id in ("hwp", "hwpx"):
-            try:
-                _repaginate_hwp_like(document_id, doc, parsed)
-            except Exception:
-                logger.exception(
-                    "HWP/HWPX repagination failed; citations keep page_number=1",
-                    extra={"document_id": document_id},
-                )
-
-        # Must run before full_text/_build_page_map below: appends "[그림 N]"
-        # text blocks into parsed.pages so figure content gets chunked/embedded.
-        try:
-            image_records = _recognize_document_images(document_id, parsed, vision_options)
-        except Exception:
-            logger.exception(
-                "figure recognition failed; continuing without images",
-                extra={"document_id": document_id},
-            )
-            image_records = []
-
-        full_text = "\n\n".join(
-            block.text
-            for page in parsed.pages
-            for block in page.text_blocks
-            if block.text.strip()
-        )
-        table_count = sum(len(page.table_candidates) for page in parsed.pages)
-        complete_job(
-            db,
-            current_job,
-            f"텍스트 {len(full_text):,}자, 표 {table_count}개, 그림 {len(image_records)}개 추출"
-            f" ({len(parsed.pages)}페이지)",
-        )
-
-        doc.parsed_text = full_text
-        doc.page_map = _build_page_map(parsed.pages)
-        doc.ocr_used = bool(parsed.metadata.get("ocr_used", False))
-        doc.tables = [
-            {"page_number": page.page_number, "rows": table.rows}
-            for page in parsed.pages
-            for table in page.table_candidates
-        ] or None
-        doc.images = image_records or None
-        doc.status = "REVIEW_PENDING"
-        doc.updated_at = datetime.utcnow()
-
-        from app.db.models.document_revision import DocumentTextRevision
-
-        db.add(
-            DocumentTextRevision(
-                document_id=document_id, source="PARSE", parsed_text=full_text
-            )
-        )
-        db.commit()
-
-        return {"document_id": document_id, "status": "REVIEW_PENDING", "chars": len(full_text)}
-
-    except UnsupportedFileTypeError as exc:
-        # Permanently unsupported — retrying produces the identical failure every
-        # time, so fail immediately instead of burning 3 retries / ~90s.
-        logger.warning(
-            "parse_document: unsupported file type",
-            extra={"document_id": document_id, "suffix": exc.suffix, "mime_type": exc.mime_type},
-        )
-        db.rollback()
-        try:
-            if current_job is not None:
-                fail_job(db, current_job, str(exc))
-            doc = db.get(Document, document_id)
-            if doc:
-                doc.status = "FAILED"
-                doc.error_message = str(exc)[:500]
-                doc.updated_at = datetime.utcnow()
-                db.commit()
-        except Exception:
-            logger.exception(
-                "parse_document: failed to record unsupported-file failure state",
-                extra={"document_id": document_id},
-            )
-        # Must raise, not return — this task runs inside a celery chain() with
-        # continue_processing chained after it (see pipeline.py). A normal return
-        # here would make the chain treat parse_document as "succeeded" and still
-        # invoke continue_processing, which would re-chunk the (empty) parsed_text
-        # and silently flip the document back to INDEXED, clobbering this FAILED state.
-        raise
-
-    except Exception as exc:
-        logger.exception(
-            "parse_document failed",
-            extra={"document_id": document_id, "retries": self.request.retries},
-        )
-        db.rollback()
-        try:
-            if current_job is not None:
-                fail_job(db, current_job, str(exc))
-            doc = db.get(Document, document_id)
-            if doc:
-                doc.status = "FAILED"
-                doc.error_message = str(exc)[:500]
-                doc.updated_at = datetime.utcnow()
-                db.commit()
-        except Exception:
-            logger.exception(
-                "parse_document: failed to record failure state",
-                extra={"document_id": document_id},
-            )
-        raise self.retry(exc=exc, countdown=30)
-    finally:
-        db.close()
 
 
 @celery_app.task(name="tasks.continue_processing", queue="high", bind=True, max_retries=3)

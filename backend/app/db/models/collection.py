@@ -62,6 +62,14 @@ class Collection(Base):
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True
     )
     restrict_to_members: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The preprocessing workflow run automatically against every document
+    # uploaded into this collection. Null means "use the system default
+    # workflow" (seeded, always ACTIVE — see workflow_service). Null version
+    # means "always the latest published version at run time".
+    default_workflow_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_definitions.id", ondelete="SET NULL"), nullable=True
+    )
+    default_workflow_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

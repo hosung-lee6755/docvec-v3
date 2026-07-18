@@ -12,13 +12,24 @@ class WorkflowDefinition(Base):
     __tablename__ = "workflow_definitions"
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    project_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True)
+    # Nullable: a system-owned workflow (e.g. the seeded 표준 전처리 워크플로우,
+    # 통합 설계서 §13 Task 3) belongs to no single project.
+    project_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), index=True, nullable=True
+    )
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         SQLEnum("DRAFT", "ACTIVE", "INACTIVE", name="workflow_status"),
         default="DRAFT",
         index=True,
+    )
+    # PREPROCESS workflows replace the fixed document pipeline (§7.3 그래프
+    # 검증 확장); ANALYSIS workflows are the pre-existing user-defined kind.
+    kind: Mapped[str] = mapped_column(
+        SQLEnum("PREPROCESS", "ANALYSIS", name="workflow_definition_kind"),
+        default="ANALYSIS",
+        server_default="ANALYSIS",
     )
     created_by: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

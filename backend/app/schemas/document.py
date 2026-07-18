@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class DocumentUploadResponse(BaseModel):
@@ -40,7 +40,26 @@ class DocumentProceedRequest(BaseModel):
 
 
 class DocumentReprocessRequest(BaseModel):
-    edited_text: str = Field(..., max_length=200_000)
+    # 레거시 경로 — 기존 고정 파이프라인(continue_processing)으로 텍스트를
+    # 통째로 교체해 재실행. start_block_type/start_block_instance_id와는
+    # 상호배타.
+    edited_text: str | None = Field(None, max_length=200_000)
+    # 신규 경로 — 통합 설계서 §8: 이 블록부터 하류만 다시 실행하고 상류는
+    # 이전 실행 결과를 그대로 재사용. 타입당 블록이 여럿인 커스텀 워크플로우는
+    # start_block_instance_id로 모호함을 없앤다.
+    start_block_type: str | None = Field(None, max_length=50)
+    start_block_instance_id: UUID | None = None
+    reason: str | None = Field(None, max_length=500)
+
+    @model_validator(mode="after")
+    def _check_exclusive_mode(self) -> "DocumentReprocessRequest":
+        has_legacy = self.edited_text is not None
+        has_partial = self.start_block_type is not None or self.start_block_instance_id is not None
+        if has_legacy and has_partial:
+            raise ValueError("edited_text와 start_block_type/start_block_instance_id는 함께 지정할 수 없습니다.")
+        if not has_legacy and not has_partial:
+            raise ValueError("edited_text 또는 start_block_type/start_block_instance_id 중 하나를 지정해야 합니다.")
+        return self
 
 
 class DocumentListResponse(BaseModel):

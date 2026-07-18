@@ -27,7 +27,6 @@ celery_app.conf.timezone = "UTC"
 celery_app.conf.enable_utc = True
 
 celery_app.conf.include = [
-    "app.pipeline.tasks.ingest",
     "app.pipeline.tasks.process",
     "app.pipeline.tasks.chat",
     "app.pipeline.tasks.summary",
@@ -46,6 +45,5 @@ celery_app.conf.task_queues = (
 )
 
 celery_app.conf.task_routes = {
-    "tasks.ingest_document": {"queue": "high"},
     "tasks.process_document": {"queue": "high"},
 }

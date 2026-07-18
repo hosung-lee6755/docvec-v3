@@ -1,5 +1,5 @@
 import io
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -21,7 +21,7 @@ from app.schemas.dictionary import (
     DictionaryEntryUpdate,
     DictionaryImportResult,
 )
-from app.services.dictionary_service import refresh_dictionary_cache
+from app.services.dictionary_service import bump_revision, refresh_dictionary_cache
 
 router = APIRouter()
 
@@ -192,7 +192,9 @@ async def create_dictionary_entry(
     current_user: User = Depends(get_current_user),
 ):
     require_admin(current_user)
+    entry_id = str(uuid4())
     entry = DictionaryEntry(
+        id=entry_id,
         entry_type=data.entry_type,
         term=data.term,
         match_type=data.match_type,
@@ -213,6 +215,7 @@ async def create_dictionary_entry(
         ],
     )
     db.add(entry)
+    await bump_revision(db, entry_id, "CREATE", str(current_user.id))
     try:
         await db.commit()
     except Exception:
@@ -220,7 +223,16 @@ async def create_dictionary_entry(
         raise HTTPException(
             status_code=409, detail="해당 유형/용어의 사전 항목이 이미 존재합니다"
         )
-    await db.refresh(entry)
+    # db.refresh() doesn't reload relationships by default — expire_on_commit
+    # invalidates `variants` on commit, and a bare refresh() leaves it expired,
+    # so _serialize()'s access below would trigger an async-unsafe lazy load
+    # (MissingGreenlet). Re-fetch with selectinload instead, same idiom as
+    # list_dictionary_entries/update_dictionary_entry's initial query.
+    entry = await db.scalar(
+        select(DictionaryEntry)
+        .where(DictionaryEntry.id == entry_id)
+        .options(selectinload(DictionaryEntry.variants))
+    )
     await refresh_dictionary_cache(db)
     return _serialize(entry)
 
@@ -265,6 +277,8 @@ async def update_dictionary_entry(
     if data.variants is not None:
         _apply_variants(entry, data.variants)
 
+    await bump_revision(db, str(entry.id), "UPDATE", str(current_user.id))
+    entry_id_str = str(entry.id)
     try:
         await db.commit()
     except Exception:
@@ -272,7 +286,13 @@ async def update_dictionary_entry(
         raise HTTPException(
             status_code=409, detail="해당 유형/용어의 사전 항목이 이미 존재합니다"
         )
-    await db.refresh(entry)
+    # Same MissingGreenlet pitfall as create_dictionary_entry — re-fetch with
+    # selectinload instead of refresh() to get `variants` back in a loaded state.
+    entry = await db.scalar(
+        select(DictionaryEntry)
+        .where(DictionaryEntry.id == entry_id_str)
+        .options(selectinload(DictionaryEntry.variants))
+    )
     await refresh_dictionary_cache(db)
     return _serialize(entry)
 
@@ -287,6 +307,10 @@ async def delete_dictionary_entry(
     entry = await db.scalar(select(DictionaryEntry).where(DictionaryEntry.id == str(entry_id)))
     if not entry:
         raise HTTPException(status_code=404, detail="사전 항목을 찾을 수 없습니다")
+    # Revision row must be inserted (FK still valid) before the entry is
+    # deleted — the FK's ondelete="SET NULL" then nullifies it automatically.
+    await bump_revision(db, str(entry.id), "DELETE", str(current_user.id))
+    await db.flush()
     await db.delete(entry)
     await db.commit()
     await refresh_dictionary_cache(db)
@@ -491,6 +515,8 @@ async def import_dictionary_entries(
             db.add(entry)
             created += 1
 
+    if created or updated:
+        await bump_revision(db, None, "IMPORT", str(current_user.id))
     await db.commit()
     await refresh_dictionary_cache(db)
     return DictionaryImportResult(

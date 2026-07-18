@@ -9,7 +9,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user
-from app.api.v1.permissions import check_project_access
+from app.api.v1.permissions import check_collection_access, check_document_access, check_project_access
+from app.db.models.document import Document
 from app.db.models.user import User
 from app.db.models.workflow import (
     WorkflowBlockInstance,
@@ -108,9 +109,43 @@ async def _get_version_or_404(db: AsyncSession, workflow_id: UUID, version_id: U
     return version
 
 
+async def _check_run_access(
+    db: AsyncSession, workflow: WorkflowDefinition, run: WorkflowRun, user: User, min_role: str,
+) -> None:
+    """Project-scoped custom workflows check access via their project, same as
+    every other workflow-definition endpoint. System-seeded workflows (the
+    standard PREPROCESS pipeline every document upload runs) have
+    project_id=None — check_project_access would 404 with "Project not
+    found" for every one of their runs, which is the common case, not an
+    edge case. Fall back to the run's document/collection access instead."""
+    if workflow.project_id is not None:
+        await check_project_access(db, workflow.project_id, user, min_role=min_role)
+        return
+    if run.document_id:
+        doc = await db.get(Document, run.document_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        await check_document_access(db, doc, user, min_role=min_role)
+        return
+    if run.collection_id:
+        await check_collection_access(db, run.collection_id, user, min_role=min_role)
+        return
+    raise HTTPException(status_code=403, detail="Access denied")
+
+
 @router.get("/block-types")
 async def list_block_types(current_user: User = Depends(get_current_user)):
-    return {"items": list(BLOCK_REGISTRY.keys())}
+    items = []
+    for block_type, block_cls in BLOCK_REGISTRY.items():
+        block = block_cls()
+        schema = block.config_schema
+        items.append({
+            "block_type": block_type,
+            "block_version": block.block_version,
+            "category": block.category,
+            "config_schema": schema.model_json_schema() if schema is not None else {},
+        })
+    return {"items": items}
 
 
 @router.post("", response_model=WorkflowResponse)
@@ -471,6 +506,10 @@ async def run_workflow(
                 detail="컬렉션에 파싱 완료된 문서가 없습니다",
             )
 
+    from app.services.dictionary_service import current_dictionary_version
+
+    dictionary_version = await current_dictionary_version(db)
+
     runs = []
     for document_id in target_document_ids:
         run = WorkflowRun(
@@ -478,6 +517,7 @@ async def run_workflow(
             document_id=document_id,
             collection_id=data.collection_id,
             status="QUEUED",
+            dictionary_version=dictionary_version,
         )
         db.add(run)
         runs.append(run)
@@ -500,7 +540,10 @@ async def run_workflow(
 
     for run in runs:
         for block in entry_blocks:
-            run_workflow_step.delay(str(run.id), str(block.id))
+            timeout_seconds = (block.config or {}).get("timeoutSeconds", 300)
+            run_workflow_step.apply_async(
+                args=[str(run.id), str(block.id)], time_limit=timeout_seconds
+            )
 
     return {
         "items": [RunResponse.model_validate(r) for r in runs],
@@ -561,7 +604,7 @@ async def delete_run(
         raise HTTPException(status_code=404, detail="Run not found")
     version = await db.get(WorkflowVersion, run.version_id)
     workflow = await db.get(WorkflowDefinition, version.workflow_id)
-    await check_project_access(db, workflow.project_id, current_user, min_role="editor")
+    await _check_run_access(db, workflow, run, current_user, min_role="editor")
 
     if run.status in ("QUEUED", "RUNNING"):
         raise HTTPException(status_code=409, detail="실행 중인 기록은 삭제할 수 없습니다")
@@ -570,6 +613,64 @@ async def delete_run(
     await db.delete(run)
     await db.commit()
     return {"deleted": True}
+
+
+@router.post("/runs/{run_id}/resume")
+async def resume_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Resumes a run paused at a review gate (설계서 §7.4, case a/b — 승인 /
+    수정 후 승인). Validation happens here; the actual DAG-walking runs in the
+    Celery task `resume_workflow_run` against the sync session executor code
+    already uses."""
+    run = await db.get(WorkflowRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    version = await db.get(WorkflowVersion, run.version_id)
+    workflow = await db.get(WorkflowDefinition, version.workflow_id)
+    await _check_run_access(db, workflow, run, current_user, min_role="editor")
+
+    if run.status != "WAITING_REVIEW":
+        raise HTTPException(status_code=409, detail="검토 대기 상태가 아닙니다")
+
+    from app.pipeline.tasks.workflow import resume_workflow_run
+
+    resume_workflow_run.delay(str(run_id))
+    return {"status": "RESUME_QUEUED"}
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Rejects a run at a review gate (설계서 §7.4, case c — 반려). The run is
+    marked CANCELLED and its target document FAILED so the reason is visible
+    on the document detail screen."""
+    run = await db.get(WorkflowRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    version = await db.get(WorkflowVersion, run.version_id)
+    workflow = await db.get(WorkflowDefinition, version.workflow_id)
+    await _check_run_access(db, workflow, run, current_user, min_role="editor")
+
+    if run.status not in ("WAITING_REVIEW", "QUEUED", "RUNNING"):
+        raise HTTPException(status_code=409, detail="취소할 수 없는 상태입니다")
+
+    run.status = "CANCELLED"
+    run.completed_at = datetime.utcnow()
+    if run.document_id:
+        from app.db.models.document import Document
+
+        doc = await db.get(Document, run.document_id)
+        if doc is not None:
+            doc.status = "FAILED"
+            doc.error_message = "사용자가 검토를 반려하여 처리가 취소되었습니다"
+    await db.commit()
+    return {"status": "CANCELLED"}
 
 
 @router.get("/runs/{run_id}/export")
@@ -585,7 +686,7 @@ async def export_run(
         raise HTTPException(status_code=404, detail="Run not found")
     version = await db.get(WorkflowVersion, run.version_id)
     workflow = await db.get(WorkflowDefinition, version.workflow_id)
-    await check_project_access(db, workflow.project_id, current_user, min_role="viewer")
+    await _check_run_access(db, workflow, run, current_user, min_role="viewer")
 
     steps = (
         await db.scalars(select(WorkflowRunStep).where(WorkflowRunStep.run_id == run_id))
@@ -647,7 +748,7 @@ async def get_run(
         raise HTTPException(status_code=404, detail="Run not found")
     version = await db.get(WorkflowVersion, run.version_id)
     workflow = await db.get(WorkflowDefinition, version.workflow_id)
-    await check_project_access(db, workflow.project_id, current_user, min_role="viewer")
+    await _check_run_access(db, workflow, run, current_user, min_role="viewer")
 
     steps = (
         await db.scalars(select(WorkflowRunStep).where(WorkflowRunStep.run_id == run_id))

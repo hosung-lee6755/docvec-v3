@@ -8,6 +8,8 @@ working regardless of what else a block adds.
 """
 import re
 
+from pydantic import BaseModel
+
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
 
 # Same local-model budget rationale as tasks/summary.py.
@@ -16,6 +18,35 @@ _LLM_MODEL_KEY = "qwen2.5-3b"
 _MAX_HAN_RATIO = 0.2
 
 _DEFAULT_CATEGORIES = ["보고서", "계약서", "공문", "매뉴얼", "기타"]
+
+
+class PreprocessConfig(BaseModel):
+    remove_urls: bool = False
+    remove_emails: bool = False
+    remove_special_chars: bool = False
+    collapse_whitespace: bool = True
+
+
+class ClassifyConfig(BaseModel):
+    categories: list[str] | None = None
+
+
+class ExtractEntitiesConfig(BaseModel):
+    max_entities: int = 15
+    entity_types: list[str] | None = None
+
+
+class ExtractKeywordsConfig(BaseModel):
+    max_keywords: int = 10
+
+
+class SummarizeConfig(BaseModel):
+    format: str = "paragraph"
+    prompt: str | None = None
+
+
+class ValidateConfig(BaseModel):
+    min_text_length: int = 10
 
 
 def _han_ratio(text: str) -> float:
@@ -72,6 +103,12 @@ class InputBlock(BaseBlock):
     def block_type(self) -> str:
         return "input"
 
+    @property
+    def category(self) -> str:
+        # Absorbed into the new 텍스트 추출 block in Phase 3 — kept as-is,
+        # unmodified behavior, until that block replaces it.
+        return "레거시"
+
     def run(self, context: BlockContext) -> BlockResult:
         from app.db.models.document import Document
         from app.db.session import get_sync_db
@@ -100,6 +137,16 @@ class PreprocessBlock(BaseBlock):
     @property
     def block_type(self) -> str:
         return "preprocess"
+
+    @property
+    def category(self) -> str:
+        # Replaced by the new 텍스트 정제 block in Phase 4 — kept as-is,
+        # unmodified behavior, until that block replaces it.
+        return "레거시"
+
+    @property
+    def config_schema(self) -> type[BaseModel] | None:
+        return PreprocessConfig
 
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
@@ -131,6 +178,14 @@ class ClassifyBlock(BaseBlock):
     def block_type(self) -> str:
         return "classify"
 
+    @property
+    def category(self) -> str:
+        return "분석"
+
+    @property
+    def config_schema(self) -> type[BaseModel] | None:
+        return ClassifyConfig
+
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
         categories = context.config.get("categories") or _DEFAULT_CATEGORIES
@@ -149,6 +204,14 @@ class ExtractEntitiesBlock(BaseBlock):
     @property
     def block_type(self) -> str:
         return "extract_entities"
+
+    @property
+    def category(self) -> str:
+        return "분석"
+
+    @property
+    def config_schema(self) -> type[BaseModel] | None:
+        return ExtractEntitiesConfig
 
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
@@ -170,6 +233,14 @@ class ExtractKeywordsBlock(BaseBlock):
     def block_type(self) -> str:
         return "extract_keywords"
 
+    @property
+    def category(self) -> str:
+        return "분석"
+
+    @property
+    def config_schema(self) -> type[BaseModel] | None:
+        return ExtractKeywordsConfig
+
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
         max_keywords = max(1, min(int(context.config.get("max_keywords", 10)), 30))
@@ -188,6 +259,14 @@ class SummarizeBlock(BaseBlock):
     @property
     def block_type(self) -> str:
         return "summarize"
+
+    @property
+    def category(self) -> str:
+        return "분석"
+
+    @property
+    def config_schema(self) -> type[BaseModel] | None:
+        return SummarizeConfig
 
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
@@ -225,6 +304,14 @@ class ValidateBlock(BaseBlock):
     @property
     def block_type(self) -> str:
         return "validate"
+
+    @property
+    def category(self) -> str:
+        return "분석"
+
+    @property
+    def config_schema(self) -> type[BaseModel] | None:
+        return ValidateConfig
 
     def run(self, context: BlockContext) -> BlockResult:
         upstream = next(iter(context.upstream_outputs.values()), {})

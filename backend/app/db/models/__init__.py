@@ -24,6 +24,14 @@ from app.db.models.workflow import (
     WorkflowEdge,
 )
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
+from app.db.models.document_node import DocumentNode
+from app.db.models.cleaning_rule import CleaningRule, CleaningChange
+from app.db.models.document_chunk import DocumentChunk
+from app.db.models.dictionary_application import DictionaryApplication
+from app.db.models.pii_detection import PiiDetection
+from app.db.models.quality_report import QualityReport
+from app.db.models.dictionary_revision import DictionaryRevision
+from app.db.models.block_execution_cache import BlockExecutionCache
 
 __all__ = [
     "User",
@@ -51,4 +59,13 @@ __all__ = [
     "WorkflowEdge",
     "WorkflowRun",
     "WorkflowRunStep",
+    "DocumentNode",
+    "CleaningRule",
+    "CleaningChange",
+    "DocumentChunk",
+    "DictionaryApplication",
+    "PiiDetection",
+    "QualityReport",
+    "DictionaryRevision",
+    "BlockExecutionCache",
 ]
