@@ -89,11 +89,11 @@ function ProjectSidebar({
                   style={{ flex: '1 1 auto', minWidth: 0 }}
                 />
                 <button type="button" onClick={(e) => { e.stopPropagation(); commitEdit() }}
-                  style={{ color: '#16a34a', flexShrink: 0 }} title="저장">
+                  className="krds-btn text xsmall icon-btn success" title="저장">
                   <Check size={14} />
                 </button>
                 <button type="button" onClick={(e) => { e.stopPropagation(); setEditingId(null) }}
-                  style={{ color: '#64748b', flexShrink: 0 }} title="취소">
+                  className="krds-btn text xsmall icon-btn" title="취소">
                   <X size={14} />
                 </button>
               </>
@@ -101,11 +101,11 @@ function ProjectSidebar({
               <>
                 <span style={{ flex: '1 1 auto', fontSize: 12, color: '#dc2626' }}>삭제할까요?</span>
                 <button type="button" onClick={(e) => { e.stopPropagation(); handleDelete(p.id) }}
-                  style={{ color: '#dc2626', flexShrink: 0 }} title="삭제 확인">
+                  className="krds-btn text xsmall icon-btn danger" title="삭제 확인">
                   <Check size={14} />
                 </button>
                 <button type="button" onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null) }}
-                  style={{ color: '#64748b', flexShrink: 0 }} title="취소">
+                  className="krds-btn text xsmall icon-btn" title="취소">
                   <X size={14} />
                 </button>
               </>
@@ -118,11 +118,11 @@ function ProjectSidebar({
                 {p.is_owner && (
                   <>
                     <button type="button" onClick={(e) => { e.stopPropagation(); startEdit(p) }}
-                      style={{ color: '#94a3b8', flexShrink: 0 }} title="이름 변경">
+                      className="krds-btn text xsmall icon-btn" title="이름 변경">
                       <Pencil size={13} />
                     </button>
                     <button type="button" onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(p.id) }}
-                      style={{ color: '#94a3b8', flexShrink: 0 }} title="삭제">
+                      className="krds-btn text xsmall icon-btn" title="삭제">
                       <Trash2 size={13} />
                     </button>
                   </>
@@ -158,7 +158,7 @@ function NewProjectForm({ onCreated }: { onCreated: (id: string) => void }) {
 
   return (
     <div style={{ maxWidth: 480 }}>
-      <h1 style={{ fontSize: 20, fontWeight: 700, marginBottom: 'var(--space-2)' }}>새 프로젝트 만들기</h1>
+      <h1 style={{ fontSize: 18, fontWeight: 700, marginBottom: 'var(--space-2)' }}>새 프로젝트 만들기</h1>
       <p style={{ fontSize: 13, color: 'var(--color-text-muted)', marginBottom: 'var(--space-6)' }}>
         프로젝트를 만들면 그 안에 프로젝트만의 컬렉션·문서·검색·채팅 공간이 생기고, 초대된 멤버는
         이 공간에 자동으로 접근할 수 있습니다. 특정 컬렉션만 일부 멤버를 제외하고 싶을 때는

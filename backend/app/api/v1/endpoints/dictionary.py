@@ -9,8 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.deps import get_current_user, require_admin
+from app.db.models.dictionary_application import DictionaryApplication
 from app.db.models.dictionary_entry import DictionaryEntry
 from app.db.models.dictionary_entry_variant import DictionaryEntryVariant
+from app.db.models.dictionary_revision import DictionaryRevision
+from app.db.models.document import Document
 from app.db.models.user import User
 from app.db.session import get_db
 from app.schemas.dictionary import (
@@ -19,9 +22,17 @@ from app.schemas.dictionary import (
     DictionaryEntryResponse,
     DictionaryEntryType,
     DictionaryEntryUpdate,
+    DictionaryImpactDocument,
+    DictionaryImpactResponse,
     DictionaryImportResult,
+    DictionaryRevisionItem,
+    DictionaryRevisionsResponse,
 )
 from app.services.dictionary_service import bump_revision, refresh_dictionary_cache
+
+# 버전 이력 탭이 한 번에 보여줄 최대 리비전 수 — 사전 크기는 작지만 리비전은
+# 시간이 지날수록 누적되므로 무제한 조회를 막는다.
+_MAX_REVISIONS = 200
 
 router = APIRouter()
 
@@ -314,6 +325,76 @@ async def delete_dictionary_entry(
     await db.delete(entry)
     await db.commit()
     await refresh_dictionary_cache(db)
+
+
+@router.get("/admin/dictionary/entries/{entry_id}/impact", response_model=DictionaryImpactResponse)
+async def get_dictionary_entry_impact(
+    entry_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """사전 항목 저장 시 "영향 문서 N건" 다이얼로그가 쓰는 미리보기 —
+    이 항목이 (취소되지 않은 채) 적용된 문서 목록을 반환한다. 통합 설계서 §8."""
+    require_admin(current_user)
+    rows = (
+        await db.execute(
+            select(Document.id, Document.original_filename)
+            .join(DictionaryApplication, DictionaryApplication.document_id == Document.id)
+            .where(
+                DictionaryApplication.entry_id == entry_id,
+                DictionaryApplication.reverted.is_(False),
+            )
+            .distinct()
+        )
+    ).all()
+    documents = [DictionaryImpactDocument(id=row.id, filename=row.original_filename) for row in rows]
+    return DictionaryImpactResponse(
+        entry_id=entry_id, affected_document_count=len(documents), documents=documents,
+    )
+
+
+@router.get("/admin/dictionary/revisions", response_model=DictionaryRevisionsResponse)
+async def list_dictionary_revisions(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """사전 화면의 "버전 이력" 탭 — 누가/언제/무엇을(add/edit/delete/import) 했는지만
+    보여준다. DictionaryRevision은 필드 단위 이전/이후 값(diff)을 저장하지 않으므로
+    값 변경 내역까지는 표시하지 않는 축소 스코프(통합 설계서 §8)."""
+    require_admin(current_user)
+    rows = (
+        await db.execute(
+            select(
+                DictionaryRevision.version,
+                DictionaryRevision.changed_entry_id,
+                DictionaryEntry.term,
+                DictionaryEntry.entry_type,
+                DictionaryRevision.change_type,
+                DictionaryRevision.created_by,
+                User.username,
+                DictionaryRevision.created_at,
+            )
+            .outerjoin(DictionaryEntry, DictionaryEntry.id == DictionaryRevision.changed_entry_id)
+            .outerjoin(User, User.id == DictionaryRevision.created_by)
+            .order_by(DictionaryRevision.version.desc())
+            .limit(_MAX_REVISIONS)
+        )
+    ).all()
+    return DictionaryRevisionsResponse(
+        revisions=[
+            DictionaryRevisionItem(
+                version=row.version,
+                changed_entry_id=row.changed_entry_id,
+                entry_term=row.term,
+                entry_type=row.entry_type,
+                change_type=row.change_type,
+                created_by=row.created_by,
+                created_by_name=row.username,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+    )
 
 
 def _bool_to_yn(value: bool) -> str:

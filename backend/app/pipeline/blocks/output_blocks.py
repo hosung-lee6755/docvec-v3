@@ -61,6 +61,14 @@ class OutputBlock(BaseBlock):
         return "분석"
 
     @property
+    def block_version(self) -> str:
+        # Bumped: upstream-merge fix below changes this block's output for any
+        # graph where `output` has more than one incoming edge — must
+        # invalidate BlockExecutionCache so already-cached (deficient) runs
+        # actually re-execute instead of replaying the old result.
+        return "1.1.0"
+
+    @property
     def config_schema(self) -> type[BaseModel] | None:
         return OutputConfig
 
@@ -68,7 +76,25 @@ class OutputBlock(BaseBlock):
         from app.db.models.document import Document
         from app.db.session import get_sync_db
 
-        upstream = next(iter(context.upstream_outputs.values()), {})
+        # A graph can feed `output` from more than one branch (e.g. a direct
+        # input->output edge alongside the real classify/extract/summarize
+        # chain) — taking just one arbitrary upstream silently dropped
+        # whichever branch didn't win, so results varied by document even on
+        # the same workflow (사용자 확인 2026-07-22, 요약/태그가 문서마다
+        # 들쭉날쭉하던 원인). Merge every branch instead: list-valued keys
+        # (keywords/entities/...) concatenate and dedupe, scalar keys keep the
+        # first non-empty value found.
+        upstream: dict = {}
+        for branch_output in context.upstream_outputs.values():
+            for key, value in branch_output.items():
+                if isinstance(value, list):
+                    existing = upstream.get(key)
+                    if isinstance(existing, list):
+                        upstream[key] = existing + [v for v in value if v not in existing]
+                    else:
+                        upstream[key] = list(value)
+                elif not upstream.get(key):
+                    upstream[key] = value
         result = {k: v for k, v in upstream.items() if k != "text"}
         saved_fields: list[str] = []
         # Before/after per modified document field, so the run history screen

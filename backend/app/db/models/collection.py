@@ -70,6 +70,14 @@ class Collection(Base):
         UUID(as_uuid=True), ForeignKey("workflow_definitions.id", ondelete="SET NULL"), nullable=True
     )
     default_workflow_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The ANALYSIS workflow run automatically against a document right after its
+    # PREPROCESS run completes (RAG 저장 성공 직후) — see _maybe_trigger_analysis
+    # in tasks/workflow.py. Null means "no automatic analysis" (documents can
+    # still be analyzed manually via a workflow's 실행 button).
+    default_analysis_workflow_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_definitions.id", ondelete="SET NULL"), nullable=True
+    )
+    default_analysis_workflow_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

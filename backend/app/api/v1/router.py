@@ -1,11 +1,12 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import admin, auth, chat, collections, dictionary, documents, golden_queries, projects, search, stats, users, workflows
+from app.api.v1.endpoints import admin, auth, chat, cleaning_rules, collections, dictionary, documents, golden_queries, projects, search, stats, users, workflows
 
 api_router = APIRouter(prefix="/api/v1")
 
 api_router.include_router(admin.router, tags=["admin"])
 api_router.include_router(dictionary.router, tags=["admin"])
+api_router.include_router(cleaning_rules.router, tags=["admin"])
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])

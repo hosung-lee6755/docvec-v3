@@ -8,8 +8,10 @@ import {
   useDeleteVersion,
   usePublishVersion,
   useSaveWorkflowGraph,
+  useWorkflow,
   useWorkflowGraph,
   useWorkflowVersions,
+  type GraphValidationError,
   type WorkflowBlock,
   type WorkflowEdge as WorkflowEdgeType,
 } from '../hooks/useWorkflows'
@@ -22,6 +24,7 @@ import { getBlockMeta } from '../lib/workflowBlocks'
 export default function WorkflowEditorPage() {
   const navigate = useNavigate()
   const { id: workflowId, projectId } = useParams<{ id: string; projectId?: string }>()
+  const { data: workflow } = useWorkflow(workflowId ?? null)
   const { data: versionsData } = useWorkflowVersions(workflowId ?? null)
   // User-picked version from the header select; null = auto-pick.
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
@@ -47,7 +50,7 @@ export default function WorkflowEditorPage() {
   const [edges, setEdges] = useState<WorkflowEdgeType[]>([])
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
-  const [validationErrors, setValidationErrors] = useState<string[]>([])
+  const [validationErrors, setValidationErrors] = useState<GraphValidationError[]>([])
 
   useEffect(() => {
     setBlocks(graph?.blocks ?? [])
@@ -152,9 +155,15 @@ export default function WorkflowEditorPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-3)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>워크플로우 편집</h2>
+          {workflow && (
+            <span className={`krds-badge small ${workflow.kind === 'PREPROCESS' ? 'bg-primary' : 'bg-secondary'}`}>
+              {workflow.kind === 'PREPROCESS' ? '전처리' : '분석'}
+            </span>
+          )}
+          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>{workflow?.name ?? '워크플로우 편집'}</h2>
           {editableVersion && (
             <select
               value={editableVersion.id}
@@ -191,17 +200,17 @@ export default function WorkflowEditorPage() {
                 onClick={() => setConfirmDeleteVersion(true)}
                 title="이 버전 삭제"
                 aria-label="이 버전 삭제"
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  width: 28, height: 28, borderRadius: 'var(--radius-sm)', border: 'none',
-                  background: 'transparent', color: '#94a3b8', cursor: 'pointer',
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.color = '#dc2626' }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8' }}
+                className="krds-btn text xsmall icon-btn danger"
               >
                 <Trash2 size={15} />
               </button>
             )
+          )}
+        </div>
+          {workflow?.description && (
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>
+              {workflow.description}
+            </p>
           )}
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
@@ -270,9 +279,9 @@ export default function WorkflowEditorPage() {
           border: '1px solid #fecaca', color: '#b91c1c',
           borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
         }}>
-          {validationErrors.map((err) => (
-            <div key={err} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-              <AlertTriangle size={14} style={{ flexShrink: 0 }} /> {err}
+          {validationErrors.map((err, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+              <AlertTriangle size={14} style={{ flexShrink: 0 }} /> {err.message}
             </div>
           ))}
         </div>
@@ -280,7 +289,7 @@ export default function WorkflowEditorPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr 280px', gap: 'var(--space-3)', flex: 1, minHeight: 500 }}>
         <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'auto', background: 'var(--color-surface)' }}>
-          <BlockPalette onAddBlock={handleAddBlock} />
+          <BlockPalette onAddBlock={handleAddBlock} workflowKind={workflow?.kind} />
         </div>
         <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
           <WorkflowCanvas
@@ -294,6 +303,7 @@ export default function WorkflowEditorPage() {
             onConnect={handleConnect}
             onDeleteBlock={handleDeleteBlock}
             onDeleteEdge={handleDeleteEdge}
+            invalidBlockIds={validationErrors.map((e) => e.block_id).filter((id): id is string => !!id)}
           />
         </div>
         <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'auto', background: 'var(--color-surface)' }}>
@@ -314,13 +324,8 @@ export default function WorkflowEditorPage() {
                     onClick={() => handleDeleteEdge(selectedEdge.id)}
                     title="연결 삭제"
                     aria-label="연결 삭제"
-                    style={{
-                      flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      width: 26, height: 26, borderRadius: 'var(--radius-sm)', border: 'none',
-                      background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.15)'; e.currentTarget.style.color = 'var(--color-danger)' }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-muted)' }}
+                    className="krds-btn text xsmall icon-btn danger"
+                    style={{ flexShrink: 0 }}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -342,6 +347,7 @@ export default function WorkflowEditorPage() {
           versionId={versionId}
           blocks={blocks}
           projectId={projectId}
+          workflowKind={workflow?.kind}
           onClose={() => setShowRunModal(false)}
         />
       )}

@@ -1,6 +1,8 @@
 """Coverage for the LLM-suggested tag accept/dismiss endpoints — a suggestion
 promoted via accept-suggestion must behave exactly like a manually-added tag
-(synced to Qdrant), while a dismissed suggestion must never touch Qdrant."""
+(synced to Qdrant), while a dismissed suggestion must never touch Qdrant.
+accept-suggestion deliberately leaves suggested_tags untouched (사용자 확인
+2026-07-20) — only dismiss actually removes an entry from the list."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -22,7 +24,7 @@ def _doc(**kwargs):
 
 
 @pytest.mark.asyncio
-async def test_accept_suggestion_moves_tag_and_syncs_qdrant():
+async def test_accept_suggestion_promotes_tag_and_syncs_qdrant():
     user = MagicMock(id=uuid4())
     doc = _doc(created_by=user.id, tags=["기존태그"], suggested_tags=["예산", "계약서"])
     db = AsyncMock()
@@ -34,7 +36,9 @@ async def test_accept_suggestion_moves_tag_and_syncs_qdrant():
         )
 
     assert doc.tags == ["기존태그", "예산"]
-    assert doc.suggested_tags == ["계약서"]
+    # suggested_tags stays as-is — accepting no longer drops the entry (사용자
+    # 확인 2026-07-20, "계속 유지하고 싶다"); the frontend renders it as already-added.
+    assert doc.suggested_tags == ["예산", "계약서"]
     db.commit.assert_awaited_once()
     mock_qdrant.set_payload_by_document.assert_called_once()
     assert result == {"tags": doc.tags, "suggested_tags": doc.suggested_tags}
@@ -53,22 +57,7 @@ async def test_accept_suggestion_dedupes_against_existing_tags():
         )
 
     assert doc.tags == ["예산"]
-    assert doc.suggested_tags is None
-
-
-@pytest.mark.asyncio
-async def test_accept_suggestion_clears_suggested_tags_to_none_when_emptied():
-    user = MagicMock(id=uuid4())
-    doc = _doc(created_by=user.id, tags=[], suggested_tags=["예산"])
-    db = AsyncMock()
-    db.scalar.return_value = doc
-
-    with patch("app.services.qdrant_service.qdrant_service"):
-        await accept_tag_suggestion(
-            doc.id, DocumentTagSuggestionRequest(tag="예산"), db=db, current_user=user
-        )
-
-    assert doc.suggested_tags is None
+    assert doc.suggested_tags == ["예산"]
 
 
 @pytest.mark.asyncio

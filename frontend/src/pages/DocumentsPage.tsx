@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import { Upload, Trash2, Loader2, ArrowUp, ArrowDown, X } from 'lucide-react'
 import { useDocuments, useUploadDocument, useUploadZip, useDeleteDocument, useBatchDeleteDocuments, type DocumentSortBy, type SortOrder, type BulkUploadResponse } from '../hooks/useDocuments'
 import { useCollections } from '../hooks/useCollections'
+import { useWorkflowVersions, useWorkflows } from '../hooks/useWorkflows'
 import { STATUS_BADGE_CLASSES, STATUS_LABELS } from '../lib/documentStatus'
 
 export default function DocumentsPage() {
@@ -13,6 +14,8 @@ export default function DocumentsPage() {
   const [searchParams] = useSearchParams()
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [uploadCollectionId, setUploadCollectionId] = useState('')
+  // '' = 컬렉션 기본 워크플로우 사용 — 업로드 다이얼로그의 워크플로우 오버라이드.
+  const [uploadWorkflowId, setUploadWorkflowId] = useState('')
   const [skipReview, setSkipReview] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [uploadProgress, setUploadProgress] = useState<{ name: string; status: 'pending' | 'success' | 'error'; error?: string }[]>([])
@@ -34,10 +37,19 @@ export default function DocumentsPage() {
   }, [filenameInput])
 
   // Deep-link support: ?collection=<id> (e.g. clicking a collection name in the
-  // collections list). Sync on change too, in case the page is already mounted.
+  // collections list). Always sync — including clearing back to '' when the
+  // param is absent — otherwise navigating from a collection-filtered link to
+  // the plain "문서" nav item leaves the previous filter stuck (component
+  // doesn't remount, only searchParams changes) and the list silently stays
+  // empty/filtered with no visible cause.
   useEffect(() => {
-    const fromUrl = searchParams.get('collection')
-    if (fromUrl) setFilterCollectionId(fromUrl)
+    setFilterCollectionId(searchParams.get('collection') ?? '')
+  }, [searchParams])
+
+  // Deep-link support: ?status=<status> (e.g. the "검토 대기" nav link) — same
+  // always-sync rationale as the collection filter above.
+  useEffect(() => {
+    setFilterStatus(searchParams.get('status') ?? '')
   }, [searchParams])
 
   useEffect(() => {
@@ -63,6 +75,17 @@ export default function DocumentsPage() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
   const { data: collectionsData } = useCollections(projectId)
+  const selectedUploadCollection = collectionsData?.items.find((c) => c.id === uploadCollectionId)
+  const { data: uploadProjectWorkflows } = useWorkflows(selectedUploadCollection?.project_id ?? null, 'PREPROCESS')
+  const { data: uploadWorkflowVersions } = useWorkflowVersions(uploadWorkflowId || null)
+  // 업로드 API는 workflow_version_id(구체적 버전)를 받으므로, 선택된 워크플로우의
+  // 최신 발행 버전으로 자동 해석한다 — 컬렉션 설정 화면과 달리 여기선 버전 고정
+  // UI까지는 두지 않는다(업로드 시점의 빠른 오버라이드가 목적).
+  const resolvedUploadWorkflowVersionId = uploadWorkflowId
+    ? [...(uploadWorkflowVersions?.items ?? [])]
+        .filter((v) => v.published_at)
+        .sort((a, b) => b.version_number - a.version_number)[0]?.id
+    : undefined
 
   const toggleSort = (column: DocumentSortBy) => {
     if (sortBy === column) {
@@ -101,6 +124,7 @@ export default function DocumentsPage() {
   const closeUploadModal = () => {
     setShowUploadModal(false)
     setUploadCollectionId('')
+    setUploadWorkflowId('')
     setSkipReview(false)
     setSelectedFiles([])
     setUploadProgress([])
@@ -125,6 +149,7 @@ export default function DocumentsPage() {
         file: zipFile,
         collection_id: uploadCollectionId,
         skip_review: true,
+        workflow_version_id: resolvedUploadWorkflowVersionId,
       })
       setZipResult(result)
     } catch (err) {
@@ -145,7 +170,7 @@ export default function DocumentsPage() {
     queued: '등록됨', duplicate: '중복', skipped: '건너뜀', failed: '실패',
   }
   const ZIP_STATUS_COLOR: Record<string, string> = {
-    queued: '#16a34a', duplicate: '#d97706', skipped: '#64748b', failed: '#dc2626',
+    queued: '#16a34a', duplicate: '#d97706', skipped: 'var(--color-text-muted)', failed: '#dc2626',
   }
 
   const handleUploadSubmit = async (e: React.FormEvent) => {
@@ -162,6 +187,7 @@ export default function DocumentsPage() {
           file: selectedFiles[i],
           collection_id: uploadCollectionId,
           skip_review: effectiveSkipReview,
+          workflow_version_id: resolvedUploadWorkflowVersionId,
         })
         successCount++
         setUploadProgress((prev) => prev.map((p, idx) => (idx === i ? { ...p, status: 'success' } : p)))
@@ -398,7 +424,7 @@ export default function DocumentsPage() {
                     ) : (
                       <button
                         onClick={() => setConfirmDeleteId(doc.id)}
-                        className="krds-btn small text"
+                        className="krds-btn text xsmall icon-btn danger"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -455,7 +481,7 @@ export default function DocumentsPage() {
                         <select
                           id="upload_collection"
                           value={uploadCollectionId}
-                          onChange={(e) => setUploadCollectionId(e.target.value)}
+                          onChange={(e) => { setUploadCollectionId(e.target.value); setUploadWorkflowId('') }}
                           className="krds-form-select"
                           style={{ width: '100%' }}
                           required
@@ -472,6 +498,28 @@ export default function DocumentsPage() {
                         )}
                       </div>
                     </div>
+
+                    {uploadCollectionId && (
+                      <div className="form-group">
+                        <div className="form-tit">
+                          <label htmlFor="upload_workflow">전처리 워크플로우</label>
+                        </div>
+                        <div className="form-conts">
+                          <select
+                            id="upload_workflow"
+                            value={uploadWorkflowId}
+                            onChange={(e) => setUploadWorkflowId(e.target.value)}
+                            className="krds-form-select"
+                            style={{ width: '100%' }}
+                          >
+                            <option value="">컬렉션 기본값 사용</option>
+                            {(uploadProjectWorkflows?.items ?? []).filter((wf) => !wf.is_system_default).map((wf) => (
+                              <option key={wf.id} value={wf.id}>{wf.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="form-group">
                       <div className="form-tit">
@@ -529,7 +577,7 @@ export default function DocumentsPage() {
                                     <button
                                       type="button"
                                       onClick={() => removeSelectedFile(i)}
-                                      className="krds-btn text xsmall"
+                                      className="krds-btn text xsmall icon-btn"
                                       style={{ flexShrink: 0 }}
                                     >
                                       <X size={12} />
@@ -598,7 +646,7 @@ export default function DocumentsPage() {
                         <select
                           id="upload_zip_collection"
                           value={uploadCollectionId}
-                          onChange={(e) => setUploadCollectionId(e.target.value)}
+                          onChange={(e) => { setUploadCollectionId(e.target.value); setUploadWorkflowId('') }}
                           className="krds-form-select"
                           style={{ width: '100%' }}
                           required
@@ -610,6 +658,28 @@ export default function DocumentsPage() {
                         </select>
                       </div>
                     </div>
+
+                    {uploadCollectionId && (
+                      <div className="form-group">
+                        <div className="form-tit">
+                          <label htmlFor="upload_zip_workflow">전처리 워크플로우</label>
+                        </div>
+                        <div className="form-conts">
+                          <select
+                            id="upload_zip_workflow"
+                            value={uploadWorkflowId}
+                            onChange={(e) => setUploadWorkflowId(e.target.value)}
+                            className="krds-form-select"
+                            style={{ width: '100%' }}
+                          >
+                            <option value="">컬렉션 기본값 사용</option>
+                            {(uploadProjectWorkflows?.items ?? []).filter((wf) => !wf.is_system_default).map((wf) => (
+                              <option key={wf.id} value={wf.id}>{wf.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="form-group">
                       <div className="form-tit">

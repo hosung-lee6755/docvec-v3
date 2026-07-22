@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, Trash2 } from 'lucide-react'
-import type { WorkflowBlock } from '../../hooks/useWorkflows'
+import { useBlockTypes, type WorkflowBlock } from '../../hooks/useWorkflows'
+import { useEmbeddingModels } from '../../hooks/useCollections'
+import { jsonSchemaToConfigFields } from '../../lib/blockConfigSchema'
 import { getBlockMeta, type ConfigField } from '../../lib/workflowBlocks'
 
 interface BlockPropertyPanelProps {
@@ -57,6 +59,7 @@ function ConfigFieldInput({
           type="number"
           className="krds-input small"
           value={value === undefined || value === null ? String(field.default ?? '') : String(value)}
+          placeholder={field.placeholder}
           min={field.min}
           max={field.max}
           onChange={(e) => onValueChange(e.target.value === '' ? undefined : Number(e.target.value))}
@@ -73,7 +76,7 @@ function ConfigFieldInput({
         <select
           className="krds-form-select small"
           value={value === undefined ? String(field.default ?? '') : String(value)}
-          onChange={(e) => onValueChange(e.target.value)}
+          onChange={(e) => onValueChange(e.target.value === '' ? undefined : e.target.value)}
         >
           {field.options?.map((opt) => (
             <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -138,11 +141,38 @@ function ConfigFieldInput({
 export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockPropertyPanelProps) {
   const [configText, setConfigText] = useState('{}')
   const [configError, setConfigError] = useState<string | null>(null)
+  const { data: blockTypes } = useBlockTypes()
+  const { data: embeddingModels } = useEmbeddingModels()
 
   useEffect(() => {
     setConfigText(JSON.stringify(block?.config ?? {}, null, 2))
     setConfigError(null)
   }, [block?.id, block?.config])
+
+  // 하드코딩된 configFields가 없는 블록(전처리 통합 작업으로 추가된 13종)은
+  // 백엔드 config_schema(JSON Schema)를 그 자리에서 ConfigField[]로 변환해
+  // 폼을 자동 생성한다 — 워크플로우 에디터 팔레트/폼 재편(통합 설계서 §5).
+  const schemaFields = useMemo(() => {
+    if (!block) return []
+    const info = blockTypes?.items.find((i) => i.block_type === block.block_type)
+    const fields = info ? jsonSchemaToConfigFields(info.config_schema, block.block_type) : []
+    // RAG 저장의 임베딩 모델은 컬렉션 생성 화면과 동일한 실제 사용 가능 모델
+    // 목록으로 골라야 한다 — 자유 입력을 허용하면 존재하지 않는 모델 키를 적어
+    // 실행 시점에야 실패하는 것을 막는다(컬렉션 설정 재편, 사용자 확인 2026-07-20).
+    if (block.block_type === 'rag_store') {
+      return fields.map((f) => f.key === 'embedding_model'
+        ? {
+          ...f,
+          type: 'select' as const,
+          options: [
+            { value: '', label: '컬렉션 기본값 사용' },
+            ...(embeddingModels?.items ?? []).map((m) => ({ value: m.key, label: m.label })),
+          ],
+        }
+        : f)
+    }
+    return fields
+  }, [block, blockTypes, embeddingModels])
 
   if (!block) {
     return (
@@ -154,7 +184,7 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
 
   const meta = getBlockMeta(block.block_type)
   const Icon = meta.icon
-  const configFields = meta.configFields ?? []
+  const configFields = meta.configFields ?? schemaFields
 
   const setConfigValue = (key: string, value: unknown) => {
     const next: Record<string, unknown> = { ...block.config }
@@ -188,13 +218,8 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
             onClick={() => onDelete(block.id)}
             title="블록 삭제"
             aria-label="블록 삭제"
-            style={{
-              flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              width: 26, height: 26, borderRadius: 'var(--radius-sm)', border: 'none',
-              background: 'transparent', color: 'var(--color-text-muted)', cursor: 'pointer',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.15)'; e.currentTarget.style.color = 'var(--color-danger)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-muted)' }}
+            className="krds-btn text xsmall icon-btn danger"
+            style={{ flexShrink: 0 }}
           >
             <Trash2 size={14} />
           </button>

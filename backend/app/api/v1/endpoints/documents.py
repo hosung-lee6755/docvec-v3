@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import asc, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import get_current_user
+from app.api.v1.deps import get_current_user, require_admin
 from app.api.v1.permissions import (
     accessible_collection_ids,
     check_collection_access,
@@ -24,19 +24,30 @@ from app.db.models.document_revision import DocumentTextRevision
 from app.services.audit import log_audit
 from app.schemas.document import (
     ChunkUpdateRequest,
+    CleaningChangesResponse,
+    DictionaryApplicationItem,
+    DictionaryApplicationsResponse,
     DocumentChunksResponse,
     DocumentContentResponse,
     DocumentDownloadResponse,
     DocumentImagesResponse,
     DocumentListResponse,
+    DocumentNodeItem,
+    DocumentNodesResponse,
     DocumentProceedRequest,
     DocumentReprocessRequest,
     DocumentResponse,
     DocumentRevisionsResponse,
+    DocumentRunsResponse,
     DocumentTablesResponse,
     DocumentTagSuggestionRequest,
     DocumentTagsUpdateRequest,
     DocumentUploadResponse,
+    NodeCorrectionRequest,
+    PiiDetectionItem,
+    PiiDetectionsResponse,
+    QualityReportResponse,
+    ReprocessImpactResponse,
 )
 from app.schemas.processing_job import ProcessingJobListResponse
 
@@ -69,17 +80,32 @@ _ZIP_MAX_ENTRY_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 _ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 
 
-async def _resolve_preprocess_version_id(db: AsyncSession, collection_id: str | None):
-    """Collection.default_workflow_id if set, else the system-seeded standard
-    PREPROCESS workflow (통합 설계서 §13 Task 3) — always its latest published
-    version."""
+async def _resolve_preprocess_version_id(
+    db: AsyncSession, collection_id: str | None, explicit_version_id: str | None = None,
+):
+    """업로드 다이얼로그에서 명시적으로 고른 workflow_version_id가 있으면 그것을
+    최우선으로 쓰고(단, PREPROCESS 종류인지는 확인한다), 없으면
+    Collection.default_workflow_id(+ default_workflow_version, null이면 항상
+    최신 발행 버전) 순, 그마저도 없으면 시스템 표준 PREPROCESS 워크플로우의
+    최신 발행 버전 — 통합 설계서 §13 Task 3 / §2 업로드 워크플로우 오버라이드."""
     from app.db.models.workflow import WorkflowDefinition, WorkflowVersion
 
+    if explicit_version_id:
+        version = await db.get(WorkflowVersion, explicit_version_id)
+        if version is None:
+            raise HTTPException(status_code=400, detail="지정한 워크플로우 버전을 찾을 수 없습니다")
+        workflow = await db.get(WorkflowDefinition, version.workflow_id)
+        if workflow is None or workflow.kind != "PREPROCESS":
+            raise HTTPException(status_code=400, detail="전처리(PREPROCESS) 워크플로우 버전만 지정할 수 있습니다")
+        return version.id
+
     workflow_id = None
+    pinned_version_number = None
     if collection_id:
         collection = await db.get(Collection, collection_id)
         if collection is not None and collection.default_workflow_id:
             workflow_id = collection.default_workflow_id
+            pinned_version_number = collection.default_workflow_version
 
     if workflow_id is None:
         system_workflow = await db.scalar(
@@ -92,28 +118,32 @@ async def _resolve_preprocess_version_id(db: AsyncSession, collection_id: str | 
             raise HTTPException(status_code=500, detail="표준 전처리 워크플로우가 설정되어 있지 않습니다")
         workflow_id = system_workflow.id
 
+    version_query = select(WorkflowVersion).where(WorkflowVersion.workflow_id == workflow_id)
+    if pinned_version_number is not None:
+        version_query = version_query.where(WorkflowVersion.version_number == pinned_version_number)
+    else:
+        version_query = version_query.where(WorkflowVersion.published_at.is_not(None))
     version = await db.scalar(
-        select(WorkflowVersion)
-        .where(WorkflowVersion.workflow_id == workflow_id, WorkflowVersion.published_at.is_not(None))
-        .order_by(WorkflowVersion.version_number.desc())
-        .limit(1)
+        version_query.order_by(WorkflowVersion.version_number.desc()).limit(1)
     )
     if version is None:
         raise HTTPException(status_code=500, detail="게시된 전처리 워크플로우 버전이 없습니다")
     return version.id
 
 
-async def _start_preprocess_workflow(db: AsyncSession, document: Document) -> None:
+async def _start_preprocess_workflow(
+    db: AsyncSession, document: Document, workflow_version_id: str | None = None,
+) -> None:
     """Replaces the retired fixed pipeline's create_processing_chain(...).delay()
     — creates a WorkflowRun against the resolved PREPROCESS version and
     enqueues its entry block(s), same pattern as workflows.py's /run endpoint."""
     from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
     from app.db.models.workflow_run import WorkflowRun
-    from app.pipeline.tasks.workflow import run_workflow_step
+    from app.pipeline.tasks.workflow import run_workflow_step, step_queue_for_block
     from app.services.dictionary_service import current_dictionary_version
 
     version_id = await _resolve_preprocess_version_id(
-        db, str(document.collection_id) if document.collection_id else None
+        db, str(document.collection_id) if document.collection_id else None, workflow_version_id,
     )
     dictionary_version = await current_dictionary_version(db)
 
@@ -141,7 +171,10 @@ async def _start_preprocess_workflow(db: AsyncSession, document: Document) -> No
 
     for block in entry_blocks:
         timeout_seconds = (block.config or {}).get("timeoutSeconds", 300)
-        run_workflow_step.apply_async(args=[str(run.id), str(block.id)], time_limit=timeout_seconds)
+        run_workflow_step.apply_async(
+            args=[str(run.id), str(block.id)], time_limit=timeout_seconds,
+            queue=step_queue_for_block(block),
+        )
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
@@ -149,6 +182,7 @@ async def upload_document(
     file: UploadFile = File(...),
     collection_id: str | None = Form(None),
     skip_review: bool = Form(False),
+    workflow_version_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -202,7 +236,7 @@ async def upload_document(
     # skip_review: 표준 워크플로우(Phase 3)에는 아직 검토 게이트(quality_check,
     # Phase 7)가 없어 항상 즉시 진행과 동일하다 — 하위 호환을 위해 파라미터는
     # 받되 무시한다.
-    await _start_preprocess_workflow(db, document)
+    await _start_preprocess_workflow(db, document, workflow_version_id)
 
     return {
         "id": document.id,
@@ -217,6 +251,7 @@ async def upload_documents_zip(
     file: UploadFile = File(...),
     collection_id: str | None = Form(None),
     skip_review: bool = Form(False),
+    workflow_version_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -326,7 +361,7 @@ async def upload_documents_zip(
 
             # skip_review: 이번 단계 표준 워크플로우엔 검토 게이트가 없어
             # 무시됨(단일 업로드와 동일 — 위 주석 참고).
-            await _start_preprocess_workflow(db, document)
+            await _start_preprocess_workflow(db, document, workflow_version_id)
             results.append({"filename": entry_name, "status": "queued", "document_id": document.id})
             queued += 1
         except Exception as exc:
@@ -644,6 +679,421 @@ async def reprocess_document(
     return {"message": "Reprocessing started", "status": "CHUNKING"}
 
 
+@router.get("/{document_id}/runs", response_model=DocumentRunsResponse)
+async def list_document_runs(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.db.models.workflow_run import WorkflowRun
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+
+    runs = (
+        await db.scalars(
+            select(WorkflowRun)
+            .where(WorkflowRun.document_id == document_id)
+            .order_by(desc(WorkflowRun.created_at))
+        )
+    ).all()
+    return {"document_id": str(document_id), "runs": runs}
+
+
+@router.get("/{document_id}/quality", response_model=QualityReportResponse | None)
+async def get_document_quality(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.db.models.quality_report import QualityReport
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+
+    report = None
+    if doc.active_run_id:
+        report = await db.scalar(
+            select(QualityReport).where(QualityReport.run_id == doc.active_run_id)
+        )
+    if report is None:
+        # 구버전 문서 마이그레이션(설계서 §14)이나 active_run_id가 비어 있는 경우 —
+        # 이 문서에 대해 가장 최근에 계산된 리포트라도 보여준다.
+        report = await db.scalar(
+            select(QualityReport)
+            .where(QualityReport.document_id == document_id)
+            .order_by(desc(QualityReport.created_at))
+            .limit(1)
+        )
+    return report
+
+
+@router.get("/{document_id}/reprocess/impact", response_model=ReprocessImpactResponse)
+async def get_document_reprocess_impact(
+    document_id: UUID,
+    start_block_type: str | None = None,
+    start_block_instance_id: UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """부분 재처리 시작 전 영향 범위 미리보기 — WorkflowRun을 생성하지 않는다
+    (재처리 모달, 통합 설계서 §9.1 처리 이력 탭/§7 재처리 모달)."""
+    from app.db.models.workflow_run import WorkflowRun as _WorkflowRun
+    from app.services.reprocess_service import ReprocessError, compute_reprocess_impact, resolve_start_block
+
+    if start_block_type is None and start_block_instance_id is None:
+        raise HTTPException(
+            status_code=422, detail="start_block_type 또는 start_block_instance_id 중 하나가 필요합니다.",
+        )
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+
+    parent_run = await db.get(_WorkflowRun, doc.active_run_id) if doc.active_run_id else None
+    if parent_run is None:
+        raise HTTPException(
+            status_code=409,
+            detail="이 문서는 아직 워크플로우로 처리된 적이 없어 이 기능을 사용할 수 없습니다.",
+        )
+
+    try:
+        start_block = await resolve_start_block(
+            db, parent_run.version_id, start_block_type, start_block_instance_id,
+        )
+        computed = await compute_reprocess_impact(db, doc, start_block)
+    except ReprocessError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return computed.impact
+
+
+async def _resolve_display_run_id(db: AsyncSession, doc: Document) -> str | None:
+    """활성 run 우선, 없으면 최신 run — get_document_quality가 쓰는 폴백과 동일 기준으로
+    구조/정제/사전적용/PII 탭이 "어느 run의 데이터를 보여줄지"를 통일한다. 각 테이블이
+    run_id로 여러 실행 결과를 구분해 쌓기 때문에(재처리마다 새 결과가 추가됨) 하나로
+    고정하지 않으면 여러 run의 데이터가 뒤섞여 보인다."""
+    if doc.active_run_id:
+        return str(doc.active_run_id)
+    from app.db.models.workflow_run import WorkflowRun as _WorkflowRun
+
+    run_id = await db.scalar(
+        select(_WorkflowRun.id)
+        .where(_WorkflowRun.document_id == doc.id)
+        .order_by(desc(_WorkflowRun.created_at))
+        .limit(1)
+    )
+    return str(run_id) if run_id else None
+
+
+@router.get("/{document_id}/nodes", response_model=DocumentNodesResponse)
+async def list_document_nodes(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.db.models.document_node import DocumentNode
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+
+    run_id = await _resolve_display_run_id(db, doc)
+    nodes = []
+    if run_id:
+        nodes = (
+            await db.scalars(
+                select(DocumentNode)
+                .where(DocumentNode.run_id == run_id)
+                .order_by(DocumentNode.sort_order.asc())
+            )
+        ).all()
+    return {"document_id": str(document_id), "run_id": run_id, "nodes": nodes}
+
+
+@router.patch("/{document_id}/nodes/{node_id}", response_model=DocumentNodeItem)
+async def correct_document_node(
+    document_id: UUID,
+    node_id: UUID,
+    body: NodeCorrectionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.db.models.document_node import DocumentNode
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="editor")
+
+    node = await db.scalar(
+        select(DocumentNode).where(DocumentNode.id == node_id, DocumentNode.document_id == document_id)
+    )
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    if body.node_type is not None:
+        allowed_types = DocumentNode.__table__.c.node_type.type.enums
+        if body.node_type not in allowed_types:
+            raise HTTPException(status_code=422, detail=f"허용되지 않는 node_type: {body.node_type}")
+        node.node_type = body.node_type
+    if body.level is not None:
+        node.level = body.level
+    node.user_corrected = True
+    await db.commit()
+    await db.refresh(node)
+    return node
+
+
+@router.get("/{document_id}/cleaning-changes", response_model=CleaningChangesResponse)
+async def list_cleaning_changes(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.db.models.cleaning_rule import CleaningChange, CleaningRule
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+
+    run_id = await _resolve_display_run_id(db, doc)
+    items: list[dict] = []
+    if run_id:
+        rows = (
+            await db.execute(
+                select(CleaningChange, CleaningRule.rule_name)
+                .outerjoin(CleaningRule, CleaningChange.rule_id == CleaningRule.id)
+                .where(CleaningChange.run_id == run_id)
+                .order_by(CleaningChange.created_at.asc())
+            )
+        ).all()
+        for change, rule_name in rows:
+            items.append({
+                "id": change.id,
+                "rule_id": change.rule_id,
+                "rule_key": change.rule_key,
+                "rule_name": rule_name,
+                "node_id": change.node_id,
+                "before_sample": change.before_sample,
+                "after_sample": change.after_sample,
+                "change_count": change.change_count,
+                "sample_matches": change.sample_matches,
+                "created_at": change.created_at,
+            })
+
+    distinct_rules = {(item["rule_id"], item["rule_key"]) for item in items}
+    return {
+        "document_id": str(document_id),
+        "run_id": run_id,
+        "total_changes": sum(item["change_count"] for item in items),
+        "distinct_rule_count": len(distinct_rules),
+        "changes": items,
+    }
+
+
+@router.get("/{document_id}/dictionary-applications", response_model=DictionaryApplicationsResponse)
+async def list_dictionary_applications(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.db.models.dictionary_application import DictionaryApplication
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+
+    run_id = await _resolve_display_run_id(db, doc)
+    applications = []
+    if run_id:
+        applications = (
+            await db.scalars(
+                select(DictionaryApplication)
+                .where(DictionaryApplication.run_id == run_id)
+                .order_by(DictionaryApplication.created_at.asc())
+            )
+        ).all()
+    pending_revert_count = sum(1 for app_row in applications if app_row.reverted)
+    return {
+        "document_id": str(document_id),
+        "run_id": run_id,
+        "pending_revert_count": pending_revert_count,
+        "applications": applications,
+    }
+
+
+@router.post(
+    "/{document_id}/dictionary-applications/{app_id}/revert",
+    response_model=DictionaryApplicationItem,
+)
+async def revert_dictionary_application(
+    document_id: UUID,
+    app_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.db.models.dictionary_application import DictionaryApplication
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="editor")
+
+    application = await db.scalar(
+        select(DictionaryApplication).where(
+            DictionaryApplication.id == app_id,
+            DictionaryApplication.document_id == document_id,
+        )
+    )
+    if not application:
+        raise HTTPException(status_code=404, detail="Dictionary application not found")
+
+    application.reverted = True
+    await db.commit()
+    await db.refresh(application)
+    return application
+
+
+@router.get("/{document_id}/pii", response_model=PiiDetectionsResponse)
+async def list_pii_detections(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.db.models.pii_detection import PiiDetection
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+
+    run_id = await _resolve_display_run_id(db, doc)
+    detections = []
+    if run_id:
+        detections = (
+            await db.scalars(
+                select(PiiDetection)
+                .where(PiiDetection.run_id == run_id)
+                .order_by(PiiDetection.created_at.asc())
+            )
+        ).all()
+    return {"document_id": str(document_id), "run_id": run_id, "detections": detections}
+
+
+@router.post("/{document_id}/pii/{detection_id}/approve", response_model=PiiDetectionItem)
+async def approve_pii_detection(
+    document_id: UUID,
+    detection_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from datetime import datetime
+
+    from app.db.models.pii_detection import PiiDetection
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="editor")
+
+    detection = await db.scalar(
+        select(PiiDetection).where(
+            PiiDetection.id == detection_id, PiiDetection.document_id == document_id
+        )
+    )
+    if not detection:
+        raise HTTPException(status_code=404, detail="PII detection not found")
+
+    detection.approved_by = current_user.id
+    detection.approved_at = datetime.utcnow()
+    detection.rejected = False
+    await db.commit()
+    await db.refresh(detection)
+    return detection
+
+
+@router.post("/{document_id}/pii/{detection_id}/reject", response_model=PiiDetectionItem)
+async def reject_pii_detection(
+    document_id: UUID,
+    detection_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.db.models.pii_detection import PiiDetection
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="editor")
+
+    detection = await db.scalar(
+        select(PiiDetection).where(
+            PiiDetection.id == detection_id, PiiDetection.document_id == document_id
+        )
+    )
+    if not detection:
+        raise HTTPException(status_code=404, detail="PII detection not found")
+
+    detection.rejected = True
+    detection.approved_by = None
+    detection.approved_at = None
+    await db.commit()
+    await db.refresh(detection)
+    return detection
+
+
+class PiiRevealResponse(BaseModel):
+    value: str
+
+
+@router.post("/{document_id}/pii/{detection_id}/reveal", response_model=PiiRevealResponse)
+async def reveal_pii_detection(
+    document_id: UUID,
+    detection_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """민감정보 원문 열람 — 문서별 editor 권한이 아니라 전역 admin 롤로 게이팅한다
+    (9c에서 만든 목록/승인/반려 엔드포인트는 그대로 두고, 원문 노출만 별도 엔드포인트로
+    분리해 PiiDetectionsResponse가 여전히 original_encrypted를 절대 반환하지 않는다는
+    보안 보장을 유지한다). 모든 열람은 감사 로그에 남긴다."""
+    from app.core import crypto
+    from app.db.models.pii_detection import PiiDetection
+
+    require_admin(current_user)
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    detection = await db.scalar(
+        select(PiiDetection).where(
+            PiiDetection.id == detection_id, PiiDetection.document_id == document_id
+        )
+    )
+    if not detection:
+        raise HTTPException(status_code=404, detail="PII detection not found")
+    if not detection.original_encrypted:
+        raise HTTPException(status_code=404, detail="원문이 저장되어 있지 않습니다")
+
+    value = crypto.decrypt_secret(detection.original_encrypted)
+    log_audit(
+        db, str(current_user.id), "pii.reveal",
+        resource_type="pii_detection", resource_id=str(detection_id),
+    )
+    await db.commit()
+    return {"value": value}
+
+
 @router.get("/{document_id}/jobs", response_model=ProcessingJobListResponse)
 async def get_document_jobs(
     document_id: UUID,
@@ -708,8 +1158,57 @@ async def list_document_chunks(
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="viewer")
 
+    # structure/cleaning-changes/dictionary-applications/pii/quality 탭과 동일한
+    # run 해석 기준(_resolve_display_run_id) — active_run_id 우선, 없으면 최신 run.
+    run_id = await _resolve_display_run_id(db, doc)
+
     hits = qdrant_service.scroll_by_document(str(document_id))
+    # 이 문서의 "현재" run이 아닌 다른(초과/삭제된) run이 남긴 포인트는 무시한다 —
+    # reprocess로 새 run이 만들어져도 rag_store가 재실행되기 전까지는 Qdrant에
+    # 이전 run의 임베딩이 그대로 남아 있고, 심지어 그 run 행 자체가 나중에
+    # 삭제돼도(workflow_runs FK CASCADE는 Postgres document_chunks만 지우고
+    # Qdrant는 건드리지 않음) 포인트는 고아 상태로 계속 남는다. 이걸 그대로
+    # 보여주면 RAG 현황/품질 탭의 청크 수가 서로 달라 보이는 버그가 된다(사용자
+    # 확인 2026-07-21, "01 포항세라믹... RAG 현황의 청크 수치랑 품질의 청크
+    # 수치가 다르다" — 실제로 존재하지도 않는 run_id d5de7cc8...의 고아 포인트
+    # 16개가 현재 run의 실제 청크 25개 대신 보이고 있었다).
+    hits = [h for h in hits if h["payload"].get("workflow_run_id") == run_id]
     hits.sort(key=lambda h: h["payload"].get("chunk_index", 0))
+
+    if not hits:
+        # rag_store(임베딩+Qdrant 적재)는 quality_check 등 검토 게이트보다
+        # 하류라서, WAITING_REVIEW로 멈춘 문서는 chunk_split이 이미 만든
+        # document_chunks(Postgres) 행은 있어도 Qdrant는 아직 비어 있다 —
+        # 그래서 이전에는 이 상태의 문서가 항상 "청크 0개"로 보였다(사용자 확인
+        # 2026-07-21, "청크가 0으로 나온다... 품질에서는 생성된 청크 37개").
+        # DocumentChunk 모델 자체의 설계 의도("Qdrant 없이도 청크 탭이 목록을
+        # 볼 수 있도록")대로 Postgres를 폴백 소스로 사용한다 — 단, 이 경로로
+        # 나온 항목은 embedded=False로 표시해 프런트가 수정/삭제(Qdrant 전용
+        # 엔드포인트)를 비활성화하도록 한다.
+        from app.db.models.document_chunk import DocumentChunk
+
+        pg_chunks = (
+            await db.scalars(
+                select(DocumentChunk)
+                .where(DocumentChunk.document_id == document_id, DocumentChunk.run_id == run_id)
+                .order_by(DocumentChunk.chunk_order)
+            )
+        ).all() if run_id else []
+        chunks = [
+            {
+                "id": str(c.id),
+                "chunk_index": c.chunk_order,
+                "text": c.chunk_text,
+                "page_number": c.page_start,
+                "disabled": False,
+                "edited": c.edited,
+                "hit_count": 0,
+                "embedded": False,
+            }
+            for c in pg_chunks
+        ]
+        return {"document_id": str(document_id), "chunks": chunks}
+
     hit_counts = await asyncio.to_thread(get_hit_counts, [h["id"] for h in hits])
     chunks = [
         {
@@ -720,6 +1219,7 @@ async def list_document_chunks(
             "disabled": bool(h["payload"].get("disabled", False)),
             "edited": bool(h["payload"].get("edited", False)),
             "hit_count": hit_counts.get(h["id"], 0),
+            "embedded": True,
         }
         for i, h in enumerate(hits)
     ]
@@ -776,6 +1276,8 @@ async def delete_document_chunk(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.db.models.document_chunk import DocumentChunk
+    from app.db.models.quality_report import QualityReport
     from app.services.qdrant_service import qdrant_service
 
     doc = await db.scalar(select(Document).where(Document.id == document_id))
@@ -788,6 +1290,46 @@ async def delete_document_chunk(
         raise HTTPException(status_code=404, detail="Chunk not found")
 
     qdrant_service.delete_points(settings.qdrant_collection_name, [chunk_id])
+
+    # document_chunks is the first-class source of truth (§4.6) — deleting only
+    # the Qdrant point left this row behind forever, stale and still counted
+    # by anything that queries document_chunks directly (사용자 확인 2026-07-21,
+    # "청크를 삭제한다면 RAG에서도 지워지는 구조가 맞는지도 검토해달라").
+    await db.execute(delete(DocumentChunk).where(DocumentChunk.id == chunk_id))
+
+    # If this chunk was the one a chunking warning pointed at, drop it from the
+    # report so a resolved issue stops showing as still needing review
+    # (사용자 확인 2026-07-21, "문제의 청크를 삭제했는데 계속 검토 필요로 남아있다").
+    report = None
+    if doc.active_run_id:
+        report = await db.scalar(select(QualityReport).where(QualityReport.run_id == doc.active_run_id))
+    if report is None:
+        report = await db.scalar(
+            select(QualityReport).where(QualityReport.document_id == document_id)
+            .order_by(desc(QualityReport.created_at)).limit(1)
+        )
+    if report is not None and report.metrics:
+        changed = False
+        metrics = dict(report.metrics)
+        warnings = list(report.warnings or [])
+        categories = list(report.warning_categories or [])
+        for key, category in (("short_chunk_ids", "chunking_short"), ("long_chunk_ids", "chunking_long")):
+            ids = metrics.get(key) or []
+            if chunk_id not in ids:
+                continue
+            ids = [i for i in ids if i != chunk_id]
+            metrics[key] = ids
+            changed = True
+            if not ids and category in categories:
+                idx = categories.index(category)
+                warnings.pop(idx)
+                categories.pop(idx)
+        if changed:
+            report.metrics = metrics
+            report.warnings = warnings
+            report.warning_categories = categories
+
+    await db.commit()
     return {"message": "Chunk deleted"}
 
 
@@ -921,9 +1463,15 @@ async def accept_tag_suggestion(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Promotes one LLM-suggested tag into the user-managed tag list and
-    removes it from suggested_tags. Reuses update_document_tags' Qdrant sync
-    since the result is indistinguishable from a manually-added tag."""
+    """Promotes one LLM-suggested tag into the user-managed tag list. Reuses
+    update_document_tags' Qdrant sync since the result is indistinguishable
+    from a manually-added tag.
+
+    Deliberately leaves suggested_tags untouched (사용자 확인 2026-07-20,
+    "추천 태그... 계속 유지하고 싶다") — a promoted suggestion stays visible in
+    the 추천 태그 list instead of disappearing, so the frontend renders it in
+    an "already added" state (see DocumentDetailPage.tsx) rather than losing
+    it. Only dismiss_tag_suggestion actually removes an entry."""
     from app.services.qdrant_service import qdrant_service
 
     doc = await db.scalar(select(Document).where(Document.id == document_id))
@@ -935,7 +1483,6 @@ async def accept_tag_suggestion(
     if body.tag not in tags:
         tags.append(body.tag)
     doc.tags = tags
-    doc.suggested_tags = [t for t in (doc.suggested_tags or []) if t != body.tag] or None
     await db.commit()
 
     qdrant_service.set_payload_by_document(

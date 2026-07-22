@@ -34,4 +34,7 @@ class UserCreate(BaseModel):
     email: EmailStr
     username: str
     password: str = Field(min_length=8, max_length=128)
-    role: str = "viewer"
+    # Optional invite code — if it matches settings.admin_signup_code (and that
+    # setting is non-empty), the account is created with role="admin" instead
+    # of the default "viewer". See auth.register().
+    admin_code: str | None = None

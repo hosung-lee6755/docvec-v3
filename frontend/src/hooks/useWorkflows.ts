@@ -1,13 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
+import type { JsonSchema } from '../lib/blockConfigSchema'
 
 export interface Workflow {
   id: string
-  project_id: string
+  project_id: string | null
   name: string
   description: string | null
   status: 'DRAFT' | 'ACTIVE' | 'INACTIVE'
+  kind: 'PREPROCESS' | 'ANALYSIS'
   created_at: string
+}
+
+export interface WorkflowListItem extends Workflow {
+  updated_at: string
+  created_by_username: string | null
+  is_system_default: boolean
+  default_for_collection_count: number
+  latest_version_number: number | null
+  project_name: string | null
 }
 
 export interface WorkflowVersion {
@@ -41,7 +52,7 @@ export interface WorkflowGraph {
 export interface WorkflowRun {
   id: string
   version_id: string
-  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'WAITING_REVIEW'
   started_at: string | null
   completed_at: string | null
   error_message: string | null
@@ -56,13 +67,25 @@ export interface WorkflowRun {
 export interface WorkflowRunStep {
   id: string
   block_instance_id: string
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  block_type: string | null
+  label: string | null
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED'
   output: Record<string, unknown> | null
   error_message: string | null
+  cached: boolean
+  warnings: string[] | null
+}
+
+export interface BlockTypeInfo {
+  block_type: string
+  block_version: number
+  category: string
+  label: string
+  config_schema: JsonSchema
 }
 
 export function useBlockTypes() {
-  return useQuery<{ items: string[] }>({
+  return useQuery<{ items: BlockTypeInfo[] }>({
     queryKey: ['block-types'],
     queryFn: async () => {
       const { data } = await apiClient.get('/workflows/block-types')
@@ -72,14 +95,72 @@ export function useBlockTypes() {
   })
 }
 
-export function useWorkflows(projectId: string | null) {
-  return useQuery<{ items: Workflow[] }>({
-    queryKey: ['workflows', projectId],
+export function useWorkflows(projectId: string | null, kind?: 'PREPROCESS' | 'ANALYSIS') {
+  return useQuery<{ items: WorkflowListItem[] }>({
+    queryKey: ['workflows', projectId, kind ?? null],
     queryFn: async () => {
-      const { data } = await apiClient.get('/workflows', { params: { project_id: projectId } })
+      const { data } = await apiClient.get('/workflows', {
+        params: { project_id: projectId ?? undefined, kind },
+      })
       return data
     },
-    enabled: !!projectId,
+  })
+}
+
+// 워크플로우 이름 변경(사용자 확인 2026-07-20, "워크플로우 이름변경기능은 없는데?") —
+// useUpdateWorkflowStatus와 같은 PATCH /workflows/{id}를 name 필드로 호출한다.
+export function useRenameWorkflow() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ workflowId, name }: { workflowId: string; name: string; projectId: string }) => {
+      const { data } = await apiClient.patch(`/workflows/${workflowId}`, { name })
+      return data as Workflow
+    },
+    onSuccess: () => {
+      // 정확한 ['workflows', projectId, kind] 키만 무효화하면 전역(/workflows,
+      // 프로젝트 없음) 목록의 캐시 키(['workflows', null, kind])와 불일치해
+      // 갱신되지 않는다(사용자 확인 2026-07-20, 이름 변경 직후 목록에 반영 안 되는
+      // 버그로 발견) — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
+      queryClient.invalidateQueries({ queryKey: ['workflows'] })
+    },
+  })
+}
+
+export function useUpdateWorkflowStatus() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (
+      { workflowId, status }: { workflowId: string; status: 'DRAFT' | 'ACTIVE' | 'INACTIVE'; projectId: string },
+    ) => {
+      const { data } = await apiClient.patch(`/workflows/${workflowId}`, { status })
+      return data as Workflow
+    },
+    onSuccess: () => {
+      // 정확한 ['workflows', projectId, kind] 키만 무효화하면 전역(/workflows,
+      // 프로젝트 없음) 목록의 캐시 키(['workflows', null, kind])와 불일치해
+      // 갱신되지 않는다(사용자 확인 2026-07-20, 이름 변경 직후 목록에 반영 안 되는
+      // 버그로 발견) — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
+      queryClient.invalidateQueries({ queryKey: ['workflows'] })
+    },
+  })
+}
+
+export function useDuplicateWorkflow() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (
+      { workflowId, projectId }: { workflowId: string; projectId: string },
+    ) => {
+      const { data } = await apiClient.post(`/workflows/${workflowId}/duplicate`, { project_id: projectId })
+      return data as Workflow
+    },
+    onSuccess: () => {
+      // 정확한 ['workflows', projectId, kind] 키만 무효화하면 전역(/workflows,
+      // 프로젝트 없음) 목록의 캐시 키(['workflows', null, kind])와 불일치해
+      // 갱신되지 않는다(사용자 확인 2026-07-20, 이름 변경 직후 목록에 반영 안 되는
+      // 버그로 발견) — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
+      queryClient.invalidateQueries({ queryKey: ['workflows'] })
+    },
   })
 }
 
@@ -97,12 +178,14 @@ export function useWorkflow(workflowId: string | null) {
 export function useCreateWorkflow() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: { project_id: string; name: string; description?: string }) => {
+    mutationFn: async (
+      input: { project_id: string; name: string; description?: string; kind?: 'PREPROCESS' | 'ANALYSIS' },
+    ) => {
       const { data } = await apiClient.post('/workflows', input)
       return data as Workflow
     },
-    onSuccess: (workflow) => {
-      queryClient.invalidateQueries({ queryKey: ['workflows', workflow.project_id] })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workflows'] })
     },
   })
 }
@@ -114,8 +197,12 @@ export function useDeleteWorkflow() {
       const { data } = await apiClient.delete(`/workflows/${workflowId}`)
       return data as { deleted: boolean }
     },
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['workflows', variables.projectId] })
+    onSuccess: () => {
+      // 정확한 ['workflows', projectId, kind] 키만 무효화하면 전역(/workflows,
+      // 프로젝트 없음) 목록의 캐시 키(['workflows', null, kind])와 불일치해
+      // 갱신되지 않는다(사용자 확인 2026-07-20, 이름 변경 직후 목록에 반영 안 되는
+      // 버그로 발견) — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
+      queryClient.invalidateQueries({ queryKey: ['workflows'] })
     },
   })
 }
@@ -168,6 +255,11 @@ export function useWorkflowGraph(workflowId: string | null, versionId: string | 
   })
 }
 
+export interface GraphValidationError {
+  message: string
+  block_id: string | null
+}
+
 export function useSaveWorkflowGraph() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -178,7 +270,7 @@ export function useSaveWorkflowGraph() {
         `/workflows/${workflowId}/versions/${versionId}/graph`,
         graph,
       )
-      return data as { saved: boolean; validation_errors: string[] }
+      return data as { saved: boolean; validation_errors: GraphValidationError[] }
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({
@@ -265,6 +357,37 @@ export function useWorkflowRun(runId: string | null) {
     refetchInterval: (query) => {
       const status = query.state.data?.run.status
       return status === 'QUEUED' || status === 'RUNNING' ? 2000 : false
+    },
+  })
+}
+
+export function useResumeRun() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (runId: string) => {
+      const { data } = await apiClient.post(`/workflows/runs/${runId}/resume`)
+      return data
+    },
+    onSuccess: (_data, runId) => {
+      queryClient.invalidateQueries({ queryKey: ['workflow-run', runId] })
+      // doc.status/isWaitingReview, useDocumentRuns, useDocumentQuality all
+      // key off ['documents', ...] — without this the approval banner and
+      // quality tab keep showing the stale WAITING_REVIEW state after resume.
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+    },
+  })
+}
+
+export function useCancelRun() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (runId: string) => {
+      const { data } = await apiClient.post(`/workflows/runs/${runId}/cancel`)
+      return data
+    },
+    onSuccess: (_data, runId) => {
+      queryClient.invalidateQueries({ queryKey: ['workflow-run', runId] })
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
     },
   })
 }

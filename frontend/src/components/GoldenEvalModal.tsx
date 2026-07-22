@@ -76,20 +76,21 @@ export default function GoldenEvalModal({ collectionId, collectionName, onClose 
                       value={newQuery}
                       onChange={(e) => setNewQuery(e.target.value)}
                       placeholder="예: 에너지 절감 방안이 뭐야?"
-                      className="krds-form-input"
+                      className="krds-input"
                       style={{ width: '100%' }}
                     />
                     <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>기대 문서 선택 (이 컬렉션 내)</div>
                     <div style={{ maxHeight: 120, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
                       {docsData?.items.map((d) => (
-                        <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                        <div key={d.id} className="krds-form-check" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <input
                             type="checkbox"
+                            id={`golden_expected_${d.id}`}
                             checked={newExpectedIds.has(d.id)}
                             onChange={() => toggleExpected(d.id)}
                           />
-                          {d.original_filename}
-                        </label>
+                          <label htmlFor={`golden_expected_${d.id}`} style={{ fontSize: 12 }}>{d.original_filename}</label>
+                        </div>
                       ))}
                       {!docsData?.items.length && (
                         <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>이 컬렉션에 문서가 없습니다.</span>
@@ -137,7 +138,7 @@ export default function GoldenEvalModal({ collectionId, collectionName, onClose 
                     <input
                       type="number" min={1} max={50} value={topK}
                       onChange={(e) => setTopK(Number(e.target.value))}
-                      className="krds-form-input" style={{ width: 60 }}
+                      className="krds-input" style={{ width: 60 }}
                     />
                     <button
                       type="button"

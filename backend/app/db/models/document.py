@@ -51,6 +51,10 @@ class Document(Base):
             "VALIDATING",
             "MASKING",
             "WAITING_REVIEW",
+            # An AUTO_ANALYSIS run's block types aren't in _STATUS_FOR_BLOCK_TYPE
+            # (workflow.py), so without this the document kept showing the stale
+            # "INDEXED" label for the run's whole duration (사용자 확인 2026-07-21).
+            "ANALYZING",
             name="document_status",
         ),
         default="QUEUED",

@@ -32,20 +32,21 @@ export default function LoginPage() {
         <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 'var(--space-6)', color: 'var(--color-text)' }}>DocVec</h1>
         <form onSubmit={(e) => { e.preventDefault(); loginMutation.mutate() }}>
           <div className="form-group" style={{ marginBottom: 'var(--space-4)' }}>
-            <div className="form-tit">
+            <div className="form-tit" style={{ color: 'var(--color-text-muted)' }}>
               <label htmlFor="login_email">이메일</label>
             </div>
             <div className="form-conts">
               <input
                 id="login_email"
                 type="email" value={email} onChange={(e) => setEmail(e.target.value)} required
+                placeholder="user@example.com"
                 className="krds-input"
                 style={{ width: '100%', boxSizing: 'border-box' }}
               />
             </div>
           </div>
           <div className="form-group" style={{ marginBottom: 'var(--space-6)' }}>
-            <div className="form-tit">
+            <div className="form-tit" style={{ color: 'var(--color-text-muted)' }}>
               <label htmlFor="login_password">비밀번호</label>
             </div>
             <div className="form-conts">

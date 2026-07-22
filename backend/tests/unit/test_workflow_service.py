@@ -37,7 +37,7 @@ def _mock_db(blocks, edges):
 async def test_empty_graph_is_invalid():
     db = _mock_db([], [])
     errors = await validate_graph(db, str(uuid4()))
-    assert errors == ["워크플로우에 블록이 하나도 없습니다"]
+    assert errors == [{"message": "워크플로우에 블록이 하나도 없습니다", "block_id": None}]
 
 
 @pytest.mark.asyncio
@@ -56,7 +56,7 @@ async def test_unknown_block_type_is_rejected():
     blocks = [_block(block_id, "not_a_real_block")]
     db = _mock_db(blocks, [])
     errors = await validate_graph(db, str(uuid4()))
-    assert any("유형이 올바르지 않습니다" in e for e in errors)
+    assert any("유형이 올바르지 않습니다" in e["message"] and e["block_id"] == str(block_id) for e in errors)
 
 
 @pytest.mark.asyncio
@@ -65,7 +65,7 @@ async def test_non_input_block_without_incoming_edge_is_rejected():
     blocks = [_block(orphan_id, "preprocess", label="전처리")]
     db = _mock_db(blocks, [])
     errors = await validate_graph(db, str(uuid4()))
-    assert any("입력이 없습니다" in e for e in errors)
+    assert any("입력이 없습니다" in e["message"] and e["block_id"] == str(orphan_id) for e in errors)
 
 
 @pytest.mark.asyncio
@@ -74,7 +74,7 @@ async def test_non_output_block_without_outgoing_edge_is_rejected():
     blocks = [_block(dangling_id, "input", label="입력")]
     db = _mock_db(blocks, [])
     errors = await validate_graph(db, str(uuid4()))
-    assert any("출력이 없습니다" in e for e in errors)
+    assert any("출력이 없습니다" in e["message"] and e["block_id"] == str(dangling_id) for e in errors)
 
 
 @pytest.mark.asyncio
@@ -85,7 +85,7 @@ async def test_cycle_is_rejected():
     edges = [_edge(a, b), _edge(b, c), _edge(c, b)]
     db = _mock_db(blocks, edges)
     errors = await validate_graph(db, str(uuid4()))
-    assert any("순환 참조" in e for e in errors)
+    assert any("순환 참조" in e["message"] for e in errors)
 
 
 @pytest.mark.asyncio

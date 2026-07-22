@@ -14,6 +14,10 @@ export interface Collection {
   chunk_min_tokens: number
   chunk_overlap_tokens: number
   chunk_strategy: 'size' | 'semantic'
+  default_workflow_id: string | null
+  default_workflow_version: number | null
+  default_analysis_workflow_id: string | null
+  default_analysis_workflow_version: number | null
   reembed_status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | null
   reembed_progress: string | null
   created_at: string
@@ -54,11 +58,13 @@ export interface CreateCollectionInput {
   name: string
   description?: string
   project_id?: string
-  embedding_model: string
-  chunk_max_tokens: number
-  chunk_min_tokens: number
-  chunk_overlap_tokens: number
-  chunk_strategy?: 'size' | 'semantic'
+  // 임베딩 모델/청킹 설정은 더 이상 컬렉션 생성 화면에서 입력받지 않는다 —
+  // 시스템 기본값으로 생성되고, 필요하면 이 컬렉션의 전처리 워크플로우
+  // 문서분할/RAG저장 블록에서만 재정의한다(사용자 확인 2026-07-20).
+  default_workflow_id?: string
+  default_workflow_version?: number
+  default_analysis_workflow_id?: string
+  default_analysis_workflow_version?: number
 }
 
 export interface UpdateCollectionInput {
@@ -67,11 +73,12 @@ export interface UpdateCollectionInput {
   description?: string
   project_id?: string
   restrict_to_members?: boolean
-  embedding_model?: string
-  chunk_max_tokens?: number
-  chunk_min_tokens?: number
-  chunk_overlap_tokens?: number
-  chunk_strategy?: 'size' | 'semantic'
+  default_workflow_id?: string | null
+  default_workflow_version?: number | null
+  clear_default_workflow?: boolean
+  default_analysis_workflow_id?: string | null
+  default_analysis_workflow_version?: number | null
+  clear_default_analysis_workflow?: boolean
 }
 
 export function useEmbeddingModels() {

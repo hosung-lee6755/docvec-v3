@@ -24,8 +24,8 @@
   --color-text-muted: #94a3b8;
   --color-accent: #6366f1;
   --color-accent-hover: #818cf8;
-  --color-danger: #ef4444;
-  --color-success: #22c55e;
+  --color-danger: #dc2626;
+  --color-success: #16a34a;
   --color-warning: #f59e0b;
   --radius-sm: 4px;
   --radius-md: 8px;
@@ -50,6 +50,69 @@ body {
   min-height: 100vh;
 }
 
+/* krds-uiux's own `.krds-table-wrap .tbl.data thead th/tbody td` rules read these
+   custom properties for font-size — by KRDS's own design, thead uses a "heading"
+   token (15px) and tbody a "label" token (17px), so header and body text sizes
+   visibly clash within the same table, and clash again with the plain/krds-table
+   markup other pages use (12-13px). `html .krds-table-wrap` (one extra element
+   selector) beats krds.min.css's plain `.krds-table-wrap` on specificity even
+   though krds.min.css loads after — no need for `!important`. */
+html .krds-table-wrap {
+  --krds-table--data-thead-pc-font-size: 13px;
+  --krds-table--data-tbody-pc-font-size: 13px;
+}
+
+/* #root (an ID selector) is used here specifically to beat krds.min.css's
+   `html, body { font-family/font-size: ... }` rules, which tie in specificity
+   with our own `body {...}` above and win because KRDS loads second (see the
+   import-order note in main.tsx). Without this, any element that doesn't set
+   its own font-size inherits KRDS's leaked 17px (1.7rem against KRDS's own
+   62.5% root) instead of our intended 14px — visible as mismatched table
+   cell/header sizes wherever a component uses a raw KRDS class with no
+   explicit font-size override (e.g. `tbl col data` tables). */
 #root {
   min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+}
+
+/* Canonical icon-only action button. Pages previously reinvented this
+   independently (CollectionsPage's `.row-action-btn`, DocumentDetailPage's
+   `.icon-btn-download`, DictionaryPage's `.dict-icon-btn`) with slightly
+   different sizes/hover colors. Use as `className="krds-btn text xsmall
+   icon-btn"` (+ optional `danger`/`accent`/`success` modifier) so every
+   icon-only button in the app shares one size and one set of hover colors,
+   layered on top of KRDS's own `.krds-btn.text.xsmall` base.
+   Sizing must be on the 4-class compound selector `.krds-btn.text.xsmall.icon-btn`
+   with `!important`: KRDS's own `.krds-btn.text` sets `height: auto !important`,
+   and `.krds-btn.text.xsmall` (3 classes) sets `padding` — a plain `.icon-btn`
+   (1 class) loses both the specificity race and the !important tie-break. */
+.krds-btn.text.xsmall.icon-btn {
+  width: 28px !important;
+  height: 28px !important;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+.icon-btn:hover:not(:disabled) {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--color-text);
+}
+.icon-btn.danger:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.1);
+  color: var(--color-danger);
+}
+.icon-btn.accent:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--color-accent);
+}
+.icon-btn.success:hover:not(:disabled) {
+  background: rgba(22, 163, 74, 0.1);
+  color: var(--color-success);
+}
+.icon-btn:disabled {
+  color: #cbd5e1;
+  cursor: not-allowed;
 }

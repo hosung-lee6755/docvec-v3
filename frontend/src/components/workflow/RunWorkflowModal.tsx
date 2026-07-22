@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { CheckCircle2, Download, Loader2, Play, X, XCircle } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { AlertTriangle, CheckCircle2, Download, Loader2, Play, X, XCircle } from 'lucide-react'
 import { useCollections } from '../../hooks/useCollections'
 import { useDocuments } from '../../hooks/useDocuments'
 import { apiClient } from '../../lib/apiClient'
@@ -7,6 +7,7 @@ import {
   useRunWorkflow,
   useWorkflowRun,
   useWorkflowRuns,
+  useWorkflowVersions,
   type WorkflowBlock,
 } from '../../hooks/useWorkflows'
 import { getBlockMeta } from '../../lib/workflowBlocks'
@@ -25,22 +26,29 @@ interface RunWorkflowModalProps {
   versionId: string
   blocks: WorkflowBlock[]
   projectId?: string
+  workflowKind?: 'PREPROCESS' | 'ANALYSIS'
   onClose: () => void
 }
 
 export default function RunWorkflowModal({
-  workflowId, versionId, blocks, projectId, onClose,
+  workflowId, versionId, blocks, projectId, workflowKind, onClose,
 }: RunWorkflowModalProps) {
   const { data: documentsData } = useDocuments({ projectId, limit: 100 })
   const { data: collectionsData } = useCollections(projectId)
+  const { data: versionsData } = useWorkflowVersions(workflowId)
   const runWorkflow = useRunWorkflow()
   const { data: runsData } = useWorkflowRuns(workflowId)
   const [targetType, setTargetType] = useState<'document' | 'collection'>('document')
   const [documentId, setDocumentId] = useState('')
   const [collectionId, setCollectionId] = useState('')
+  const [runVersionId, setRunVersionId] = useState(versionId)
   const [startedCount, setStartedCount] = useState<number | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const { data: runDetail } = useWorkflowRun(activeRunId)
+
+  useEffect(() => {
+    setRunVersionId(versionId)
+  }, [versionId])
 
   const blockName = (blockInstanceId: string) => {
     const block = blocks.find((b) => b.id === blockInstanceId)
@@ -54,7 +62,7 @@ export default function RunWorkflowModal({
     if (!canStart) return
     const result = await runWorkflow.mutateAsync({
       workflowId,
-      versionId,
+      versionId: runVersionId,
       documentId: targetType === 'document' ? documentId : undefined,
       collectionId: targetType === 'collection' ? collectionId : undefined,
     })
@@ -88,6 +96,38 @@ export default function RunWorkflowModal({
             </div>
             <div className="modal-conts">
               <div className="conts-area" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+                {workflowKind === 'PREPROCESS' && (
+                  <div style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)',
+                    background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e',
+                    borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', fontSize: 12,
+                  }}>
+                    <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span>이 워크플로우를 실행하면 대상 문서의 기존 RAG 데이터를 대체합니다.</span>
+                  </div>
+                )}
+
+                <div className="form-group">
+                  <div className="form-tit">
+                    <label htmlFor="run_version">실행 버전</label>
+                  </div>
+                  <div className="form-conts">
+                    <select
+                      id="run_version"
+                      className="krds-form-select"
+                      style={{ width: '100%' }}
+                      value={runVersionId}
+                      onChange={(e) => setRunVersionId(e.target.value)}
+                    >
+                      {versionsData?.items.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          v{v.version_number}{v.published_at ? ' (발행됨)' : ' (초안)'}{v.id === versionId ? ' — 현재 편집 중' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
                 <div className="form-group">
                   <div className="form-tit">
                     <label htmlFor="run_target">실행 대상</label>

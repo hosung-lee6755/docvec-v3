@@ -49,12 +49,17 @@ async def register(
         # an attacker enumerate every registered email address.
         raise HTTPException(status_code=409, detail="Registration failed")
 
+    granted_admin = (
+        bool(settings.admin_signup_code)
+        and request.admin_code is not None
+        and request.admin_code == settings.admin_signup_code
+    )
     user = User(
         id=uuid4(),
         email=request.email,
         username=request.username,
         hashed_password=get_password_hash(request.password),
-        role="viewer",
+        role="admin" if granted_admin else "viewer",
         is_active=True,
     )
     db.add(user)

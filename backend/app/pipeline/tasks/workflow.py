@@ -37,6 +37,19 @@ _STATUS_FOR_BLOCK_TYPE: dict[str, str] = {
 }
 
 
+def step_queue_for_block(block) -> str:
+    """어느 블록이 GPU 임베딩 모델을 쓰는지에 따라 실행 큐를 나눈다 — rag_store는
+    항상, chunk_split은 strategy=semantic일 때만 embed()를 호출한다. 이 블록들을
+    별도의 'embed' 큐로 보내면 worker-embed 컨테이너(concurrency=1)가 순차 실행해,
+    GPU 메모리 하나를 여러 워커 슬롯이 동시에 점유해 서로 밀어내는 경합을 막는다
+    (사용자 확인 2026-07-21, "한건씩 차례로 처리하면 되는거 아닌가?")."""
+    if block.block_type == "rag_store":
+        return "embed"
+    if block.block_type == "chunk_split" and (block.config or {}).get("strategy") == "semantic":
+        return "embed"
+    return "normal"
+
+
 def _evaluate_condition(condition: dict | None, output: dict) -> bool:
     if condition is None:
         return True
@@ -232,6 +245,7 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
             cache_entry.hit_count = (cache_entry.hit_count or 0) + 1
             cache_entry.last_hit_at = datetime.utcnow()
             db.commit()
+            requires_review = cache_entry.requires_review
         else:
             result = block_instance.run(BlockContext(
                 run_id=run_id,
@@ -257,17 +271,23 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
                 output_summary=step.output,
                 created_at=datetime.utcnow(),
                 hit_count=0,
+                requires_review=result.requires_review,
             ))
             db.commit()
+            requires_review = result.requires_review
 
-            if result.requires_review:
-                run.status = "WAITING_REVIEW"
-                if run.document_id:
-                    doc = db.get(Document, run.document_id)
-                    if doc is not None:
-                        doc.status = "WAITING_REVIEW"
-                db.commit()
-                return {"status": "WAITING_REVIEW", "output": resolved_output}
+        # cache_entry 경로에서도 반드시 확인해야 한다 — 이전에는 cache-hit일 때
+        # requires_review를 전혀 확인하지 않고 무조건 _advance()로 넘어가 검토
+        # 게이트를 우회하는 버그가 있었다(2026-07-21 발견, WAITING_REVIEW로 멈춰
+        # 있던 run을 재실행했더니 rag_store까지 진행되어 미승인 상태로 임베딩됨).
+        if requires_review:
+            run.status = "WAITING_REVIEW"
+            if run.document_id:
+                doc = db.get(Document, run.document_id)
+                if doc is not None:
+                    doc.status = "WAITING_REVIEW"
+            db.commit()
+            return {"status": "WAITING_REVIEW", "output": resolved_output}
 
         _advance(db, run_id, block, resolved_output)
         return {"status": "COMPLETED", "output": resolved_output}
@@ -315,6 +335,75 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
         raise
 
 
+def _maybe_trigger_analysis(db, run) -> None:
+    """A PREPROCESS run that just completed on a document in a collection with
+    Collection.default_analysis_workflow_id set kicks off that ANALYSIS workflow
+    automatically against the same document (컬렉션 생성/수정 시 지정한 기본
+    분석 워크플로우 — 사용자 확인 2026-07-20). Guarded to only fire off a
+    PREPROCESS run's completion so an ANALYSIS run's own completion can never
+    recursively trigger another analysis run."""
+    from app.db.models.collection import Collection
+    from app.db.models.document import Document
+    from app.db.models.workflow import WorkflowBlockInstance, WorkflowDefinition, WorkflowEdge, WorkflowVersion
+    from app.db.models.workflow_run import WorkflowRun
+
+    if not run.document_id:
+        return
+    version = db.get(WorkflowVersion, run.version_id)
+    workflow = db.get(WorkflowDefinition, version.workflow_id) if version else None
+    if workflow is None or workflow.kind != "PREPROCESS":
+        return
+
+    document = db.get(Document, run.document_id)
+    if document is None or not document.collection_id:
+        return
+    collection = db.get(Collection, document.collection_id)
+    if collection is None or not collection.default_analysis_workflow_id:
+        return
+
+    analysis_version_query = db.query(WorkflowVersion).filter(
+        WorkflowVersion.workflow_id == collection.default_analysis_workflow_id
+    )
+    if collection.default_analysis_workflow_version is not None:
+        analysis_version = analysis_version_query.filter(
+            WorkflowVersion.version_number == collection.default_analysis_workflow_version
+        ).first()
+    else:
+        analysis_version = analysis_version_query.filter(
+            WorkflowVersion.published_at.isnot(None)
+        ).order_by(WorkflowVersion.version_number.desc()).first()
+    if analysis_version is None:
+        return
+
+    analysis_run = WorkflowRun(
+        version_id=analysis_version.id, document_id=document.id, collection_id=collection.id,
+        status="QUEUED", trigger="AUTO_ANALYSIS", dictionary_version=run.dictionary_version,
+    )
+    db.add(analysis_run)
+    # Analysis block types (classify/extract_entities/.../summarize) aren't in
+    # _STATUS_FOR_BLOCK_TYPE, so nothing else would move the document off its
+    # stale "INDEXED" label for the run's whole duration (사용자 확인 2026-07-21,
+    # "완료라는 표현이 아니라 분석중이라면 상태가 정확한 상태 아닌가?"). The run's
+    # own completion path (_advance's terminal-block branch, above) already
+    # sets doc.status back to "INDEXED" unconditionally when it finishes.
+    document.status = "ANALYZING"
+    db.commit()
+    db.refresh(analysis_run)
+
+    blocks = db.query(WorkflowBlockInstance).filter(
+        WorkflowBlockInstance.version_id == analysis_version.id
+    ).all()
+    edges = db.query(WorkflowEdge).filter(WorkflowEdge.version_id == analysis_version.id).all()
+    has_incoming = {e.to_block_id for e in edges}
+    entry_blocks = [b for b in blocks if b.id not in has_incoming]
+    for block in entry_blocks:
+        timeout_seconds = (block.config or {}).get("timeoutSeconds", 300)
+        run_workflow_step.apply_async(
+            args=[str(analysis_run.id), str(block.id)], time_limit=timeout_seconds,
+            queue=step_queue_for_block(block),
+        )
+
+
 def _advance(db, run_id: str, block, output: dict) -> None:
     """Resolve `block`'s outgoing edges and enqueue whatever should run next,
     or complete the run if `block` was terminal."""
@@ -345,9 +434,15 @@ def _advance(db, run_id: str, block, output: dict) -> None:
             target_step.completed_incoming_edges = (target_step.completed_incoming_edges or 0) + 1
             db.commit()
             if target_step.completed_incoming_edges >= incoming_to_target:
-                run_workflow_step.apply_async(args=[run_id, str(target.id)], time_limit=timeout_seconds)
+                run_workflow_step.apply_async(
+                    args=[run_id, str(target.id)], time_limit=timeout_seconds,
+                    queue=step_queue_for_block(target),
+                )
         else:
-            run_workflow_step.apply_async(args=[run_id, str(target.id)], time_limit=timeout_seconds)
+            run_workflow_step.apply_async(
+                args=[run_id, str(target.id)], time_limit=timeout_seconds,
+                queue=step_queue_for_block(target),
+            )
 
     if not taken_edges:
         # Terminal block for this branch. If no other step in the run is still
@@ -375,6 +470,7 @@ def _advance(db, run_id: str, block, output: dict) -> None:
                     doc.status = "INDEXED"
                     doc.updated_at = datetime.utcnow()
             db.commit()
+            _maybe_trigger_analysis(db, run)
 
 
 @celery_app.task(name="tasks.resume_workflow_run", queue="normal", bind=True)

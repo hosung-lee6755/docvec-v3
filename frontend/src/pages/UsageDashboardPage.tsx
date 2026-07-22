@@ -143,7 +143,7 @@ function SummaryCard({ icon, label, value, highlight }: { icon: React.ReactNode;
         {icon}
         <span style={{ fontSize: 13 }}>{label}</span>
       </div>
-      <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: highlight ? '#1d4ed8' : 'var(--color-text)' }}>{value}</div>
     </div>
   )
 }

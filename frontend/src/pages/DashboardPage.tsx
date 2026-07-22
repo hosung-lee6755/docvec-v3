@@ -87,10 +87,10 @@ export default function DashboardPage() {
         marginBottom: 'var(--space-8)', flexWrap: 'wrap', gap: 'var(--space-4)',
       }}>
         <div>
-          <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 6px', letterSpacing: 0.2 }}>
+          <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 6px', letterSpacing: 0.2 }}>
             {today}
           </p>
-          <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0, letterSpacing: -0.3 }}>
+          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, letterSpacing: -0.3 }}>
             {greeting}, <span style={{ color: '#4f46e5' }}>{user?.username ?? '사용자'}</span>님
           </h1>
         </div>
@@ -140,8 +140,8 @@ export default function DashboardPage() {
               }}>
                 <Icon size={17} style={spin ? { animation: 'spin 1s linear infinite' } : undefined} />
               </span>
-              <span style={{ fontSize: 13, color: '#64748b', fontWeight: 500 }}>{label}</span>
-              <div style={{ fontSize: 32, fontWeight: 800, letterSpacing: -0.5 }}>
+              <span style={{ fontSize: 13, color: 'var(--color-text-muted)', fontWeight: 500 }}>{label}</span>
+              <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>
                 {isLoading ? '···' : (value ?? 0)}
               </div>
             </div>
@@ -189,7 +189,7 @@ export default function DashboardPage() {
       {!!projectsData?.items.length && (
         <div style={{ marginBottom: 'var(--space-6)' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 'var(--space-3)' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
               <FolderKanban size={14} /> 내 프로젝트
             </span>
             <button
@@ -197,7 +197,7 @@ export default function DashboardPage() {
               onClick={() => navigate('/projects')}
               style={{
                 display: 'flex', alignItems: 'center', gap: 4, fontSize: 12,
-                color: '#64748b', background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--color-text-muted)', background: 'none', border: 'none', cursor: 'pointer',
               }}
             >
               전체 보기 <ArrowRight size={12} />
@@ -221,7 +221,7 @@ export default function DashboardPage() {
                 }}>
                   {p.name}
                 </div>
-                <div style={{ fontSize: 12, color: '#64748b', display: 'flex', gap: 'var(--space-3)' }}>
+                <div style={{ fontSize: 12, color: 'var(--color-text-muted)', display: 'flex', gap: 'var(--space-3)' }}>
                   <span>컬렉션 {p.collection_count}</span>
                   <span>멤버 {p.member_count}</span>
                 </div>
@@ -237,7 +237,7 @@ export default function DashboardPage() {
           border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)',
           display: 'flex', flexDirection: 'column', gap: 'var(--space-2)',
         }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#64748b', marginBottom: 'var(--space-1)' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 'var(--space-1)' }}>
             빠른 실행
           </div>
           {QUICK_LINKS.map(({ to, icon: Icon, label, desc }) => (
@@ -260,9 +260,9 @@ export default function DashboardPage() {
               </span>
               <span style={{ minWidth: 0, flex: '1 1 auto' }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
-                <div style={{ fontSize: 11, color: '#64748b' }}>{desc}</div>
+                <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{desc}</div>
               </span>
-              <ArrowRight size={13} className="quick-arrow" style={{ color: '#64748b', flexShrink: 0 }} />
+              <ArrowRight size={13} className="quick-arrow" style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
             </div>
           ))}
         </div>
@@ -271,11 +271,11 @@ export default function DashboardPage() {
           padding: 'var(--space-4)', background: '#ffffff',
           border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 13, fontWeight: 600, color: '#64748b', marginBottom: 'var(--space-3)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 13, fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 'var(--space-3)' }}>
             <FileText size={14} /> 최근 문서
           </div>
           {(recentDocs?.items.length ?? 0) === 0 && (
-            <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>업로드된 문서가 없습니다.</p>
+            <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: 0 }}>업로드된 문서가 없습니다.</p>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {recentDocs?.items.slice(0, 6).map((doc) => (
@@ -300,11 +300,11 @@ export default function DashboardPage() {
           padding: 'var(--space-4)', background: '#ffffff',
           border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 13, fontWeight: 600, color: '#64748b', marginBottom: 'var(--space-3)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 13, fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 'var(--space-3)' }}>
             <History size={14} /> 최근 검색
           </div>
           {(recentSearches?.items.length ?? 0) === 0 && (
-            <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>검색 기록이 없습니다.</p>
+            <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: 0 }}>검색 기록이 없습니다.</p>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {recentSearches?.items.map((h) => (
@@ -317,7 +317,7 @@ export default function DashboardPage() {
                 <span style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 'var(--space-2)' }}>
                   {h.query}
                 </span>
-                <span style={{ fontSize: 12, color: '#64748b', flexShrink: 0 }}>{h.result_count}건</span>
+                <span style={{ fontSize: 12, color: 'var(--color-text-muted)', flexShrink: 0 }}>{h.result_count}건</span>
               </div>
             ))}
           </div>

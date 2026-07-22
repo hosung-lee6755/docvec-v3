@@ -1,28 +1,33 @@
 import { useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import { useBlockTypes } from '../../hooks/useWorkflows'
-import { BLOCK_CATEGORIES, getBlockMeta } from '../../lib/workflowBlocks'
+import { BLOCK_CATEGORIES, PREPROCESS_BLOCK_CATEGORIES, getBlockMeta } from '../../lib/workflowBlocks'
 
 interface BlockPaletteProps {
   onAddBlock: (blockType: string) => void
+  // 워크플로우의 kind — PREPROCESS면 입력·추출/정제·정규화/구조·보호/분할·저장/
+  // 품질·제어 카테고리만, ANALYSIS(또는 아직 모를 때)는 기존 5개 카테고리만 보여준다.
+  workflowKind?: 'PREPROCESS' | 'ANALYSIS'
 }
 
-export default function BlockPalette({ onAddBlock }: BlockPaletteProps) {
+export default function BlockPalette({ onAddBlock, workflowKind }: BlockPaletteProps) {
   const { data, isLoading } = useBlockTypes()
   const [query, setQuery] = useState('')
+  const categories = workflowKind === 'PREPROCESS' ? PREPROCESS_BLOCK_CATEGORIES : BLOCK_CATEGORIES
 
   const groups = useMemo(() => {
     const items = data?.items ?? []
-    const filtered = query.trim()
-      ? items.filter((blockType) => getBlockMeta(blockType).label.includes(query.trim()))
+    const q = query.trim()
+    const filtered = q
+      ? items.filter((item) => getBlockMeta(item.block_type).label.includes(q))
       : items
-    return BLOCK_CATEGORIES
+    return categories
       .map((category) => ({
         category,
-        blockTypes: filtered.filter((blockType) => getBlockMeta(blockType).category === category),
+        blockTypes: filtered.filter((item) => getBlockMeta(item.block_type).category === category).map((item) => item.block_type),
       }))
       .filter((group) => group.blockTypes.length > 0)
-  }, [data, query])
+  }, [data, query, categories])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', padding: 'var(--space-3)' }}>

@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
+import { PROCESSING_STATUSES } from '../lib/documentStatus'
 
 export interface Document {
   id: string
@@ -18,6 +19,7 @@ export interface Document {
   tags: string[] | null
   suggested_tags: string[] | null
   metadata_status: string
+  active_run_id: string | null
 }
 
 export interface DocumentListResponse {
@@ -71,19 +73,28 @@ export function useDocuments(options: UseDocumentsOptions = {}) {
       return data
     },
     refetchInterval: (query) => {
+      // status=WAITING_REVIEW로 필터링된 조회는 정의상 결과에 처리중 상태가 절대
+      // 나오지 않아 아래 hasProcessing 조건이 항상 false다 — 그래서 사이드바
+      // 배지(useWaitingReviewCount)가 백그라운드에서 새로 WAITING_REVIEW가 된
+      // 문서를 반영하지 못하고 마운트 시점 값에 고정되는 버그가 있었다(사용자
+      // 확인 2026-07-21, "검토대기문서는 3건인데... 1이라는 숫자가 있다").
+      if (status === 'WAITING_REVIEW' || status === 'FAILED') return 15000
       const items = query.state.data?.items ?? []
-      const hasProcessing = items.some((d) =>
-        ['QUEUED', 'INGESTING', 'PARSING', 'STRUCTURING', 'NORMALIZING', 'CHUNKING', 'EMBEDDING', 'UPLOADING'].includes(d.status)
-      )
+      const hasProcessing = items.some((d) => PROCESSING_STATUSES.includes(d.status))
       return hasProcessing ? 3000 : false
     },
   })
 }
 
-const PROCESSING_STATUSES = [
-  'QUEUED', 'INGESTING', 'PARSING', 'STRUCTURING',
-  'NORMALIZING', 'CHUNKING', 'EMBEDDING', 'UPLOADING',
-]
+export function useWaitingReviewCount() {
+  const { data } = useDocuments({ status: 'WAITING_REVIEW', limit: 1 })
+  return data?.total ?? 0
+}
+
+export function useFailedCount() {
+  const { data } = useDocuments({ status: 'FAILED', limit: 1 })
+  return data?.total ?? 0
+}
 
 export function useDocument(id: string) {
   return useQuery<Document>({
@@ -185,6 +196,7 @@ export interface DocumentChunk2 {
   disabled: boolean
   edited: boolean
   hit_count: number
+  embedded: boolean
 }
 
 export interface DocumentChunksResult {
@@ -409,15 +421,18 @@ export function useUploadDocument() {
       file,
       collection_id,
       skip_review,
+      workflow_version_id,
     }: {
       file: File
       collection_id?: string
       skip_review?: boolean
+      workflow_version_id?: string
     }) => {
       const form = new FormData()
       form.append('file', file)
       if (collection_id) form.append('collection_id', collection_id)
       if (skip_review) form.append('skip_review', 'true')
+      if (workflow_version_id) form.append('workflow_version_id', workflow_version_id)
       const { data } = await apiClient.post('/documents/upload', form)
       return data
     },
@@ -447,15 +462,18 @@ export function useUploadZip() {
       file,
       collection_id,
       skip_review,
+      workflow_version_id,
     }: {
       file: File
       collection_id?: string
       skip_review?: boolean
+      workflow_version_id?: string
     }) => {
       const form = new FormData()
       form.append('file', file)
       if (collection_id) form.append('collection_id', collection_id)
       if (skip_review) form.append('skip_review', 'true')
+      if (workflow_version_id) form.append('workflow_version_id', workflow_version_id)
       const { data } = await apiClient.post<BulkUploadResponse>('/documents/upload-zip', form)
       return data
     },

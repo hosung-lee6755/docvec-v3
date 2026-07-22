@@ -153,7 +153,7 @@ export default function UsersPage() {
                       ) : (
                         <button
                           onClick={() => setConfirmDeleteId(u.id)}
-                          className="krds-btn small text"
+                          className="krds-btn text xsmall icon-btn danger"
                         >
                           <Trash2 size={14} />
                         </button>

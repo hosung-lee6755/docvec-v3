@@ -19,6 +19,8 @@ import DictionaryPage from './pages/DictionaryPage'
 import WorkflowsPage from './pages/WorkflowsPage'
 import WorkflowEditorPage from './pages/WorkflowEditorPage'
 import WorkflowRunsPage from './pages/WorkflowRunsPage'
+import ProcessingStatusPage from './pages/ProcessingStatusPage'
+import CleaningRulesPage from './pages/CleaningRulesPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -41,6 +43,7 @@ export default function App() {
         <Route index element={<DashboardPage />} />
         <Route path="documents" element={<DocumentsPage />} />
         <Route path="documents/:id" element={<DocumentDetailPage />} />
+        <Route path="processing-status" element={<ProcessingStatusPage />} />
         <Route path="projects" element={<ProjectsPage />}>
           <Route path=":projectId" element={<ProjectWorkspace />}>
             <Route index element={<Navigate to="collections" replace />} />
@@ -67,6 +70,7 @@ export default function App() {
         <Route path="audit-logs" element={<AuditLogPage />} />
         <Route path="usage" element={<UsageDashboardPage />} />
         <Route path="dictionary" element={<DictionaryPage />} />
+        <Route path="cleaning-rules" element={<CleaningRulesPage />} />
       </Route>
     </Routes>
   )

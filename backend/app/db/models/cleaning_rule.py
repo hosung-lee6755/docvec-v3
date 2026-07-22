@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Enum as SQLEnum, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Enum as SQLEnum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -71,4 +71,8 @@ class CleaningChange(Base):
     before_sample: Mapped[str | None] = mapped_column(Text, nullable=True)
     after_sample: Mapped[str | None] = mapped_column(Text, nullable=True)
     change_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 다건 발생 규칙(반복 머리말 제거, 커스텀 REGEX_REPLACE/EXACT_REMOVE/LINE_FILTER)의
+    # 개별 매치 문자열/라인 최대 20개 — 정제 비교 탭의 [상세] 팝오버. 문자 단위 변환
+    # (공백/유니코드/따옴표/전각폭 정규화)은 캡처하지 않아 null일 수 있다.
+    sample_matches: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

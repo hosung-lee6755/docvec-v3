@@ -53,6 +53,28 @@ export interface DictionaryImportResult {
   skipped_rows: number[]
 }
 
+export interface DictionaryImpactDocument {
+  id: string
+  filename: string
+}
+
+export interface DictionaryImpact {
+  entry_id: string
+  affected_document_count: number
+  documents: DictionaryImpactDocument[]
+}
+
+export interface DictionaryRevisionItem {
+  version: number
+  changed_entry_id: string | null
+  entry_term: string | null
+  entry_type: DictionaryEntryType | null
+  change_type: 'CREATE' | 'UPDATE' | 'DELETE' | 'IMPORT'
+  created_by: string | null
+  created_by_name: string | null
+  created_at: string
+}
+
 export function useDictionaryEntries(entryType: DictionaryEntryType) {
   return useQuery<{ items: DictionaryEntry[] }>({
     queryKey: ['dictionary-entries', entryType],
@@ -132,5 +154,27 @@ export function useImportDictionaryEntries(entryType: DictionaryEntryType) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dictionary-entries', entryType] })
     },
+  })
+}
+
+// 저장(생성/수정) 성공 직후 "영향 문서 N건" 다이얼로그를 띄우기 위한 온디맨드 조회 —
+// 백그라운드 refetch가 필요 없어 useQuery 대신 useMutation으로 감싼다.
+export function useDictionaryEntryImpact() {
+  return useMutation({
+    mutationFn: async (entryId: string) => {
+      const { data } = await apiClient.get(`/admin/dictionary/entries/${entryId}/impact`)
+      return data as DictionaryImpact
+    },
+  })
+}
+
+export function useDictionaryRevisions(enabled = true) {
+  return useQuery<{ revisions: DictionaryRevisionItem[] }>({
+    queryKey: ['dictionary-revisions'],
+    queryFn: async () => {
+      const { data } = await apiClient.get('/admin/dictionary/revisions')
+      return data
+    },
+    enabled,
   })
 }

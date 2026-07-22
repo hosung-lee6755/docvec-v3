@@ -10,11 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.deps import get_current_user
 from app.api.v1.permissions import check_project_access
 from app.core.crypto import encrypt_secret
+from app.db.models.chat_conversation import ChatConversation
+from app.db.models.chat_message import ChatMessage
 from app.db.models.collection import Collection
 from app.db.models.project import Project
 from app.db.models.project_api_key import ProjectApiKey
 from app.db.models.project_member import ProjectMember
 from app.db.models.user import User
+from app.db.models.workflow import WorkflowBlockInstance, WorkflowDefinition, WorkflowEdge, WorkflowVersion
+from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 from app.db.session import get_db
 from app.services.audit import log_audit
 
@@ -219,6 +223,24 @@ async def delete_project(
     ).all()
     for collection in collections:
         await cascade_delete_collection(db, collection)
+
+    # Everything below has no ON DELETE CASCADE from projects.id (same gap as
+    # cascade_delete_collection above), so it must be cleared manually too.
+    conv_ids_subq = select(ChatConversation.id).where(ChatConversation.project_id == project_id)
+    await db.execute(delete(ChatMessage).where(ChatMessage.conversation_id.in_(conv_ids_subq)))
+    await db.execute(delete(ChatConversation).where(ChatConversation.project_id == project_id))
+
+    await db.execute(delete(ProjectApiKey).where(ProjectApiKey.project_id == project_id))
+
+    workflow_ids_subq = select(WorkflowDefinition.id).where(WorkflowDefinition.project_id == project_id)
+    version_ids_subq = select(WorkflowVersion.id).where(WorkflowVersion.workflow_id.in_(workflow_ids_subq))
+    run_ids_subq = select(WorkflowRun.id).where(WorkflowRun.version_id.in_(version_ids_subq))
+    await db.execute(delete(WorkflowRunStep).where(WorkflowRunStep.run_id.in_(run_ids_subq)))
+    await db.execute(delete(WorkflowRun).where(WorkflowRun.version_id.in_(version_ids_subq)))
+    await db.execute(delete(WorkflowEdge).where(WorkflowEdge.version_id.in_(version_ids_subq)))
+    await db.execute(delete(WorkflowBlockInstance).where(WorkflowBlockInstance.version_id.in_(version_ids_subq)))
+    await db.execute(delete(WorkflowVersion).where(WorkflowVersion.workflow_id.in_(workflow_ids_subq)))
+    await db.execute(delete(WorkflowDefinition).where(WorkflowDefinition.project_id == project_id))
 
     await db.execute(delete(ProjectMember).where(ProjectMember.project_id == project_id))
     await db.delete(project)

@@ -42,17 +42,13 @@ export default function ProjectWorkspace() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>{project.name}</h1>
+        <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>{project.name}</h1>
         <button
           type="button"
           onClick={() => setShowSettings(true)}
           title="프로젝트 설정"
           aria-label="프로젝트 설정"
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            width: 28, height: 28, borderRadius: 'var(--radius-md, 8px)',
-            color: '#64748b', background: 'transparent', border: 'none', cursor: 'pointer',
-          }}
+          className="krds-btn text xsmall icon-btn"
         >
           <Settings size={16} />
         </button>
@@ -190,9 +186,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     return (
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          <p style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{project.name}</p>
+          <p style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>{project.name}</p>
           {project.is_owner && (
-            <button type="button" onClick={startEdit} style={{ color: '#94a3b8' }} title="수정">
+            <button type="button" onClick={startEdit} className="krds-btn text xsmall icon-btn" title="수정">
               <Pencil size={14} />
             </button>
           )}
@@ -329,7 +325,7 @@ function ProjectMembersTab({ projectId }: { projectId: string }) {
                     <button
                       type="button"
                       onClick={() => setConfirmRemoveUserId(m.user_id)}
-                      style={{ color: '#94a3b8' }}
+                      className="krds-btn text xsmall icon-btn"
                       title="멤버 제거"
                       aria-label="멤버 제거"
                     >

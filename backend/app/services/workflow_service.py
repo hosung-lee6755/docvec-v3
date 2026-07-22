@@ -44,10 +44,16 @@ def _display_names(blocks: list[WorkflowBlockInstance]) -> dict[str, str]:
     return names
 
 
-async def validate_graph(db: AsyncSession, version_id: str) -> list[str]:
-    """Returns a list of human-readable (Korean) validation errors. Empty
-    list means the graph is valid."""
-    errors: list[str] = []
+async def validate_graph(db: AsyncSession, version_id: str) -> list[dict]:
+    """Returns a list of {"message": <human-readable Korean error>, "block_id":
+    <str | None>} — block_id lets the editor highlight the offending block/edge
+    (워크플로우 에디터 팔레트/폼 재편, 통합 설계서 §5). Empty list means the graph
+    is valid. Graph-wide errors (empty graph, cycles, PREPROCESS-shape rules)
+    carry block_id=None since they don't point at one block."""
+    errors: list[dict] = []
+
+    def _add(message: str, block_id: str | None = None) -> None:
+        errors.append({"message": message, "block_id": block_id})
 
     blocks = (
         await db.scalars(
@@ -59,7 +65,15 @@ async def validate_graph(db: AsyncSession, version_id: str) -> list[str]:
     ).all()
 
     if not blocks:
-        return ["워크플로우에 블록이 하나도 없습니다"]
+        _add("워크플로우에 블록이 하나도 없습니다")
+        return errors
+
+    version = await db.get(WorkflowVersion, version_id)
+    workflow = await db.get(WorkflowDefinition, version.workflow_id) if version else None
+    # ANALYSIS 워크플로우는 "output" 블록이 종착점이고, PREPROCESS 워크플로우는
+    # "rag_store"가 종착점이다(문서를 분석 결과로 덧붙이는 ANALYSIS의 출력 블록은
+    # PREPROCESS 파이프라인 성격과 무관 — 사용자 확인 2026-07-20).
+    terminal_type = "rag_store" if workflow is not None and workflow.kind == "PREPROCESS" else "output"
 
     block_by_id = {str(b.id): b for b in blocks}
     incoming: dict[str, list[WorkflowEdge]] = {str(b.id): [] for b in blocks}
@@ -70,41 +84,41 @@ async def validate_graph(db: AsyncSession, version_id: str) -> list[str]:
 
     names = _display_names(list(blocks))
     for block in blocks:
-        name = names[str(block.id)]
+        block_id = str(block.id)
+        name = names[block_id]
         if block.block_type not in BLOCK_REGISTRY:
-            errors.append(f"'{name}' 블록의 유형이 올바르지 않습니다: {block.block_type}")
+            _add(f"'{name}' 블록의 유형이 올바르지 않습니다: {block.block_type}", block_id)
         # "input"은 ANALYSIS 워크플로우의 진입 블록, "file_validate"는 PREPROCESS
         # 워크플로우의 진입 블록 — 둘 다 들어오는 edge가 없는 게 정상이다.
-        if block.block_type not in ("input", "file_validate") and not incoming.get(str(block.id)):
-            errors.append(f"'{name}' 블록에 연결된 입력이 없습니다")
-        if block.block_type != "output" and not outgoing.get(str(block.id)):
-            errors.append(f"'{name}' 블록에 연결된 출력이 없습니다")
+        if block.block_type not in ("input", "file_validate") and not incoming.get(block_id):
+            _add(f"'{name}' 블록에 연결된 입력이 없습니다", block_id)
+        if block.block_type != terminal_type and not outgoing.get(block_id):
+            _add(f"'{name}' 블록에 연결된 출력이 없습니다", block_id)
 
     cycle_error = _find_cycle(block_by_id, outgoing)
     if cycle_error:
-        errors.append(cycle_error)
+        _add(cycle_error)
 
     for block in blocks:
         required = _REQUIRES_UPSTREAM.get(block.block_type)
         if not required:
             continue
-        reachable = _upstream_block_types(str(block.id), block_by_id, incoming)
+        block_id = str(block.id)
+        reachable = _upstream_block_types(block_id, block_by_id, incoming)
         missing = required - reachable
         if missing:
-            name = names[str(block.id)]
-            errors.append(f"'{name}' 블록은 상류에 {', '.join(sorted(missing))} 블록이 필요합니다")
+            name = names[block_id]
+            _add(f"'{name}' 블록은 상류에 {', '.join(sorted(missing))} 블록이 필요합니다", block_id)
 
-    version = await db.get(WorkflowVersion, version_id)
-    workflow = await db.get(WorkflowDefinition, version.workflow_id) if version else None
     if workflow is not None and workflow.kind == "PREPROCESS":
         entry_file_validates = [
             b for b in blocks if b.block_type == "file_validate" and not incoming.get(str(b.id))
         ]
         if len(entry_file_validates) != 1:
-            errors.append("전처리(PREPROCESS) 워크플로우는 진입 블록이 '파일 검증' 정확히 1개여야 합니다")
+            _add("전처리(PREPROCESS) 워크플로우는 진입 블록이 '파일 검증' 정확히 1개여야 합니다")
         rag_stores = [b for b in blocks if b.block_type == "rag_store"]
         if len(rag_stores) != 1:
-            errors.append("전처리(PREPROCESS) 워크플로우는 'RAG 저장' 블록이 정확히 1개여야 합니다")
+            _add("전처리(PREPROCESS) 워크플로우는 'RAG 저장' 블록이 정확히 1개여야 합니다")
 
     return errors
 

@@ -20,7 +20,7 @@ from app.pipeline.blocks.registry import BLOCK_REGISTRY
 @pytest.mark.asyncio
 async def test_list_block_types_returns_registry_keys():
     result = await list_block_types(current_user=MagicMock())
-    assert set(result["items"]) == set(BLOCK_REGISTRY.keys())
+    assert {item["block_type"] for item in result["items"]} == set(BLOCK_REGISTRY.keys())
 
 
 @pytest.mark.asyncio
@@ -80,7 +80,7 @@ async def test_publish_version_rejects_when_graph_invalid():
         ),
         patch(
             "app.api.v1.endpoints.workflows.validate_graph",
-            new=AsyncMock(return_value=["워크플로우에 블록이 하나도 없습니다"]),
+            new=AsyncMock(return_value=[{"message": "워크플로우에 블록이 하나도 없습니다", "block_id": None}]),
         ),
     ):
         with pytest.raises(HTTPException) as exc_info:

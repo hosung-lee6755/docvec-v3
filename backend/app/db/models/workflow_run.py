@@ -33,7 +33,13 @@ class WorkflowRun(Base):
     )
     # What started this run — drives IA/UI labeling (통합 설계서 §3.8 처리 이력).
     trigger: Mapped[str] = mapped_column(
-        SQLEnum("UPLOAD", "MANUAL", "REPROCESS", "COLLECTION_REPROCESS", name="workflow_run_trigger"),
+        SQLEnum(
+            "UPLOAD", "MANUAL", "REPROCESS", "COLLECTION_REPROCESS",
+            # 품질 검토 승인 후 자동으로 이어지는 분석 워크플로우 실행 — 통합
+            # 설계서 §7.4, 마이그레이션 a3c5e7b9d1f2가 DB enum에 이 값을 추가.
+            "AUTO_ANALYSIS",
+            name="workflow_run_trigger",
+        ),
         default="MANUAL",
         server_default="MANUAL",
     )

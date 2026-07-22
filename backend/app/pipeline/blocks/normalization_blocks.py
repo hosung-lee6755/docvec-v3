@@ -132,14 +132,20 @@ class TextCleanBlock(BaseBlock):
             changes: list[dict] = []
 
             def _apply(rule_key: str, fn, rule_id=None):
+                """fn returns (after, count) or, for rules where individual
+                occurrences are cheap to enumerate, (after, count, samples) —
+                samples backs the 정제 비교 탭의 [상세] 위치 목록 팝오버(축소
+                스코프: 문자 단위 변환은 샘플을 캡처하지 않는다)."""
                 nonlocal text
                 before = text
-                after, count = fn(before)
+                result = fn(before)
+                after, count, samples = result if len(result) == 3 else (*result, None)
                 if after != before and count:
                     changes.append({
                         "rule_key": rule_key, "rule_id": rule_id,
                         "before_sample": before[:200], "after_sample": after[:200],
                         "change_count": count,
+                        "sample_matches": samples[:20] if samples else None,
                     })
                 text = after
 
@@ -181,8 +187,10 @@ class TextCleanBlock(BaseBlock):
                         if not repeated:
                             return t, 0
                         kept = [line for line in t.splitlines() if line.strip() not in repeated]
-                        return "\n".join(kept), sum(
-                            1 for line in t.splitlines() if line.strip() in repeated
+                        return (
+                            "\n".join(kept),
+                            sum(1 for line in t.splitlines() if line.strip() in repeated),
+                            sorted(repeated)[:20],
                         )
                     _apply("builtin:repeated_headers", _dedupe_headers)
 
@@ -193,20 +201,38 @@ class TextCleanBlock(BaseBlock):
                     .order_by(CleaningRule.priority.desc())
                     .all()
                 )
+                def _exact_remove_context_samples(t: str, needle: str, limit: int = 20) -> list[str]:
+                    samples = []
+                    pos = 0
+                    while len(samples) < limit:
+                        idx = t.find(needle, pos)
+                        if idx == -1:
+                            break
+                        start, end = max(0, idx - 15), min(len(t), idx + len(needle) + 15)
+                        samples.append(t[start:end])
+                        pos = idx + len(needle)
+                    return samples
+
                 for rule in rules:
                     if rule.rule_type == "REGEX_REPLACE" and rule.pattern:
                         try:
-                            _apply(
-                                f"rule:{rule.id}",
-                                lambda t, p=rule.pattern, r=rule.replacement or "": re.subn(p, r, t),
-                                rule_id=rule.id,
-                            )
+                            re.compile(rule.pattern)
                         except re.error:
                             continue
+                        _apply(
+                            f"rule:{rule.id}",
+                            lambda t, p=rule.pattern, r=rule.replacement or "": (
+                                *re.subn(p, r, t),
+                                [m.group(0) for m in re.finditer(p, t)][:20],
+                            ),
+                            rule_id=rule.id,
+                        )
                     elif rule.rule_type == "EXACT_REMOVE" and rule.pattern:
                         _apply(
                             f"rule:{rule.id}",
-                            lambda t, p=rule.pattern: (t.replace(p, ""), t.count(p)),
+                            lambda t, p=rule.pattern: (
+                                t.replace(p, ""), t.count(p), _exact_remove_context_samples(t, p),
+                            ),
                             rule_id=rule.id,
                         )
                     elif rule.rule_type == "LINE_FILTER" and rule.pattern:
@@ -219,6 +245,7 @@ class TextCleanBlock(BaseBlock):
                             lambda t, rgx=regex: (
                                 "\n".join(line for line in t.splitlines() if not rgx.search(line)),
                                 sum(1 for line in t.splitlines() if rgx.search(line)),
+                                [line for line in t.splitlines() if rgx.search(line)][:20],
                             ),
                             rule_id=rule.id,
                         )
@@ -233,6 +260,7 @@ class TextCleanBlock(BaseBlock):
                     before_sample=change["before_sample"],
                     after_sample=change["after_sample"],
                     change_count=change["change_count"],
+                    sample_matches=change.get("sample_matches"),
                 ))
             db.add(DocumentTextRevision(
                 document_id=context.document_id, source="CLEAN", parsed_text=text, created_by=None,

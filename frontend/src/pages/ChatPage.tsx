@@ -99,11 +99,11 @@ function ConversationSidebar({
                   style={{ flex: '1 1 auto', minWidth: 0 }}
                 />
                 <button type="button" onClick={(e) => { e.stopPropagation(); commitEdit() }}
-                  style={{ color: '#16a34a', flexShrink: 0 }} title="저장">
+                  className="krds-btn text xsmall icon-btn success" title="저장">
                   <Check size={14} />
                 </button>
                 <button type="button" onClick={(e) => { e.stopPropagation(); setEditingId(null) }}
-                  style={{ color: '#64748b', flexShrink: 0 }} title="취소">
+                  className="krds-btn text xsmall icon-btn" title="취소">
                   <X size={14} />
                 </button>
               </>
@@ -113,11 +113,11 @@ function ConversationSidebar({
                   {c.title}
                 </span>
                 <button type="button" onClick={(e) => { e.stopPropagation(); startEdit(c) }}
-                  style={{ color: '#94a3b8', flexShrink: 0 }} title="이름 변경">
+                  className="krds-btn text xsmall icon-btn" title="이름 변경">
                   <Pencil size={13} />
                 </button>
                 <button type="button" onClick={(e) => { e.stopPropagation(); handleDelete(c.id) }}
-                  style={{ color: '#94a3b8', flexShrink: 0 }} title="삭제">
+                  className="krds-btn text xsmall icon-btn" title="삭제">
                   <Trash2 size={13} />
                 </button>
               </>

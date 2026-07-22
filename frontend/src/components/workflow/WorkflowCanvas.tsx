@@ -21,24 +21,30 @@ interface WorkflowCanvasProps {
   onConnect: (fromBlockId: string, toBlockId: string) => void
   onDeleteBlock: (blockId: string) => void
   onDeleteEdge: (edgeId: string) => void
+  // 마지막 저장 시 서버 유효성 검사가 지목한 블록 id 목록 — 캔버스에서
+  // 빨간색으로 강조 표시한다(워크플로우 에디터 팔레트/폼 재편, 통합 설계서 §5).
+  invalidBlockIds?: string[]
 }
 
 export default function WorkflowCanvas({
   blocks, edges, selectedBlockId, onSelectBlock, selectedEdgeId, onSelectEdge,
-  onMoveBlock, onConnect, onDeleteBlock, onDeleteEdge,
+  onMoveBlock, onConnect, onDeleteBlock, onDeleteEdge, invalidBlockIds,
 }: WorkflowCanvasProps) {
+  const invalidSet = useMemo(() => new Set(invalidBlockIds ?? []), [invalidBlockIds])
+
   const nodes: Node[] = useMemo(() => blocks.map((block) => ({
     id: block.id,
     type: 'blockNode',
     position: 'x' in block.position ? (block.position as { x: number; y: number }) : { x: 0, y: 0 },
-    data: { label: block.label ?? '', blockType: block.block_type },
+    data: { label: block.label ?? '', blockType: block.block_type, invalid: invalidSet.has(block.id) },
     selected: block.id === selectedBlockId,
-  })), [blocks, selectedBlockId])
+  })), [blocks, selectedBlockId, invalidSet])
 
   const flowEdges: Edge[] = useMemo(() => edges.map((edge) => {
     const sourceBlock = blocks.find((b) => b.id === edge.from_block_id)
     const color = sourceBlock ? getBlockMeta(sourceBlock.block_type).color : 'var(--color-text-muted)'
     const isSelected = edge.id === selectedEdgeId
+    const isInvalid = invalidSet.has(edge.from_block_id) || invalidSet.has(edge.to_block_id)
     return {
       id: edge.id,
       source: edge.from_block_id,
@@ -48,11 +54,11 @@ export default function WorkflowCanvas({
       labelBgStyle: { fill: 'var(--color-surface)' },
       selected: isSelected,
       style: {
-        stroke: isSelected ? 'var(--color-accent)' : color,
-        strokeWidth: isSelected ? 3 : 2,
+        stroke: isInvalid ? '#dc2626' : isSelected ? 'var(--color-accent)' : color,
+        strokeWidth: isSelected || isInvalid ? 3 : 2,
       },
     }
-  }), [edges, blocks, selectedEdgeId])
+  }), [edges, blocks, selectedEdgeId, invalidSet])
 
   const handleNodesChange = (changes: NodeChange[]) => {
     for (const change of changes) {

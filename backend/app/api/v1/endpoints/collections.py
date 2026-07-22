@@ -11,13 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.deps import get_current_user
 from app.api.v1.permissions import accessible_project_ids, check_collection_access, check_project_access
 from app.core.config import settings
+from app.db.models.chat_conversation import ChatConversation
+from app.db.models.chat_message import ChatMessage
 from app.db.models.collection import Collection
 from app.db.models.collection_member import CollectionMember
 from app.db.models.document import Document
+from app.db.models.golden_eval_run import GoldenEvalRun
+from app.db.models.golden_query import GoldenQuery
 from app.db.models.processing_job import ProcessingJob
 from app.db.models.project import Project
 from app.db.models.project_member import ProjectMember
 from app.db.models.user import User
+from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 from app.db.session import get_db
 from app.services.embedding import EMBEDDING_MODEL_REGISTRY
 
@@ -48,6 +53,13 @@ class CollectionCreate(BaseModel):
     chunk_min_tokens: int = settings.default_chunk_min_tokens
     chunk_overlap_tokens: int = settings.default_chunk_overlap_tokens
     chunk_strategy: Literal["size", "semantic"] = "size"
+    # 전처리/분석 워크플로우도 컬렉션 생성 시점에 바로 지정할 수 있게 한다 —
+    # 워크플로우가 프로젝트 단위로 만들어지는 구조이므로, 생성 이후 수정 화면을
+    # 따로 열 필요 없이 처음부터 선택 가능해야 한다는 사용자 확인 2026-07-20.
+    default_workflow_id: UUID | None = None
+    default_workflow_version: int | None = None
+    default_analysis_workflow_id: UUID | None = None
+    default_analysis_workflow_version: int | None = None
 
     _validate_model = field_validator("embedding_model")(_validate_embedding_model)
 
@@ -62,6 +74,16 @@ class CollectionUpdate(BaseModel):
     chunk_min_tokens: int | None = None
     chunk_overlap_tokens: int | None = None
     chunk_strategy: Literal["size", "semantic"] | None = None
+    # 이 컬렉션에 업로드되는 문서에 기본 적용할 전처리 워크플로우 — null이면
+    # 시스템 표준 워크플로우 사용. clear_default_workflow가 true면 두 필드를
+    # 명시적으로 null로 되돌린다(그냥 default_workflow_id=None만으로는 "값을
+    # 안 보냄"과 "null로 지운다"를 Pydantic의 exclude_unset으로 구분할 수 없어서).
+    default_workflow_id: UUID | None = None
+    default_workflow_version: int | None = None
+    clear_default_workflow: bool = False
+    default_analysis_workflow_id: UUID | None = None
+    default_analysis_workflow_version: int | None = None
+    clear_default_analysis_workflow: bool = False
 
     _validate_model = field_validator("embedding_model")(
         lambda v: _validate_embedding_model(v) if v is not None else v
@@ -85,6 +107,10 @@ class CollectionResponse(BaseModel):
     chunk_min_tokens: int
     chunk_overlap_tokens: int
     chunk_strategy: str
+    default_workflow_id: UUID | None = None
+    default_workflow_version: int | None = None
+    default_analysis_workflow_id: UUID | None = None
+    default_analysis_workflow_version: int | None = None
     reembed_status: str | None = None
     reembed_progress: str | None = None
     created_at: datetime
@@ -115,6 +141,17 @@ async def create_collection(
     if data.project_id is not None:
         await check_project_access(db, data.project_id, current_user, min_role="editor")
 
+    from app.db.models.workflow import WorkflowDefinition
+
+    if data.default_workflow_id is not None:
+        workflow = await db.get(WorkflowDefinition, data.default_workflow_id)
+        if workflow is None or workflow.kind != "PREPROCESS":
+            raise HTTPException(status_code=400, detail="전처리(PREPROCESS) 워크플로우만 기본값으로 지정할 수 있습니다")
+    if data.default_analysis_workflow_id is not None:
+        analysis_workflow = await db.get(WorkflowDefinition, data.default_analysis_workflow_id)
+        if analysis_workflow is None or analysis_workflow.kind != "ANALYSIS":
+            raise HTTPException(status_code=400, detail="분석(ANALYSIS) 워크플로우만 기본값으로 지정할 수 있습니다")
+
     collection = Collection(
         name=data.name,
         description=data.description,
@@ -125,6 +162,12 @@ async def create_collection(
         chunk_min_tokens=data.chunk_min_tokens,
         chunk_overlap_tokens=data.chunk_overlap_tokens,
         chunk_strategy=data.chunk_strategy,
+        default_workflow_id=str(data.default_workflow_id) if data.default_workflow_id else None,
+        default_workflow_version=data.default_workflow_version,
+        default_analysis_workflow_id=(
+            str(data.default_analysis_workflow_id) if data.default_analysis_workflow_id else None
+        ),
+        default_analysis_workflow_version=data.default_analysis_workflow_version,
         created_by=str(current_user.id),
     )
     db.add(collection)
@@ -218,6 +261,10 @@ async def list_collections(
             "chunk_overlap_tokens": c.chunk_overlap_tokens,
             "reembed_status": c.reembed_status,
             "reembed_progress": c.reembed_progress,
+            "default_workflow_id": c.default_workflow_id,
+            "default_workflow_version": c.default_workflow_version,
+            "default_analysis_workflow_id": c.default_analysis_workflow_id,
+            "default_analysis_workflow_version": c.default_analysis_workflow_version,
             "created_at": c.created_at,
             "document_count": counts.get(c.id, 0),
             "is_owner": str(c.created_by) == str(current_user.id),
@@ -279,13 +326,7 @@ async def update_collection(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    collection = await db.scalar(
-        select(Collection).where(Collection.id == collection_id)
-    )
-    if not collection:
-        raise HTTPException(status_code=404, detail="Collection not found")
-    if str(collection.created_by) != str(current_user.id):
-        raise HTTPException(status_code=403, detail="Access denied")
+    collection = await check_collection_access(db, collection_id, current_user, min_role="editor")
     if data.name is not None:
         collection.name = data.name
     if data.description is not None:
@@ -328,6 +369,31 @@ async def update_collection(
         collection.chunk_overlap_tokens = data.chunk_overlap_tokens
     if data.chunk_strategy is not None:
         collection.chunk_strategy = data.chunk_strategy
+
+    if data.clear_default_workflow:
+        collection.default_workflow_id = None
+        collection.default_workflow_version = None
+    elif data.default_workflow_id is not None:
+        from app.db.models.workflow import WorkflowDefinition
+
+        workflow = await db.get(WorkflowDefinition, data.default_workflow_id)
+        if workflow is None or workflow.kind != "PREPROCESS":
+            raise HTTPException(status_code=400, detail="전처리(PREPROCESS) 워크플로우만 기본값으로 지정할 수 있습니다")
+        collection.default_workflow_id = str(data.default_workflow_id)
+        collection.default_workflow_version = data.default_workflow_version
+
+    if data.clear_default_analysis_workflow:
+        collection.default_analysis_workflow_id = None
+        collection.default_analysis_workflow_version = None
+    elif data.default_analysis_workflow_id is not None:
+        from app.db.models.workflow import WorkflowDefinition
+
+        analysis_workflow = await db.get(WorkflowDefinition, data.default_analysis_workflow_id)
+        if analysis_workflow is None or analysis_workflow.kind != "ANALYSIS":
+            raise HTTPException(status_code=400, detail="분석(ANALYSIS) 워크플로우만 기본값으로 지정할 수 있습니다")
+        collection.default_analysis_workflow_id = str(data.default_analysis_workflow_id)
+        collection.default_analysis_workflow_version = data.default_analysis_workflow_version
+
     await db.commit()
     await db.refresh(collection)
     return collection
@@ -347,10 +413,32 @@ async def cascade_delete_collection(db: AsyncSession, collection: Collection) ->
     doc_ids = [doc.id for doc in docs]
     if doc_ids:
         await db.execute(delete(ProcessingJob).where(ProcessingJob.document_id.in_(doc_ids)))
+
+    # workflow_runs.document_id/collection_id and workflow_run_steps.run_id carry no
+    # ON DELETE CASCADE (unlike every other document/run-scoped table), so they must
+    # be cleared manually. A run can reference this collection directly (e.g. a
+    # COLLECTION_REPROCESS trigger) with no document_id at all, so match on both.
+    run_conditions = [WorkflowRun.collection_id == collection.id]
+    if doc_ids:
+        run_conditions.append(WorkflowRun.document_id.in_(doc_ids))
+    run_ids_subq = select(WorkflowRun.id).where(or_(*run_conditions))
+    await db.execute(delete(WorkflowRunStep).where(WorkflowRunStep.run_id.in_(run_ids_subq)))
+    await db.execute(delete(WorkflowRun).where(or_(*run_conditions)))
+
+    # chat_conversations.collection_id and chat_messages.conversation_id are in the
+    # same boat — no ON DELETE CASCADE.
+    conv_ids_subq = select(ChatConversation.id).where(ChatConversation.collection_id == collection.id)
+    await db.execute(delete(ChatMessage).where(ChatMessage.conversation_id.in_(conv_ids_subq)))
+    await db.execute(delete(ChatConversation).where(ChatConversation.collection_id == collection.id))
+
     for doc in docs:
         qdrant_service.delete_by_document(settings.qdrant_collection_name, str(doc.id))
         storage_service.delete_file(settings.minio_bucket_originals, doc.minio_key)
         await db.delete(doc)
+
+    # golden_queries.collection_id and golden_eval_runs.collection_id — same gap.
+    await db.execute(delete(GoldenEvalRun).where(GoldenEvalRun.collection_id == collection.id))
+    await db.execute(delete(GoldenQuery).where(GoldenQuery.collection_id == collection.id))
 
     await db.execute(delete(CollectionMember).where(CollectionMember.collection_id == collection.id))
 

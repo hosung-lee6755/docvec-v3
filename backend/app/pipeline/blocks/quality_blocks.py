@@ -87,6 +87,12 @@ class QualityCheckBlock(BaseBlock):
                 raise ValueError("지정된 문서를 찾을 수 없습니다.")
 
             warnings: list[str] = []
+            warning_categories: list[str] = []
+
+            def add_warning(category: str, message: str) -> None:
+                warnings.append(message)
+                warning_categories.append(category)
+
             scores: dict[str, float] = {}
 
             # --- 텍스트 수준 ---
@@ -96,12 +102,12 @@ class QualityCheckBlock(BaseBlock):
                 100.0 * text_len / cfg.min_extraction_chars if cfg.min_extraction_chars > 0 else 100.0
             )
             if text_len < cfg.min_extraction_chars:
-                warnings.append(f"추출된 텍스트가 매우 짧습니다({text_len}자 < {cfg.min_extraction_chars}자 기준).")
+                add_warning("textExtraction", f"추출된 텍스트가 매우 짧습니다({text_len}자 < {cfg.min_extraction_chars}자 기준).")
 
             broken_ratio = (len(_BROKEN_CHAR_RE.findall(text)) / text_len) if text_len else 0.0
             broken_score = _score_from_ratio(broken_ratio, warn_above=cfg.max_broken_char_ratio)
             if broken_ratio > cfg.max_broken_char_ratio:
-                warnings.append(f"깨진 문자 비율이 기준을 초과했습니다({broken_ratio:.1%} > {cfg.max_broken_char_ratio:.1%}).")
+                add_warning("textExtraction", f"깨진 문자 비율이 기준을 초과했습니다({broken_ratio:.1%} > {cfg.max_broken_char_ratio:.1%}).")
 
             scores["textExtraction"] = round((extraction_score + broken_score) / 2, 1)
 
@@ -121,9 +127,9 @@ class QualityCheckBlock(BaseBlock):
                 if confidence is not None:
                     ocr_score = 100.0 if confidence >= cfg.min_ocr_confidence else 100.0 * confidence / cfg.min_ocr_confidence
                     if confidence < cfg.min_ocr_confidence:
-                        warnings.append(f"OCR 신뢰도가 기준 이하입니다({confidence:.2f} < {cfg.min_ocr_confidence:.2f}).")
+                        add_warning("ocr", f"OCR 신뢰도가 기준 이하입니다({confidence:.2f} < {cfg.min_ocr_confidence:.2f}).")
                 else:
-                    warnings.append("OCR을 사용했으나 신뢰도 정보를 확인할 수 없습니다.")
+                    add_warning("ocr", "OCR을 사용했으나 신뢰도 정보를 확인할 수 없습니다.")
                     ocr_score = 70.0
             scores["ocr"] = round(ocr_score, 1)
 
@@ -134,7 +140,7 @@ class QualityCheckBlock(BaseBlock):
             max_page = max(page_numbers) if page_numbers else 0
             empty_page_ratio = ((max_page - len(page_numbers)) / max_page) if max_page else 0.0
             if empty_page_ratio > cfg.max_empty_page_ratio:
-                warnings.append(f"빈 페이지 비율이 기준을 초과했습니다({empty_page_ratio:.1%} > {cfg.max_empty_page_ratio:.1%}).")
+                add_warning("structure", f"빈 페이지 비율이 기준을 초과했습니다({empty_page_ratio:.1%} > {cfg.max_empty_page_ratio:.1%}).")
 
             # --- 구조 수준 ---
             nodes = (
@@ -144,7 +150,7 @@ class QualityCheckBlock(BaseBlock):
             )
             node_types = {n.node_type for n in nodes}
             if not nodes:
-                warnings.append("구조 분석 결과가 없습니다 — 상류에 구조 분석 블록이 있는지 확인하세요.")
+                add_warning("structure", "구조 분석 결과가 없습니다 — 상류에 구조 분석 블록이 있는지 확인하세요.")
                 structure_score = 50.0
             else:
                 heading_score = 100.0 if "HEADING" in node_types else 60.0
@@ -152,7 +158,7 @@ class QualityCheckBlock(BaseBlock):
                 empty_page_score = _score_from_ratio(empty_page_ratio, warn_above=cfg.max_empty_page_ratio)
                 structure_score = (heading_score + content_score + empty_page_score) / 3
                 if "HEADING" not in node_types:
-                    warnings.append("제목이 하나도 탐지되지 않았습니다.")
+                    add_warning("structure", "제목이 하나도 탐지되지 않았습니다.")
             scores["structure"] = round(structure_score, 1)
 
             # --- 사전 수준 (정보성 — 건수 0은 경고 아님) ---
@@ -169,18 +175,27 @@ class QualityCheckBlock(BaseBlock):
                 .filter(DocumentChunk.document_id == doc.id, DocumentChunk.run_id == context.run_id)
                 .all()
             )
+            short_chunk_ids: list[str] = []
+            long_chunk_ids: list[str] = []
             if chunks:
                 sizes = [len(c.chunk_text or "") for c in chunks]
-                too_small = sum(1 for s in sizes if s < cfg.min_chunk_chars_warning)
-                too_large = sum(1 for s in sizes if s > cfg.max_chunk_chars_warning)
+                short_chunk_ids = [str(c.id) for c, s in zip(chunks, sizes) if s < cfg.min_chunk_chars_warning]
+                long_chunk_ids = [str(c.id) for c, s in zip(chunks, sizes) if s > cfg.max_chunk_chars_warning]
+                too_small = len(short_chunk_ids)
+                too_large = len(long_chunk_ids)
                 bad_ratio = (too_small + too_large) / len(sizes)
                 chunking_score = _score_from_ratio(bad_ratio, warn_above=0.1)
+                # "chunking_short"/"chunking_long"으로 세분화 — 프런트가 경고를
+                # 클릭했을 때 청크 탭으로만 이동하는 게 아니라 metrics.short_chunk_ids/
+                # long_chunk_ids로 실제 문제되는 청크로 바로 스크롤·강조할 수 있게
+                # 한다(사용자 확인 2026-07-21, "청크텝에서 확인이아니라 문제가 되는
+                # 청크로 바로 이동하게 해야지").
                 if too_small:
-                    warnings.append(f"너무 짧은 청크가 {too_small}개 있습니다({cfg.min_chunk_chars_warning}자 미만).")
+                    add_warning("chunking_short", f"너무 짧은 청크가 {too_small}개 있습니다({cfg.min_chunk_chars_warning}자 미만).")
                 if too_large:
-                    warnings.append(f"너무 큰 청크가 {too_large}개 있습니다({cfg.max_chunk_chars_warning}자 초과).")
+                    add_warning("chunking_long", f"너무 큰 청크가 {too_large}개 있습니다({cfg.max_chunk_chars_warning}자 초과).")
             else:
-                warnings.append("생성된 청크가 없습니다.")
+                add_warning("chunking", "생성된 청크가 없습니다.")
                 chunking_score = 0.0
             scores["chunking"] = round(chunking_score, 1)
 
@@ -212,6 +227,8 @@ class QualityCheckBlock(BaseBlock):
                 "node_count": len(nodes),
                 "dictionary_application_count": dict_application_count,
                 "chunk_count": len(chunks),
+                "short_chunk_ids": short_chunk_ids,
+                "long_chunk_ids": long_chunk_ids,
                 **scores,
             }
 
@@ -223,6 +240,7 @@ class QualityCheckBlock(BaseBlock):
             report.scores = scores
             report.metrics = metrics
             report.warnings = warnings
+            report.warning_categories = warning_categories
             report.status = status
 
             doc.quality_status = status

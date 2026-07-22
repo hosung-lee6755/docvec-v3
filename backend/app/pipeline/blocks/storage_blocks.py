@@ -20,7 +20,10 @@ class ChunkSplitConfig(BaseModel):
     # 문장 경계만 필요(구조 분석 불필요). paragraph/section_aware/table_unit은
     # structure_analyze가 상류에서 만든 DocumentNode 트리가 반드시 필요하며,
     # 없으면 ChunkSplitBlock.run()이 실행 시점에 에러를 낸다(chunk_strategies.py).
-    strategy: str = "fixed"
+    # None = 컬렉션 기본값 상속 — "fixed"를 기본값으로 두면 run()의
+    # `cfg.strategy or coll_strategy`가 항상 참(비어있지 않은 문자열)이 되어
+    # 컬렉션에서 고른 전략(예: semantic)이 절대 반영되지 않는 버그가 있었다.
+    strategy: str | None = None
     max_tokens: int | None = None  # None = 컬렉션 기본값 상속
     min_tokens: int | None = None
     overlap_tokens: int | None = None

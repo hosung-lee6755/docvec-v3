@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     # also invalidate every stored API key.
     encryption_key: str = ""
 
+    # Invite code required at /auth/register to grant role="admin" instead of
+    # the default "viewer". Empty (default) disables admin self-registration
+    # entirely — there is no other UI to promote a user to admin.
+    admin_signup_code: str = ""
+
     @field_validator("environment")
     @classmethod
     def validate_environment(cls, v: str) -> str:

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { FolderOpen, FolderPlus, Trash2, X, Loader2, Pencil, Users, UserPlus, UserMinus, BarChart3, Layers } from 'lucide-react'
 import {
@@ -14,13 +14,32 @@ import {
   type Collection,
 } from '../hooks/useCollections'
 import { useProjects } from '../hooks/useProjects'
+import { useWorkflowGraph, useWorkflowVersions, useWorkflows, type WorkflowGraph } from '../hooks/useWorkflows'
+import { getBlockMeta } from '../lib/workflowBlocks'
 import { apiClient } from '../lib/apiClient'
 import GoldenEvalModal from '../components/GoldenEvalModal'
 import VectorStatsModal from '../components/VectorStatsModal'
 
-const DEFAULT_CHUNK_MAX = 512
-const DEFAULT_CHUNK_MIN = 50
-const DEFAULT_CHUNK_OVERLAP = 64
+// 그래프의 블록 체인을 진입 블록에서부터 첫 번째 나가는 에지를 따라가며 한 줄로
+// 요약 — 컬렉션 설정 화면의 "문서 처리" 섹션이 보여줄 미리보기용 단순화(분기가
+// 있는 그래프는 첫 갈래만 보여준다).
+function buildBlockChainPreview(graph: WorkflowGraph): string {
+  const hasIncoming = new Set(graph.edges.map((e) => e.to_block_id))
+  const outgoing = new Map(graph.edges.map((e) => [e.from_block_id, e.to_block_id]))
+  const entry = graph.blocks.find((b) => !hasIncoming.has(b.id))
+  if (!entry) return graph.blocks.map((b) => getBlockMeta(b.block_type).label).join(' → ')
+
+  const chain: string[] = []
+  let current: typeof entry | undefined = entry
+  const visited = new Set<string>()
+  while (current && !visited.has(current.id)) {
+    chain.push(getBlockMeta(current.block_type).label)
+    visited.add(current.id)
+    const nextId = outgoing.get(current.id)
+    current = nextId ? graph.blocks.find((b) => b.id === nextId) : undefined
+  }
+  return chain.join(' → ')
+}
 
 export default function CollectionsPage() {
   const location = useLocation()
@@ -34,6 +53,7 @@ export default function CollectionsPage() {
   const updateCollection = useUpdateCollection()
   const reprocessCollection = useReprocessCollection()
   const [reprocessResult, setReprocessResult] = useState<string | null>(null)
+  const [reprocessConfirming, setReprocessConfirming] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
 
   const handleExport = async (id: string) => {
@@ -54,11 +74,9 @@ export default function CollectionsPage() {
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
   const [newProjectId, setNewProjectId] = useState('')
-  const [newEmbeddingModel, setNewEmbeddingModel] = useState('bge-m3')
-  const [newChunkMax, setNewChunkMax] = useState(DEFAULT_CHUNK_MAX)
-  const [newChunkMin, setNewChunkMin] = useState(DEFAULT_CHUNK_MIN)
-  const [newChunkOverlap, setNewChunkOverlap] = useState(DEFAULT_CHUNK_OVERLAP)
-  const [newChunkStrategy, setNewChunkStrategy] = useState<'size' | 'semantic'>('size')
+  // '' = 표준 전처리(시스템 기본값) / 지정 안 함.
+  const [newWorkflowId, setNewWorkflowId] = useState('')
+  const [newAnalysisWorkflowId, setNewAnalysisWorkflowId] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [editId, setEditId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
@@ -95,17 +113,43 @@ export default function CollectionsPage() {
   useEffect(() => {
     if (routeProjectId) setNewProjectId(routeProjectId)
   }, [routeProjectId])
-  const [editEmbeddingModel, setEditEmbeddingModel] = useState('bge-m3')
-  const [editChunkMax, setEditChunkMax] = useState(DEFAULT_CHUNK_MAX)
-  const [editChunkMin, setEditChunkMin] = useState(DEFAULT_CHUNK_MIN)
-  const [editChunkOverlap, setEditChunkOverlap] = useState(DEFAULT_CHUNK_OVERLAP)
-  const [editChunkStrategy, setEditChunkStrategy] = useState<'size' | 'semantic'>('size')
   const [editDocCount, setEditDocCount] = useState(0)
+  // '' = 표준 전처리(시스템 기본값) — Collection.default_workflow_id가 null일 때의 의미.
+  const [editWorkflowId, setEditWorkflowId] = useState('')
+  const [editVersionMode, setEditVersionMode] = useState<'latest' | 'pinned'>('latest')
+  const [editVersionNumber, setEditVersionNumber] = useState<number | null>(null)
+  // '' = 자동 분석 없음 — Collection.default_analysis_workflow_id가 null일 때의 의미.
+  const [editAnalysisWorkflowId, setEditAnalysisWorkflowId] = useState('')
+  const [editAnalysisVersionMode, setEditAnalysisVersionMode] = useState<'latest' | 'pinned'>('latest')
+  const [editAnalysisVersionNumber, setEditAnalysisVersionNumber] = useState<number | null>(null)
   const [goldenEvalCollection, setGoldenEvalCollection] = useState<Collection | null>(null)
   const [vectorStatsCollection, setVectorStatsCollection] = useState<Collection | null>(null)
   const editingCollection = data?.items.find((c) => c.id === editId)
-  const editingReembedStatus = editingCollection?.reembed_status
-  const editingReembedProgress = editingCollection?.reembed_progress
+
+  // 시스템 표준 워크플로우는 project_id가 없어 GET /workflows?project_id=에 절대
+  // 나오지 않는다 — 개인(프로젝트 없는) 컬렉션은 커스텀 전처리 워크플로우를 가질
+  // 수 없으므로 "표준 전처리(시스템 기본값)" 옵션 하나만 고를 수 있다.
+  const { data: projectPreprocessWorkflows } = useWorkflows(editingCollection?.project_id ?? null, 'PREPROCESS')
+  const { data: projectAnalysisWorkflows } = useWorkflows(editingCollection?.project_id ?? null, 'ANALYSIS')
+  const { data: newProjectPreprocessWorkflows } = useWorkflows(newProjectId || null, 'PREPROCESS')
+  const { data: newProjectAnalysisWorkflows } = useWorkflows(newProjectId || null, 'ANALYSIS')
+  const { data: editWorkflowVersions } = useWorkflowVersions(editWorkflowId || null)
+  const publishedVersions = useMemo(
+    () => (editWorkflowVersions?.items ?? []).filter((v) => v.published_at).sort((a, b) => b.version_number - a.version_number),
+    [editWorkflowVersions],
+  )
+  const previewVersionId = useMemo(() => {
+    if (editVersionMode === 'pinned' && editVersionNumber != null) {
+      return publishedVersions.find((v) => v.version_number === editVersionNumber)?.id ?? null
+    }
+    return publishedVersions[0]?.id ?? null
+  }, [editVersionMode, editVersionNumber, publishedVersions])
+  const { data: previewGraph } = useWorkflowGraph(editWorkflowId || null, previewVersionId)
+  const { data: editAnalysisWorkflowVersions } = useWorkflowVersions(editAnalysisWorkflowId || null)
+  const analysisPublishedVersions = useMemo(
+    () => (editAnalysisWorkflowVersions?.items ?? []).filter((v) => v.published_at).sort((a, b) => b.version_number - a.version_number),
+    [editAnalysisWorkflowVersions],
+  )
   const [createNameError, setCreateNameError] = useState(false)
   const [editNameError, setEditNameError] = useState(false)
 
@@ -120,20 +164,14 @@ export default function CollectionsPage() {
       name: newName.trim(),
       description: newDescription.trim() || undefined,
       project_id: newProjectId || undefined,
-      embedding_model: newEmbeddingModel,
-      chunk_max_tokens: newChunkMax,
-      chunk_min_tokens: newChunkMin,
-      chunk_overlap_tokens: newChunkOverlap,
-      chunk_strategy: newChunkStrategy,
+      default_workflow_id: newWorkflowId || undefined,
+      default_analysis_workflow_id: newAnalysisWorkflowId || undefined,
     })
     setNewName('')
     setNewDescription('')
     setNewProjectId('')
-    setNewEmbeddingModel('bge-m3')
-    setNewChunkMax(DEFAULT_CHUNK_MAX)
-    setNewChunkMin(DEFAULT_CHUNK_MIN)
-    setNewChunkOverlap(DEFAULT_CHUNK_OVERLAP)
-    setNewChunkStrategy('size')
+    setNewWorkflowId('')
+    setNewAnalysisWorkflowId('')
     setShowCreateModal(false)
   }
 
@@ -143,6 +181,7 @@ export default function CollectionsPage() {
   }
 
   const handleReprocess = async (id: string) => {
+    setReprocessConfirming(false)
     setReprocessResult(null)
     const result = await reprocessCollection.mutateAsync(id)
     setReprocessResult(`${result.queued}건 재처리 시작됨${result.skipped ? ` (${result.skipped}건 건너뜀)` : ''}`)
@@ -214,11 +253,15 @@ export default function CollectionsPage() {
         name: editName.trim(),
         description: editDescription.trim() || undefined,
         project_id: editProjectId || undefined,
-        embedding_model: editEmbeddingModel,
-        chunk_max_tokens: editChunkMax,
-        chunk_min_tokens: editChunkMin,
-        chunk_overlap_tokens: editChunkOverlap,
-        chunk_strategy: editChunkStrategy,
+        ...(editWorkflowId
+          ? { default_workflow_id: editWorkflowId, default_workflow_version: editVersionMode === 'pinned' ? editVersionNumber : null }
+          : { clear_default_workflow: true }),
+        ...(editAnalysisWorkflowId
+          ? {
+            default_analysis_workflow_id: editAnalysisWorkflowId,
+            default_analysis_workflow_version: editAnalysisVersionMode === 'pinned' ? editAnalysisVersionNumber : null,
+          }
+          : { clear_default_analysis_workflow: true }),
       })
       setEditId(null)
       setEditName('')
@@ -232,16 +275,6 @@ export default function CollectionsPage() {
     <div>
       <style>{`
         @keyframes spin { to { transform: rotate(360deg) } }
-        .row-action-btn {
-          display: flex; align-items: center; justify-content: center;
-          width: 32px; height: 32px; border-radius: var(--radius-md, 8px);
-          color: #475569; background: transparent; border: 1px solid transparent;
-          transition: background-color .12s, color .12s, border-color .12s;
-        }
-        .row-action-btn:hover:not(:disabled) { background: #f1f5f9; border-color: #e2e8f0; }
-        .row-action-btn:disabled { color: #cbd5e1; cursor: not-allowed; }
-        .row-action-btn.danger:hover:not(:disabled) { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
-        .row-action-btn.accent:hover:not(:disabled) { background: #eff6ff; color: #2563eb; border-color: #bfdbfe; }
       `}</style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
         <h1 style={{ fontSize: 24, fontWeight: 700 }}>컬렉션</h1>
@@ -373,7 +406,7 @@ export default function CollectionsPage() {
                           <button
                             type="button"
                             onClick={() => openShareModal(col)}
-                            className="row-action-btn accent"
+                            className="krds-btn text xsmall icon-btn accent"
                             title="공유"
                             aria-label="공유"
                           >
@@ -387,25 +420,27 @@ export default function CollectionsPage() {
                             setEditName(col.name)
                             setEditDescription(col.description ?? '')
                             setEditProjectId(col.project_id ?? '')
-                            setEditEmbeddingModel(col.embedding_model)
-                            setEditChunkMax(col.chunk_max_tokens)
-                            setEditChunkMin(col.chunk_min_tokens)
-                            setEditChunkOverlap(col.chunk_overlap_tokens)
-                            setEditChunkStrategy(col.chunk_strategy ?? 'size')
                             setEditDocCount(col.document_count)
+                            setEditWorkflowId(col.default_workflow_id ?? '')
+                            setEditVersionMode(col.default_workflow_version != null ? 'pinned' : 'latest')
+                            setEditVersionNumber(col.default_workflow_version)
+                            setEditAnalysisWorkflowId(col.default_analysis_workflow_id ?? '')
+                            setEditAnalysisVersionMode(col.default_analysis_workflow_version != null ? 'pinned' : 'latest')
+                            setEditAnalysisVersionNumber(col.default_analysis_workflow_version)
                             setReprocessResult(null)
+                            setReprocessConfirming(false)
                           }}
-                          className="row-action-btn accent"
-                          title={col.is_owner ? '수정' : '소유자만 수정할 수 있습니다'}
+                          className="krds-btn text xsmall icon-btn accent"
+                          title={col.is_owner || col.role === 'editor' ? '수정' : '편집 권한이 있어야 수정할 수 있습니다'}
                           aria-label="수정"
-                          disabled={!col.is_owner}
+                          disabled={!(col.is_owner || col.role === 'editor')}
                         >
                           <Pencil size={17} />
                         </button>
                         <button
                           type="button"
                           onClick={() => setGoldenEvalCollection(col)}
-                          className="row-action-btn accent"
+                          className="krds-btn text xsmall icon-btn accent"
                           title="골든 쿼리 평가"
                           aria-label="골든 쿼리 평가"
                         >
@@ -414,7 +449,7 @@ export default function CollectionsPage() {
                         <button
                           type="button"
                           onClick={() => setVectorStatsCollection(col)}
-                          className="row-action-btn accent"
+                          className="krds-btn text xsmall icon-btn accent"
                           title="벡터 DB 현황"
                           aria-label="벡터 DB 현황"
                         >
@@ -424,7 +459,7 @@ export default function CollectionsPage() {
                           <button
                             type="button"
                             onClick={() => setConfirmDeleteId(col.id)}
-                            className="row-action-btn danger"
+                            className="krds-btn text xsmall icon-btn danger"
                             title="삭제"
                             aria-label="삭제"
                           >
@@ -522,88 +557,46 @@ export default function CollectionsPage() {
 
                       <div className="form-group">
                         <div className="form-tit">
-                          <label htmlFor="create_model">임베딩 모델</label>
+                          <label htmlFor="create_workflow">기본 전처리 워크플로우</label>
                         </div>
                         <div className="form-conts">
                           <select
-                            id="create_model"
+                            id="create_workflow"
                             className="krds-form-select"
-                            value={newEmbeddingModel}
-                            onChange={(e) => setNewEmbeddingModel(e.target.value)}
+                            value={newWorkflowId}
+                            onChange={(e) => setNewWorkflowId(e.target.value)}
                           >
-                            {embeddingModels?.items.map((m) => (
-                              <option key={m.key} value={m.key}>{m.label}</option>
+                            <option value="">표준 전처리 (시스템 기본값)</option>
+                            {(newProjectPreprocessWorkflows?.items ?? []).filter((wf) => !wf.is_system_default).map((wf) => (
+                              <option key={wf.id} value={wf.id}>{wf.name}</option>
                             ))}
                           </select>
                         </div>
+                        <p className="form-hint">
+                          업로드되는 문서의 임베딩 모델·청킹 방식은 이 워크플로우의 문서분할·RAG저장 블록 설정을 따릅니다.
+                        </p>
                       </div>
 
                       <div className="form-group">
                         <div className="form-tit">
-                          <label htmlFor="create_strategy">청킹 방식</label>
+                          <label htmlFor="create_analysis_workflow">기본 분석 워크플로우</label>
                         </div>
                         <div className="form-conts">
                           <select
-                            id="create_strategy"
+                            id="create_analysis_workflow"
                             className="krds-form-select"
-                            value={newChunkStrategy}
-                            onChange={(e) => setNewChunkStrategy(e.target.value as 'size' | 'semantic')}
+                            value={newAnalysisWorkflowId}
+                            onChange={(e) => setNewAnalysisWorkflowId(e.target.value)}
                           >
-                            <option value="size">크기 기준 (문단 경계 우선)</option>
-                            <option value="semantic">의미 기준 (문장 유사도 경계)</option>
+                            <option value="">자동 분석 안 함</option>
+                            {(newProjectAnalysisWorkflows?.items ?? []).map((wf) => (
+                              <option key={wf.id} value={wf.id}>{wf.name}</option>
+                            ))}
                           </select>
                         </div>
                         <p className="form-hint">
-                          의미 기준은 문장 임베딩 유사도가 급락하는 지점(주제 전환)에서 청크를 나눕니다. 처리 시간이 조금 더 걸립니다.
+                          지정하면 전처리가 끝난 직후 이 워크플로우가 문서마다 자동으로 실행됩니다(요약·키워드 등이 문서에 자동 반영).
                         </p>
-                      </div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--space-3)' }}>
-                        <div className="form-group">
-                          <div className="form-tit" style={{ minHeight: 51 }}>
-                            <label htmlFor="create_max">청크 최대 길이</label>
-                          </div>
-                          <div className="form-conts">
-                            <input
-                              id="create_max"
-                              type="number"
-                              className="krds-input"
-                              min={1}
-                              value={newChunkMax}
-                              onChange={(e) => setNewChunkMax(Number(e.target.value))}
-                            />
-                          </div>
-                        </div>
-                        <div className="form-group">
-                          <div className="form-tit" style={{ minHeight: 51 }}>
-                            <label htmlFor="create_min">청크 최소 길이</label>
-                          </div>
-                          <div className="form-conts">
-                            <input
-                              id="create_min"
-                              type="number"
-                              className="krds-input"
-                              min={1}
-                              value={newChunkMin}
-                              onChange={(e) => setNewChunkMin(Number(e.target.value))}
-                            />
-                          </div>
-                        </div>
-                        <div className="form-group">
-                          <div className="form-tit" style={{ minHeight: 51 }}>
-                            <label htmlFor="create_overlap">겹침 길이</label>
-                          </div>
-                          <div className="form-conts">
-                            <input
-                              id="create_overlap"
-                              type="number"
-                              className="krds-input"
-                              min={0}
-                              value={newChunkOverlap}
-                              onChange={(e) => setNewChunkOverlap(Number(e.target.value))}
-                            />
-                          </div>
-                        </div>
                       </div>
 
                       {createCollection.isError && (
@@ -734,100 +727,159 @@ export default function CollectionsPage() {
 
                       <div className="form-group">
                         <div className="form-tit">
-                          <label htmlFor="edit_model">임베딩 모델</label>
+                          <label htmlFor="edit_workflow">문서 처리 — 기본 워크플로우</label>
                         </div>
                         <div className="form-conts">
                           <select
-                            id="edit_model"
+                            id="edit_workflow"
                             className="krds-form-select"
-                            value={editEmbeddingModel}
-                            onChange={(e) => setEditEmbeddingModel(e.target.value)}
-                            disabled={editingReembedStatus === 'PENDING' || editingReembedStatus === 'RUNNING'}
+                            value={editWorkflowId}
+                            onChange={(e) => {
+                              setEditWorkflowId(e.target.value)
+                              setEditVersionMode('latest')
+                              setEditVersionNumber(null)
+                            }}
                           >
-                            {embeddingModels?.items.map((m) => (
-                              <option key={m.key} value={m.key}>{m.label}</option>
+                            <option value="">표준 전처리 (시스템 기본값)</option>
+                            {(projectPreprocessWorkflows?.items ?? []).filter((wf) => !wf.is_system_default).map((wf) => (
+                              <option key={wf.id} value={wf.id}>{wf.name}</option>
                             ))}
                           </select>
                         </div>
-                        {(editingReembedStatus === 'PENDING' || editingReembedStatus === 'RUNNING') ? (
-                          <p className="form-hint">
-                            재임베딩이 진행 중입니다 ({editingReembedProgress}). 완료 후 다시 변경할 수 있습니다.
-                          </p>
-                        ) : editDocCount > 0 ? (
-                          <p className="form-hint">
-                            문서 {editDocCount}개가 이미 있습니다. 변경하면 기존 청크가 백그라운드에서
-                            새 모델로 재임베딩됩니다 (완료 전까지 검색 결과가 일시적으로 섞일 수 있습니다).
-                          </p>
-                        ) : null}
-                      </div>
-
-                      <div className="form-group">
-                        <div className="form-tit">
-                          <label htmlFor="edit_strategy">청킹 방식</label>
-                        </div>
-                        <div className="form-conts">
-                          <select
-                            id="edit_strategy"
-                            className="krds-form-select"
-                            value={editChunkStrategy}
-                            onChange={(e) => setEditChunkStrategy(e.target.value as 'size' | 'semantic')}
-                          >
-                            <option value="size">크기 기준 (문단 경계 우선)</option>
-                            <option value="semantic">의미 기준 (문장 유사도 경계)</option>
-                          </select>
-                        </div>
                         <p className="form-hint">
-                          변경 후 "이 설정으로 다시 처리"를 누르면 기존 문서에도 적용됩니다.
+                          이 컬렉션에 업로드되는 문서에 기본 적용될 전처리 워크플로우입니다.
+                          {!editingCollection?.project_id && ' 개인 컬렉션은 프로젝트에 속한 커스텀 워크플로우를 가질 수 없어 시스템 기본값만 선택할 수 있습니다.'}
                         </p>
                       </div>
 
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--space-3)' }}>
+                      {editWorkflowId && (
                         <div className="form-group">
-                          <div className="form-tit" style={{ minHeight: 51 }}>
-                            <label htmlFor="edit_max">청크 최대 길이</label>
+                          <div className="form-tit">
+                            <label>버전</label>
                           </div>
-                          <div className="form-conts">
-                            <input
-                              id="edit_max"
-                              type="number"
-                              className="krds-input"
-                              min={1}
-                              value={editChunkMax}
-                              onChange={(e) => setEditChunkMax(Number(e.target.value))}
-                            />
+                          <div className="form-conts" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <div className="krds-form-check" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <input
+                                type="radio"
+                                id="edit_version_mode_latest"
+                                name="edit_version_mode"
+                                checked={editVersionMode === 'latest'}
+                                onChange={() => { setEditVersionMode('latest'); setEditVersionNumber(null) }}
+                              />
+                              <label htmlFor="edit_version_mode_latest" style={{ fontSize: 13, fontWeight: 400 }}>
+                                항상 최신 발행 버전
+                              </label>
+                            </div>
+                            <div className="krds-form-check" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <input
+                                type="radio"
+                                id="edit_version_mode_pinned"
+                                name="edit_version_mode"
+                                checked={editVersionMode === 'pinned'}
+                                onChange={() => setEditVersionMode('pinned')}
+                              />
+                              <label htmlFor="edit_version_mode_pinned" style={{ fontSize: 13, fontWeight: 400 }}>
+                                버전 고정
+                              </label>
+                              {editVersionMode === 'pinned' && (
+                                <select
+                                  className="krds-form-select"
+                                  style={{ marginLeft: 6, width: 'auto' }}
+                                  value={editVersionNumber ?? ''}
+                                  onChange={(e) => setEditVersionNumber(e.target.value ? Number(e.target.value) : null)}
+                                >
+                                  <option value="">선택</option>
+                                  {publishedVersions.map((v) => (
+                                    <option key={v.id} value={v.version_number}>v{v.version_number}</option>
+                                  ))}
+                                </select>
+                              )}
+                            </div>
                           </div>
                         </div>
-                        <div className="form-group">
-                          <div className="form-tit" style={{ minHeight: 51 }}>
-                            <label htmlFor="edit_min">청크 최소 길이</label>
-                          </div>
-                          <div className="form-conts">
-                            <input
-                              id="edit_min"
-                              type="number"
-                              className="krds-input"
-                              min={1}
-                              value={editChunkMin}
-                              onChange={(e) => setEditChunkMin(Number(e.target.value))}
-                            />
-                          </div>
+                      )}
+
+                      {editWorkflowId && previewGraph && previewGraph.blocks.length > 0 && (
+                        <p className="form-hint" style={{
+                          background: '#f8fafc', border: '1px solid var(--color-border, #e2e8f0)',
+                          borderRadius: 'var(--radius-md)', padding: 'var(--space-2) var(--space-3)',
+                        }}>
+                          {buildBlockChainPreview(previewGraph)}
+                        </p>
+                      )}
+
+                      <div className="form-group">
+                        <div className="form-tit">
+                          <label htmlFor="edit_analysis_workflow">기본 분석 워크플로우</label>
                         </div>
-                        <div className="form-group">
-                          <div className="form-tit" style={{ minHeight: 51 }}>
-                            <label htmlFor="edit_overlap">겹침 길이</label>
-                          </div>
-                          <div className="form-conts">
-                            <input
-                              id="edit_overlap"
-                              type="number"
-                              className="krds-input"
-                              min={0}
-                              value={editChunkOverlap}
-                              onChange={(e) => setEditChunkOverlap(Number(e.target.value))}
-                            />
-                          </div>
+                        <div className="form-conts">
+                          <select
+                            id="edit_analysis_workflow"
+                            className="krds-form-select"
+                            value={editAnalysisWorkflowId}
+                            onChange={(e) => {
+                              setEditAnalysisWorkflowId(e.target.value)
+                              setEditAnalysisVersionMode('latest')
+                              setEditAnalysisVersionNumber(null)
+                            }}
+                          >
+                            <option value="">자동 분석 안 함</option>
+                            {(projectAnalysisWorkflows?.items ?? []).map((wf) => (
+                              <option key={wf.id} value={wf.id}>{wf.name}</option>
+                            ))}
+                          </select>
                         </div>
+                        <p className="form-hint">
+                          지정하면 전처리가 끝난 직후 이 워크플로우가 문서마다 자동으로 실행됩니다(요약·키워드 등이 문서에 자동 반영).
+                        </p>
                       </div>
+
+                      {editAnalysisWorkflowId && (
+                        <div className="form-group">
+                          <div className="form-tit">
+                            <label>버전</label>
+                          </div>
+                          <div className="form-conts" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <div className="krds-form-check" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <input
+                                type="radio"
+                                id="edit_analysis_version_mode_latest"
+                                name="edit_analysis_version_mode"
+                                checked={editAnalysisVersionMode === 'latest'}
+                                onChange={() => { setEditAnalysisVersionMode('latest'); setEditAnalysisVersionNumber(null) }}
+                              />
+                              <label htmlFor="edit_analysis_version_mode_latest" style={{ fontSize: 13, fontWeight: 400 }}>
+                                항상 최신 발행 버전
+                              </label>
+                            </div>
+                            <div className="krds-form-check" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <input
+                                type="radio"
+                                id="edit_analysis_version_mode_pinned"
+                                name="edit_analysis_version_mode"
+                                checked={editAnalysisVersionMode === 'pinned'}
+                                onChange={() => setEditAnalysisVersionMode('pinned')}
+                              />
+                              <label htmlFor="edit_analysis_version_mode_pinned" style={{ fontSize: 13, fontWeight: 400 }}>
+                                버전 고정
+                              </label>
+                              {editAnalysisVersionMode === 'pinned' && (
+                                <select
+                                  className="krds-form-select"
+                                  style={{ marginLeft: 6, width: 'auto' }}
+                                  value={editAnalysisVersionNumber ?? ''}
+                                  onChange={(e) => setEditAnalysisVersionNumber(e.target.value ? Number(e.target.value) : null)}
+                                >
+                                  <option value="">선택</option>
+                                  {analysisPublishedVersions.map((v) => (
+                                    <option key={v.id} value={v.version_number}>v{v.version_number}</option>
+                                  ))}
+                                </select>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       {updateCollection.isError && (
                         <div style={{
@@ -849,16 +901,42 @@ export default function CollectionsPage() {
                         </div>
                       )}
 
-                      <button
-                        type="button"
-                        className="krds-btn medium tertiary"
-                        disabled={reprocessCollection.isPending || editDocCount === 0}
-                        onClick={() => editId && handleReprocess(editId)}
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--space-2)', width: '100%', marginBottom: 'var(--space-3)' }}
-                      >
-                        {reprocessCollection.isPending && <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />}
-                        이 설정으로 다시 처리
-                      </button>
+                      {reprocessConfirming ? (
+                        <div style={{
+                          display: 'flex', flexDirection: 'column', gap: 'var(--space-2)',
+                          background: '#fef2f2', border: '1px solid #dc2626',
+                          borderRadius: 'var(--radius-md)', padding: 'var(--space-3)',
+                          marginBottom: 'var(--space-3)',
+                        }}>
+                          <span style={{ fontSize: 13, color: '#dc2626' }}>
+                            문서 {editDocCount}건을 현재 설정으로 다시 처리합니다. 예상 소요 시간은 약 {Math.max(1, Math.ceil(editDocCount * 0.5))}분입니다. 계속할까요?
+                          </span>
+                          <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
+                            <button
+                              type="button"
+                              onClick={() => setReprocessConfirming(false)}
+                              className="krds-btn xsmall secondary"
+                            >취소</button>
+                            <button
+                              type="button"
+                              onClick={() => editId && handleReprocess(editId)}
+                              disabled={reprocessCollection.isPending}
+                              className="krds-btn xsmall primary"
+                            >확인</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="krds-btn medium tertiary"
+                          disabled={reprocessCollection.isPending || editDocCount === 0}
+                          onClick={() => setReprocessConfirming(true)}
+                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--space-2)', width: '100%', marginBottom: 'var(--space-3)' }}
+                        >
+                          {reprocessCollection.isPending && <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />}
+                          이 설정으로 다시 처리
+                        </button>
+                      )}
 
                       <button
                         type="button"
@@ -924,13 +1002,14 @@ export default function CollectionsPage() {
                 <div className="modal-conts">
                   <div className="conts-area" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
                     {shareProjectId && (
-                      <div style={{
+                      <div className="krds-form-check" style={{
                         display: 'flex', alignItems: 'flex-start', gap: 'var(--space-3)',
                         padding: 'var(--space-3)', background: '#f8fafc',
                         border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)',
                       }}>
                         <input
                           type="checkbox"
+                          className="chk"
                           id="restrict_to_members"
                           checked={shareRestrict}
                           onChange={handleToggleRestrict}
@@ -1077,7 +1156,7 @@ export default function CollectionsPage() {
                                       <button
                                         type="button"
                                         onClick={() => setConfirmRemoveUserId(m.user_id)}
-                                        className="row-action-btn danger"
+                                        className="krds-btn text xsmall icon-btn danger"
                                         title="멤버 제거"
                                         aria-label="멤버 제거"
                                       >

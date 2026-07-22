@@ -103,3 +103,29 @@ class DictionaryImportResult(BaseModel):
     updated: int
     skipped: int
     skipped_rows: list[int]
+
+
+class DictionaryImpactDocument(BaseModel):
+    id: UUID
+    filename: str
+
+
+class DictionaryImpactResponse(BaseModel):
+    entry_id: UUID
+    affected_document_count: int
+    documents: list[DictionaryImpactDocument]
+
+
+class DictionaryRevisionItem(BaseModel):
+    version: int
+    changed_entry_id: UUID | None
+    entry_term: str | None
+    entry_type: DictionaryEntryType | None
+    change_type: str
+    created_by: UUID | None
+    created_by_name: str | None
+    created_at: datetime
+
+
+class DictionaryRevisionsResponse(BaseModel):
+    revisions: list[DictionaryRevisionItem]

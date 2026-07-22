@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  ArrowLeft, CheckCircle2, Download, FileText, FolderOpen, Loader2, Trash2, XCircle,
+  ArrowLeft, Download, FileText, FolderOpen, Trash2,
 } from 'lucide-react'
 import {
   useDeleteRun,
@@ -12,6 +12,7 @@ import {
 } from '../hooks/useWorkflows'
 import { apiClient } from '../lib/apiClient'
 import { getBlockMeta } from '../lib/workflowBlocks'
+import StepTimeline from '../components/workflow/StepTimeline'
 
 const RUN_STATUS_BADGE: Record<string, { label: string; className: string }> = {
   QUEUED: { label: '대기 중', className: 'bg-secondary' },
@@ -73,7 +74,7 @@ function ChangeView({ change }: { change: RunChange }) {
           borderRadius: 'var(--radius-sm)', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           maxHeight: 180, overflow: 'auto',
         }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#b91c1c', marginBottom: 4 }}>변경 전</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#b91c1c', marginBottom: 4 }}>변경 전</div>
           {change.before ? String(change.before) : <span style={{ color: '#94a3b8' }}>(없음)</span>}
         </div>
         <div style={{
@@ -81,7 +82,7 @@ function ChangeView({ change }: { change: RunChange }) {
           borderRadius: 'var(--radius-sm)', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           maxHeight: 180, overflow: 'auto',
         }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#15803d', marginBottom: 4 }}>변경 후</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#15803d', marginBottom: 4 }}>변경 후</div>
           {change.after ? String(change.after) : <span style={{ color: '#94a3b8' }}>(없음)</span>}
         </div>
       </div>
@@ -216,7 +217,7 @@ export default function WorkflowRunsPage() {
                         <button
                           type="button"
                           onClick={() => handleExport(run.id)}
-                          className="krds-btn xsmall text"
+                          className="krds-btn xsmall text icon-btn accent"
                           title="결과 내보내기 (JSON)"
                           aria-label="결과 내보내기"
                         >
@@ -225,7 +226,7 @@ export default function WorkflowRunsPage() {
                         <button
                           type="button"
                           onClick={() => setConfirmDeleteId(run.id)}
-                          className="krds-btn xsmall text"
+                          className="krds-btn xsmall text icon-btn danger"
                           title="실행 기록 삭제"
                           aria-label="실행 기록 삭제"
                           disabled={run.status === 'QUEUED' || run.status === 'RUNNING'}
@@ -278,49 +279,13 @@ export default function WorkflowRunsPage() {
 
                 <div>
                   <h3 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 var(--space-2)' }}>블록별 실행 결과</h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                    {steps.map((step) => {
-                      const output = step.output
-                        ? Object.fromEntries(Object.entries(step.output).filter(([k]) => k !== 'text' && k !== 'changes'))
-                        : null
-                      return (
-                        <div key={step.id} style={{
-                          padding: 'var(--space-2)', background: '#f8fafc', borderRadius: 'var(--radius-sm)',
-                          display: 'flex', flexDirection: 'column', gap: 4,
-                        }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 13 }}>
-                            {step.status === 'COMPLETED' && <CheckCircle2 size={14} style={{ color: '#16a34a' }} />}
-                            {step.status === 'FAILED' && <XCircle size={14} style={{ color: '#dc2626' }} />}
-                            {(step.status === 'PENDING' || step.status === 'RUNNING') && (
-                              <Loader2 size={14} style={{ animation: 'spin 1s linear infinite', color: '#2563eb' }} />
-                            )}
-                            <strong>{blockName(step.block_instance_id)}</strong>
-                            <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                              {RUN_STATUS_BADGE[step.status]?.label ?? step.status}
-                            </span>
-                          </div>
-                          {step.error_message && (
-                            <div style={{ fontSize: 12, color: '#b91c1c' }}>{step.error_message}</div>
-                          )}
-                          {output && Object.keys(output).length > 0 && (
-                            <pre style={{
-                              margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                              color: '#475569', maxHeight: 120, overflow: 'auto',
-                            }}>
-                              {JSON.stringify(output, null, 2)}
-                            </pre>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
+                  <StepTimeline steps={steps} blockName={blockName} />
                 </div>
               </div>
             )}
           </div>
         </div>
       )}
-      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
   )
 }

@@ -6,6 +6,7 @@
 그대로이므로). `app/pipeline/tasks/workflow.py`의 실행기(캐시/DAG 진행)는
 전혀 건드리지 않고 그대로 재사용한다.
 """
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -76,9 +77,24 @@ def downstream_closure(
     return visited
 
 
-async def start_partial_reprocess(
-    db: AsyncSession, doc: Document, start_block: WorkflowBlockInstance, reason: str | None,
-) -> WorkflowRun:
+@dataclass
+class ReprocessImpact:
+    """`compute_reprocess_impact`의 계산 결과 — `impact`는 그대로 API 응답이나
+    `WorkflowRun.impact`에 쓸 수 있는 dict, 나머지 필드는 `start_partial_reprocess`가
+    실제 run을 만들 때 재계산 없이 재사용하기 위한 것."""
+
+    parent_run: WorkflowRun
+    upstream_blocks: list[WorkflowBlockInstance]
+    parent_steps_by_block: dict[str, WorkflowRunStep]
+    impact: dict
+
+
+async def compute_reprocess_impact(
+    db: AsyncSession, doc: Document, start_block: WorkflowBlockInstance, reason: str | None = None,
+) -> ReprocessImpact:
+    """재처리 영향도 계산 — WorkflowRun을 만들거나 커밋하지 않는다. 미리보기 전용
+    `GET .../reprocess/impact`와 실제 실행하는 `start_partial_reprocess` 양쪽에서
+    재사용해, 영향도 계산 로직이 두 곳에서 갈라지지 않게 한다."""
     if not doc.active_run_id:
         raise ReprocessError("이 문서는 아직 워크플로우로 처리된 적이 없어 이 기능을 사용할 수 없습니다.")
     parent_run = await db.get(WorkflowRun, doc.active_run_id)
@@ -118,10 +134,40 @@ async def start_partial_reprocess(
                 f"상류 블록('{b.block_type}')이 완료되지 않아 이 시작점부터 재처리를 시작할 수 없습니다."
             )
 
-    dictionary_version = await current_dictionary_version(db)
-
     has_incoming = {str(e.to_block_id) for e in edges}
     full_reprocess_required = str(start_block.id) not in has_incoming
+
+    affected_node_count = await db.scalar(
+        select(func.count()).select_from(DocumentNode).where(
+            DocumentNode.document_id == doc.id, DocumentNode.run_id == parent_run.id
+        )
+    )
+    affected_chunk_count = await db.scalar(
+        select(func.count()).select_from(DocumentChunk).where(
+            DocumentChunk.document_id == doc.id, DocumentChunk.run_id == parent_run.id
+        )
+    )
+
+    impact = {
+        "reason": reason,
+        "changeType": "MANUAL",
+        "affectedBlocks": sorted({b.block_type for b in blocks if str(b.id) in closure}),
+        "affectedNodeCount": affected_node_count or 0,
+        "affectedChunkCount": affected_chunk_count or 0,
+        "fullReprocessingRequired": full_reprocess_required,
+    }
+    return ReprocessImpact(
+        parent_run=parent_run, upstream_blocks=upstream_blocks,
+        parent_steps_by_block=parent_steps_by_block, impact=impact,
+    )
+
+
+async def start_partial_reprocess(
+    db: AsyncSession, doc: Document, start_block: WorkflowBlockInstance, reason: str | None,
+) -> WorkflowRun:
+    computed = await compute_reprocess_impact(db, doc, start_block, reason=reason)
+    parent_run = computed.parent_run
+    dictionary_version = await current_dictionary_version(db)
 
     new_run = WorkflowRun(
         id=uuid4(),
@@ -143,8 +189,8 @@ async def start_partial_reprocess(
     # 복사해 오는 것을 막는다.
     doc.active_run_id = new_run.id
 
-    for b in upstream_blocks:
-        step = parent_steps_by_block[str(b.id)]
+    for b in computed.upstream_blocks:
+        step = computed.parent_steps_by_block[str(b.id)]
         db.add(WorkflowRunStep(
             id=uuid4(),
             run_id=new_run.id,
@@ -158,32 +204,17 @@ async def start_partial_reprocess(
             completed_at=datetime.utcnow(),
         ))
 
-    affected_node_count = await db.scalar(
-        select(func.count()).select_from(DocumentNode).where(
-            DocumentNode.document_id == doc.id, DocumentNode.run_id == parent_run.id
-        )
-    )
-    affected_chunk_count = await db.scalar(
-        select(func.count()).select_from(DocumentChunk).where(
-            DocumentChunk.document_id == doc.id, DocumentChunk.run_id == parent_run.id
-        )
-    )
-
-    new_run.impact = {
-        "reason": reason,
-        "changeType": "MANUAL",
-        "affectedBlocks": sorted({b.block_type for b in blocks if str(b.id) in closure}),
-        "affectedNodeCount": affected_node_count or 0,
-        "affectedChunkCount": affected_chunk_count or 0,
-        "fullReprocessingRequired": full_reprocess_required,
-    }
+    new_run.impact = computed.impact
 
     await db.commit()
     await db.refresh(new_run)
 
-    from app.pipeline.tasks.workflow import run_workflow_step
+    from app.pipeline.tasks.workflow import run_workflow_step, step_queue_for_block
 
     timeout_seconds = (start_block.config or {}).get("timeoutSeconds", 300)
-    run_workflow_step.apply_async(args=[str(new_run.id), str(start_block.id)], time_limit=timeout_seconds)
+    run_workflow_step.apply_async(
+        args=[str(new_run.id), str(start_block.id)], time_limit=timeout_seconds,
+        queue=step_queue_for_block(start_block),
+    )
 
     return new_run
