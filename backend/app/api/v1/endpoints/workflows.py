@@ -82,8 +82,7 @@ class WorkflowListItem(WorkflowResponse):
 
 
 class WorkflowStatusUpdate(BaseModel):
-    # 둘 다 선택값 — 이름만 바꾸는 요청(사용자 확인 2026-07-20, "워크플로우 이름변경
-    # 기능은 없는데?")과 상태만 바꾸는 기존 요청을 같은 엔드포인트로 받는다.
+    # 둘 다 선택값 — 이름만 바꾸는 요청과 상태만 바꾸는 기존 요청을 같은 엔드포인트로 받는다.
     status: str | None = None
     name: str | None = Field(None, min_length=1, max_length=200)
 
@@ -339,8 +338,7 @@ async def update_workflow_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Row '⋮ 비활성화'와 이름 변경을 함께 처리한다(사용자 확인 2026-07-20, "워크플로우
-    이름변경기능은 없는데?"). 상태 전환에 한해 다음 제약이 있다: 시스템 기본
+    """Row '⋮ 비활성화'와 이름 변경을 함께 처리한다. 상태 전환에 한해 다음 제약이 있다: 시스템 기본
     PREPROCESS 워크플로우는 비활성화할 수 없다 — 자체 워크플로우가 없는 모든
     프로젝트가 여기로 폴백하므로(_resolve_preprocess_version_id), 비활성화하면
     대체 워크플로우를 지정하는 기능이 없는 채로 업로드가 프로젝트 전역에서 깨진다."""

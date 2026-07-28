@@ -5,8 +5,8 @@
 기존 어댑터). `BaseAdapter` 계약(`RawParsedDocument`/`RawPage`/`RawTextBlock`/
 `RawTableCandidate`)을 그대로 따르므로 `TextExtractBlock.run()`의 parsed_text/
 extraction_layout/tables 조립 로직은 수정 없이 그대로 재사용된다 — 추가로
-`RawParsedDocument.metadata["elements"]`에 통합 요소 JSON(사용자가 제안한
-page/type/bbox/content.markdown/metadata 형태)만 얹는다.
+`RawParsedDocument.metadata["elements"]`에 통합 요소 JSON(page/type/bbox/
+content.markdown/metadata 형태)만 얹는다.
 
 기본 OCR 엔진(RapidOCR)은 한글을 의미 없는 한자 형태로 오인식하는 것을
 격리 트라이얼로 실제 확인했다(2026-07-23) — 반드시 EasyOCR을 한국어로 명시
@@ -181,8 +181,8 @@ class DoclingAdapter(BaseAdapter):
             if label in _PICTURE_LABELS:
                 # _recognize_document_images(process.py)가 image_bytes로
                 # 실제 그림을 인식/저장한다 — bytes가 없으면(구버전 코드) 항상
-                # 스킵되어 요소/구조 탭엔 그림이 보이는데 그림 탭은 늘 비어
-                # 보였다(사용자 확인 2026-07-25). RGBA/팔레트 모드는 그대로
+                # 스킵되어 요소/구조 탭엔 그림이 보이는데 그림 탭은 늘 비어 있다.
+                # RGBA/팔레트 모드는 그대로
                 # PNG로 저장하고, 흰 배경 합성 등 모드 변환은 기존
                 # _recognize_document_images가 이미 처리한다.
                 image_bytes = None

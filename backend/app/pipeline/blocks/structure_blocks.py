@@ -241,10 +241,10 @@ def _build_blocks(
 
 # Docling 도입 설계서(2026-07-23) Phase 2 — Document.elements(Docling 경로)가
 # 있을 때 아래 타입 매핑으로 DocumentNode를 직접 구성한다. _classify()의
-# 정규식 재분류를 전혀 거치지 않으므로, 사용자가 지적한 "목차가 제목/문단으로
-# 오분류" 문제의 원인 자체(정규식이 목차 줄을 번호매김 패턴으로 오인)가 이
-# 경로에서는 애초에 발생하지 않는다 — Docling이 목차를 별도 네이티브 타입
-# (document_index)으로 이미 분리해 주므로 그걸 그대로 TOC로 옮기면 된다.
+# 정규식 재분류를 전혀 거치지 않으므로, "목차가 제목/문단으로 오분류"되는
+# 문제의 원인 자체(정규식이 목차 줄을 번호매김 패턴으로 오인)가 이 경로에서는
+# 애초에 발생하지 않는다 — Docling이 목차를 별도 네이티브 타입(document_index)
+# 으로 이미 분리해 주므로 그걸 그대로 TOC로 옮기면 된다.
 _ELEMENT_TOC_TYPES = {"document_index"}
 _ELEMENT_HEADING_TYPES = {"title", "section_header", "section-header"}
 _ELEMENT_TABLE_TYPES = {"table"}

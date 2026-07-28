@@ -113,8 +113,7 @@ class OutputBlock(BaseBlock):
         # input->output edge alongside the real classify/extract/summarize
         # chain) — taking just one arbitrary upstream silently dropped
         # whichever branch didn't win, so results varied by document even on
-        # the same workflow (사용자 확인 2026-07-22, 요약/태그가 문서마다
-        # 들쭉날쭉하던 원인). Merge every branch instead: list-valued keys
+        # the same workflow. Merge every branch instead: list-valued keys
         # (keywords/entities/...) concatenate and dedupe, scalar keys keep the
         # first non-empty value found.
         upstream: dict = {}

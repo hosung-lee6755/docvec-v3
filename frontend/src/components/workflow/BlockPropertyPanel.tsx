@@ -158,7 +158,7 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
     const fields = info ? jsonSchemaToConfigFields(info.config_schema, block.block_type) : []
     // RAG 저장의 임베딩 모델은 컬렉션 생성 화면과 동일한 실제 사용 가능 모델
     // 목록으로 골라야 한다 — 자유 입력을 허용하면 존재하지 않는 모델 키를 적어
-    // 실행 시점에야 실패하는 것을 막는다(컬렉션 설정 재편, 사용자 확인 2026-07-20).
+    // 실행 시점에야 실패하는 것을 막는다.
     if (block.block_type === 'rag_store') {
       return fields.map((f) => f.key === 'embedding_model'
         ? {

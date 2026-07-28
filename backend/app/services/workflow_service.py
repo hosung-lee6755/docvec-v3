@@ -72,7 +72,7 @@ async def validate_graph(db: AsyncSession, version_id: str) -> list[dict]:
     workflow = await db.get(WorkflowDefinition, version.workflow_id) if version else None
     # ANALYSIS 워크플로우는 "output" 블록이 종착점이고, PREPROCESS 워크플로우는
     # "rag_store"가 종착점이다(문서를 분석 결과로 덧붙이는 ANALYSIS의 출력 블록은
-    # PREPROCESS 파이프라인 성격과 무관 — 사용자 확인 2026-07-20).
+    # PREPROCESS 파이프라인 성격과 무관).
     terminal_type = "rag_store" if workflow is not None and workflow.kind == "PREPROCESS" else "output"
 
     block_by_id = {str(b.id): b for b in blocks}

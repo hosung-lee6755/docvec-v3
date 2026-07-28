@@ -4,8 +4,7 @@ Phase 3 promotes document_chunks (Phase 1's table) to the authoritative
 chunk store for NEW uploads. continue_processing (app/pipeline/tasks/
 process.py) is deliberately untouched — it still serves the existing
 /proceed, /reprocess, and collection-reprocess endpoints for already-parsed
-documents, a separate legacy path kept as-is per 통합 설계서 §13 Task 3
-사용자 결정.
+documents, a separate legacy path kept as-is per 통합 설계서 §13 Task 3.
 """
 import uuid
 from datetime import datetime
@@ -198,8 +197,8 @@ class ChunkSplitBlock(BaseBlock):
                 version_row = db.get(WorkflowVersion, run_row.version_id)
                 workflow_version_number = version_row.version_number if version_row else None
 
-            # Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9,
-            # 사용자 확정 2026-07-24) — 같은 section_path를 공유하는 연속
+            # Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9) — 같은
+            # section_path를 공유하는 연속
             # child들을 하나의 parent로 묶는다. parent는 임베딩되지 않고(항상
             # embedded=False, chunk_ids 출력에도 포함 안 함) DB에만 컨텍스트
             # 확장용으로 존재 — rag_store가 이 chunk_ids만 임베딩하므로 parent를
@@ -423,7 +422,7 @@ class RagStoreBlock(BaseBlock):
                 # Qdrant 페이로드뿐 아니라 DB 컬럼에도 그대로 남긴다.
                 chunk.embedding_model = embedding_model
                 # 메타 정보 생성.txt 3절 version(임베딩 버전) — 별도 버전 태그가
-                # 없어(사용자 결정, 2026-07-24) 임베딩 차원수를 버전 대용으로
+                # 없어 임베딩 차원수를 버전 대용으로
                 # 스탬프한다. 모델이 바뀌어 차원수가 달라지면 값도 함께 바뀐다.
                 chunk.version = str(provider.dimension)
             doc.status = "INDEXED"

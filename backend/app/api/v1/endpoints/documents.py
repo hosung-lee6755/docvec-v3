@@ -507,10 +507,9 @@ async def get_document(
     await check_document_access(db, doc, current_user, min_role="viewer")
 
     # 셀러리 hard time limit(TimeLimitExceeded)는 워커 fork 프로세스를 SIGKILL로
-    # 죽여 애플리케이션 코드가 실패를 기록할 기회 자체가 없다 — 별도 워커/beat 인프라
+    # 죽여 애플리케이션 코드가 실패를 기록할 기회 자체가 없다. 별도 워커/beat 인프라
     # 없이, 프런트가 이미 처리중 상태를 3초 간격으로 폴링하는 이 조회 경로에서
-    # 지연 감지해 멈춘 이유를 확정한다(사용자 확인 2026-07-22, "제약으로 작업이
-    # 멈춰있는 상태가 되면 어떠한이유로 작업이 멈췄다고 알려줘").
+    # 지연 감지해 멈춘 이유를 확정한다.
     from app.services.reprocess_service import reconcile_stuck_run
 
     await reconcile_stuck_run(db, doc)
@@ -998,7 +997,7 @@ async def correct_document_element(
 # normalization_blocks.py::TextCleanBlock._apply()가 내장 규칙에 붙이는
 # "builtin:xxx" 키 -> 한글 라벨. CleaningRule 테이블에 행이 없는 내장 규칙은
 # rule_name 조인이 항상 NULL이라, 이 매핑이 없으면 프런트에 원문 rule_key(영어)가
-# 그대로 노출된다(사용자 확인 2026-07-23, "정제비교에서 규칙이 다 영어야").
+# 그대로 노출된다.
 _BUILTIN_RULE_LABELS: dict[str, str] = {
     "builtin:control_chars": "제어문자 제거",
     "builtin:unicode_nfc": "유니코드 정규화(NFC)",
@@ -1400,9 +1399,8 @@ async def list_document_chunks(
     if not hits:
         # rag_store(임베딩+Qdrant 적재)는 quality_check 등 검토 게이트보다
         # 하류라서, WAITING_REVIEW로 멈춘 문서는 chunk_split이 이미 만든
-        # document_chunks(Postgres) 행은 있어도 Qdrant는 아직 비어 있다 —
-        # 그래서 이전에는 이 상태의 문서가 항상 "청크 0개"로 보였다(사용자 확인
-        # 2026-07-21, "청크가 0으로 나온다... 품질에서는 생성된 청크 37개").
+        # document_chunks(Postgres) 행은 있어도 Qdrant는 아직 비어 있다.
+        # 이전에는 이 상태의 문서가 항상 "청크 0개"로 보였다.
         # DocumentChunk 모델 자체의 설계 의도("Qdrant 없이도 청크 탭이 목록을
         # 볼 수 있도록")대로 Postgres를 폴백 소스로 사용한다 — 단, 이 경로로
         # 나온 항목은 embedded=False로 표시해 프런트가 수정/삭제(Qdrant 전용
@@ -1525,13 +1523,11 @@ async def delete_document_chunk(
 
     # document_chunks is the first-class source of truth (§4.6) — deleting only
     # the Qdrant point left this row behind forever, stale and still counted
-    # by anything that queries document_chunks directly (사용자 확인 2026-07-21,
-    # "청크를 삭제한다면 RAG에서도 지워지는 구조가 맞는지도 검토해달라").
+    # by anything that queries document_chunks directly.
     await db.execute(delete(DocumentChunk).where(DocumentChunk.id == chunk_id))
 
     # If this chunk was the one a chunking warning pointed at, drop it from the
-    # report so a resolved issue stops showing as still needing review
-    # (사용자 확인 2026-07-21, "문제의 청크를 삭제했는데 계속 검토 필요로 남아있다").
+    # report so a resolved issue stops showing as still needing review.
     report = None
     if doc.active_run_id:
         report = await db.scalar(select(QualityReport).where(QualityReport.run_id == doc.active_run_id))
@@ -1723,8 +1719,7 @@ async def accept_tag_suggestion(
     update_document_tags' Qdrant sync since the result is indistinguishable
     from a manually-added tag.
 
-    Deliberately leaves suggested_tags untouched (사용자 확인 2026-07-20,
-    "추천 태그... 계속 유지하고 싶다") — a promoted suggestion stays visible in
+    Deliberately leaves suggested_tags untouched — a promoted suggestion stays visible in
     the 추천 태그 list instead of disappearing, so the frontend renders it in
     an "already added" state (see DocumentDetailPage.tsx) rather than losing
     it. Only dismiss_tag_suggestion actually removes an entry."""
@@ -1791,7 +1786,7 @@ async def get_document_images(
     # Docling 경로에서만 의미 있음 — elements가 없는(legacy 엔진) 문서는 None이라
     # 프론트가 안내 문구를 아예 표시하지 않는다. detected_count가 len(images)보다
     # 크면 작은/중복 이미지가 _recognize_document_images(process.py)에서
-    # 필터링된 것(사용자 확인 2026-07-25, "그림에서 표기된 개수와 다르다").
+    # 필터링된 것이다.
     detected_count = (
         sum(1 for el in doc.elements if el.get("type") == "picture")
         if doc.elements is not None else None

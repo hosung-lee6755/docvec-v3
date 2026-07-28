@@ -21,8 +21,7 @@ export default function SetCollectionDefaultModal({
   const collections = data?.items ?? []
   const updateCollection = useUpdateCollection()
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  // 버전 고정 — CollectionsPage 편집 폼과 동일한 기능(사용자 확인 2026-07-20,
-  // "add version-pinning to the row-menu modal so both are equally capable").
+  // 버전 고정 — CollectionsPage 편집 폼과 동일한 기능.
   // 시스템 기본 워크플로우는 버전 개념 없이 항상 최신으로 폴백되므로 해당 없음.
   const [versionMode, setVersionMode] = useState<'latest' | 'pinned'>('latest')
   const [versionNumber, setVersionNumber] = useState<number | null>(null)

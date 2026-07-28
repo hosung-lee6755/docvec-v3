@@ -239,9 +239,7 @@ async def start_partial_reprocess(
 
 # 시간초과로 SIGKILL된 셀러리 hard time limit은 애플리케이션 코드로 잡을 수 없어(billiard가
 # 워커 fork 프로세스를 직접 죽임) run/step이 RUNNING 상태로 영구히 멈춰 있게 된다 — 별도
-# 워커/beat 인프라 없이, 문서 조회(GET /documents/{id})마다 지연 감지해 FAILED로 확정한다
-# (사용자 확인 2026-07-22, "제약으로 작업이 멈춰있는 상태가 되면 어떠한이유로 작업이
-# 멈췄다고 알려줘").
+# 워커/beat 인프라 없이, 문서 조회(GET /documents/{id})마다 지연 감지해 FAILED로 확정한다.
 _TIMEOUT_GRACE_SECONDS = 30
 
 

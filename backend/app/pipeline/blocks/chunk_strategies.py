@@ -27,8 +27,8 @@ def _estimate_token_count(text: str) -> int:
     return max(1, hangul_chars + other_chars // 4)
 
 
-# Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9, 사용자 확정
-# 2026-07-24) — 조상 헤딩이 없는 flat 구간(fixed/semantic/sentence 전략,
+# Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9) — 조상 헤딩이 없는
+# flat 구간(fixed/semantic/sentence 전략,
 # 또는 구조 없는 문서)에서 연속 child를 몇 개씩 하나의 parent로 묶을지.
 _PARENT_GROUP_MAX_CHILDREN = 5
 # parent 하나의 combined 길이가 child 목표 크기(max_chars)의 몇 배를 넘으면
@@ -115,7 +115,7 @@ def _table_rows_and_ordinal(
     """`Document.tables`에서 `source_table_id`가 가리키는 원본 행 데이터를
     찾는다. `tables`의 인덱스+1을 표 번호(ordinal)로 함께 돌려줘 청크 텍스트에
     "[표 N] (부분 M/K)"로 추적 가능하게 표시할 수 있게 한다(문서 파싱 고도화
-    Phase 3, 사용자가 제안한 행 단위 청킹)."""
+    Phase 3)."""
     if not tables or not source_table_id:
         return None, None
     for i, t in enumerate(tables):

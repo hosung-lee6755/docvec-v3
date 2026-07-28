@@ -42,8 +42,7 @@ def step_queue_for_block(block) -> str:
     """어느 블록이 GPU 임베딩 모델을 쓰는지에 따라 실행 큐를 나눈다 — rag_store는
     항상, chunk_split은 strategy=semantic일 때만 embed()를 호출한다. 이 블록들을
     별도의 'embed' 큐로 보내면 worker-embed 컨테이너(concurrency=1)가 순차 실행해,
-    GPU 메모리 하나를 여러 워커 슬롯이 동시에 점유해 서로 밀어내는 경합을 막는다
-    (사용자 확인 2026-07-21, "한건씩 차례로 처리하면 되는거 아닌가?")."""
+    GPU 메모리 하나를 여러 워커 슬롯이 동시에 점유해 서로 밀어내는 경합을 막는다."""
     if block.block_type == "rag_store":
         return "embed"
     if block.block_type == "chunk_split" and (block.config or {}).get("strategy") == "semantic":
@@ -182,8 +181,7 @@ _KNOWN_ERROR_PATTERNS: list[tuple[str, str]] = [
 def _localize_error_message(exc: Exception) -> str:
     """워커 내부에서 잡히는 예외(SQLAlchemy/DB 드라이버/셀러리 등 라이브러리 예외)의
     원문은 영어라, Document/WorkflowRun/WorkflowRunStep.error_message에 그대로
-    노출하면 사용자가 읽을 수 없다(사용자 확인 2026-07-23, "처리 실패에서 실패한
-    이유가 영어로 나오는데 이거 한글로 나오도록해"). 우리 블록 코드가 이미 한글로
+    노출하면 사용자가 읽을 수 없다. 우리 블록 코드가 이미 한글로
     직접 작성한 BlockExecutionError 메시지(대부분의 경우)는 한글이 포함돼 있으므로
     그대로 통과시키고, 그 외(알려진 패턴 또는 순수 영어 라이브러리 예외)만 번역한다.
     원본 예외는 이 함수 호출 후에도 그대로 raise되어 워커 로그에 남으므로, 여기서
@@ -403,7 +401,7 @@ def _maybe_trigger_analysis(db, run) -> None:
     """A PREPROCESS run that just completed on a document in a collection with
     Collection.default_analysis_workflow_id set kicks off that ANALYSIS workflow
     automatically against the same document (컬렉션 생성/수정 시 지정한 기본
-    분석 워크플로우 — 사용자 확인 2026-07-20). Guarded to only fire off a
+    분석 워크플로우). Guarded to only fire off a
     PREPROCESS run's completion so an ANALYSIS run's own completion can never
     recursively trigger another analysis run."""
     from app.db.models.collection import Collection
@@ -446,8 +444,7 @@ def _maybe_trigger_analysis(db, run) -> None:
     db.add(analysis_run)
     # Analysis block types (classify/extract_entities/.../summarize) aren't in
     # _STATUS_FOR_BLOCK_TYPE, so nothing else would move the document off its
-    # stale "INDEXED" label for the run's whole duration (사용자 확인 2026-07-21,
-    # "완료라는 표현이 아니라 분석중이라면 상태가 정확한 상태 아닌가?"). The run's
+    # stale "INDEXED" label for the run's whole duration. The run's
     # own completion path (_advance's terminal-block branch, above) already
     # sets doc.status back to "INDEXED" unconditionally when it finishes.
     document.status = "ANALYZING"

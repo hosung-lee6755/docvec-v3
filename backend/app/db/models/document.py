@@ -53,7 +53,7 @@ class Document(Base):
             "WAITING_REVIEW",
             # An AUTO_ANALYSIS run's block types aren't in _STATUS_FOR_BLOCK_TYPE
             # (workflow.py), so without this the document kept showing the stale
-            # "INDEXED" label for the run's whole duration (사용자 확인 2026-07-21).
+            # "INDEXED" label for the run's whole duration.
             "ANALYZING",
             name="document_status",
         ),
@@ -94,8 +94,8 @@ class Document(Base):
     # approximation.
     ocr_page_confidence: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # Docling 도입 설계서(2026-07-23) Phase 1 — DoclingAdapter(engine="docling",
-    # PDF 전용)로 처리된 문서에서만 채워지는 통합 요소 JSON. 사용자가 제안한
-    # 형태 그대로: [{id, page, type, bbox, content: {text, markdown},
+    # PDF 전용)로 처리된 문서에서만 채워지는 통합 요소 JSON. 형태:
+    # [{id, page, type, bbox, content: {text, markdown},
     # metadata: {section_path, is_header, is_footer, confidence, detected_as,
     # user_corrected, correction_notes}}]. legacy 엔진(기존 pdf/docx/hwp/hwpx
     # 어댑터)로 처리된 문서는 None — GET/PATCH /documents/{id}/elements와
@@ -153,9 +153,9 @@ class Document(Base):
     language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # 문서 내용에서 신뢰성 있게 자동 추출할 수 없어(사용자 확인 2026-07-23),
-    # 자동 생성 로직 없이 PATCH /documents/{id}/metadata를 통해 사용자가 직접
-    # 입력해야만 채워지는 필드. 기본값은 항상 None.
+    # 문서 내용에서 신뢰성 있게 자동 추출할 수 없어, 자동 생성 로직 없이
+    # PATCH /documents/{id}/metadata를 통해 사용자가 직접 입력해야만 채워지는 필드.
+    # 기본값은 항상 None.
     author: Mapped[str | None] = mapped_column(String(255), nullable=True)
     organization: Mapped[str | None] = mapped_column(String(255), nullable=True)
     security_level: Mapped[str | None] = mapped_column(String(20), nullable=True)

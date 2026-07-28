@@ -60,7 +60,7 @@ export interface CreateCollectionInput {
   project_id?: string
   // 임베딩 모델/청킹 설정은 더 이상 컬렉션 생성 화면에서 입력받지 않는다 —
   // 시스템 기본값으로 생성되고, 필요하면 이 컬렉션의 전처리 워크플로우
-  // 문서분할/RAG저장 블록에서만 재정의한다(사용자 확인 2026-07-20).
+  // 문서분할/RAG저장 블록에서만 재정의한다.
   default_workflow_id?: string
   default_workflow_version?: number
   default_analysis_workflow_id?: string

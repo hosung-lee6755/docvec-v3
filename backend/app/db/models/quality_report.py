@@ -32,8 +32,7 @@ class QualityReport(Base):
     warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # warnings와 같은 순서/길이 — 각 경고가 어느 카테고리(textExtraction/ocr/
     # structure/chunking)에서 나왔는지. 프런트가 경고를 클릭하면 해당 탭으로
-    # 바로 이동시키는 데 쓴다(사용자 확인 2026-07-21, "경고에 있는 사항들은
-    # 네비게이션 기능을 넣어서 바로 경고 위치로 찾아가게 해줘").
+    # 바로 이동시키는 데 쓴다.
     warning_categories: Mapped[list | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(
         SQLEnum(

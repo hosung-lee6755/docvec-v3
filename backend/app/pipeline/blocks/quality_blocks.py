@@ -322,8 +322,7 @@ class QualityCheckBlock(BaseBlock):
                 # "chunking_short"/"chunking_long"으로 세분화 — 프런트가 경고를
                 # 클릭했을 때 청크 탭으로만 이동하는 게 아니라 metrics.short_chunk_ids/
                 # long_chunk_ids로 실제 문제되는 청크로 바로 스크롤·강조할 수 있게
-                # 한다(사용자 확인 2026-07-21, "청크텝에서 확인이아니라 문제가 되는
-                # 청크로 바로 이동하게 해야지").
+                # 한다.
                 if too_small:
                     add_warning("chunking_short", f"너무 짧은 청크가 {too_small}개 있습니다({cfg.min_chunk_chars_warning}자 미만).")
                 if too_large:

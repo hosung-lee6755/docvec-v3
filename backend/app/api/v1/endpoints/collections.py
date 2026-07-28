@@ -53,9 +53,9 @@ class CollectionCreate(BaseModel):
     chunk_min_tokens: int = settings.default_chunk_min_tokens
     chunk_overlap_tokens: int = settings.default_chunk_overlap_tokens
     chunk_strategy: Literal["size", "semantic"] = "size"
-    # 전처리/분석 워크플로우도 컬렉션 생성 시점에 바로 지정할 수 있게 한다 —
-    # 워크플로우가 프로젝트 단위로 만들어지는 구조이므로, 생성 이후 수정 화면을
-    # 따로 열 필요 없이 처음부터 선택 가능해야 한다는 사용자 확인 2026-07-20.
+    # 전처리/분석 워크플로우도 컬렉션 생성 시점에 바로 지정할 수 있다.
+    # 워크플로우가 프로젝트 단위로 생성되는 구조이므로, 생성 후 수정 화면을
+    # 따로 열 필요 없이 처음부터 선택 가능하다.
     default_workflow_id: UUID | None = None
     default_workflow_version: int | None = None
     default_analysis_workflow_id: UUID | None = None

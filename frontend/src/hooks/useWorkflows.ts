@@ -107,8 +107,7 @@ export function useWorkflows(projectId: string | null, kind?: 'PREPROCESS' | 'AN
   })
 }
 
-// 워크플로우 이름 변경(사용자 확인 2026-07-20, "워크플로우 이름변경기능은 없는데?") —
-// useUpdateWorkflowStatus와 같은 PATCH /workflows/{id}를 name 필드로 호출한다.
+// PATCH /workflows/{id}를 name 필드로 호출해 워크플로우 이름을 변경한다.
 export function useRenameWorkflow() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -119,8 +118,7 @@ export function useRenameWorkflow() {
     onSuccess: () => {
       // 정확한 ['workflows', projectId, kind] 키만 무효화하면 전역(/workflows,
       // 프로젝트 없음) 목록의 캐시 키(['workflows', null, kind])와 불일치해
-      // 갱신되지 않는다(사용자 확인 2026-07-20, 이름 변경 직후 목록에 반영 안 되는
-      // 버그로 발견) — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
+      // 갱신되지 않는다 — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
       queryClient.invalidateQueries({ queryKey: ['workflows'] })
     },
   })
@@ -138,8 +136,7 @@ export function useUpdateWorkflowStatus() {
     onSuccess: () => {
       // 정확한 ['workflows', projectId, kind] 키만 무효화하면 전역(/workflows,
       // 프로젝트 없음) 목록의 캐시 키(['workflows', null, kind])와 불일치해
-      // 갱신되지 않는다(사용자 확인 2026-07-20, 이름 변경 직후 목록에 반영 안 되는
-      // 버그로 발견) — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
+      // 갱신되지 않는다 — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
       queryClient.invalidateQueries({ queryKey: ['workflows'] })
     },
   })
@@ -157,8 +154,7 @@ export function useDuplicateWorkflow() {
     onSuccess: () => {
       // 정확한 ['workflows', projectId, kind] 키만 무효화하면 전역(/workflows,
       // 프로젝트 없음) 목록의 캐시 키(['workflows', null, kind])와 불일치해
-      // 갱신되지 않는다(사용자 확인 2026-07-20, 이름 변경 직후 목록에 반영 안 되는
-      // 버그로 발견) — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
+      // 갱신되지 않는다 — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
       queryClient.invalidateQueries({ queryKey: ['workflows'] })
     },
   })
@@ -200,8 +196,7 @@ export function useDeleteWorkflow() {
     onSuccess: () => {
       // 정확한 ['workflows', projectId, kind] 키만 무효화하면 전역(/workflows,
       // 프로젝트 없음) 목록의 캐시 키(['workflows', null, kind])와 불일치해
-      // 갱신되지 않는다(사용자 확인 2026-07-20, 이름 변경 직후 목록에 반영 안 되는
-      // 버그로 발견) — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
+      // 갱신되지 않는다 — prefix 매칭되도록 'workflows' 하나만 남겨 모든 스코프를 덮는다.
       queryClient.invalidateQueries({ queryKey: ['workflows'] })
     },
   })

@@ -62,7 +62,7 @@ class DocumentChunk(Base):
     # 스택 — DocumentNode id가 아니라 이미 헤딩 텍스트 배열). 신규 컬럼을 또
     # 만들면 완전한 중복이라 만들지 않고, 응답 스키마에서 스펙 필드명으로만
     # 노출한다. char_count/language/source_file은 이미 로드된 값을 그대로
-    # 복사, version은 임베딩 차원수(사용자 결정, 2026-07-24)를 문자열로 스탬프.
+    # 복사, version은 임베딩 차원수를 문자열로 스탬프.
     char_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     source_file: Mapped[str | None] = mapped_column(Text, nullable=True)

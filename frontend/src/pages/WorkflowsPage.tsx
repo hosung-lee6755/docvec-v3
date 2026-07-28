@@ -23,8 +23,7 @@ function WorkflowRowMenu({
   workflow: WorkflowListItem
   projectId: string | null
   // 전역 /workflows 목록(예: 표준 전처리 워크플로우)엔 projectId가 없어 복제
-  // 대상 프로젝트를 고를 데가 없었다 — 여기서 직접 고를 수 있게 목록을 받는다
-  // (사용자 확인 2026-07-20, "전처리 표준 워크플로우에 복제 기능 추가").
+  // 대상 프로젝트를 고를 데가 없었다 — 여기서 직접 고를 수 있게 목록을 받는다.
   projects: { id: string; name: string }[]
   onOpenCompare: () => void
   onOpenSetDefault: () => void

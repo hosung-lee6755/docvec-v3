@@ -22,8 +22,7 @@ type TabKey =
   | 'structure' | 'cleaning' | 'dictionary' | 'pii' | 'elements'
 
 // 문서 요약(doc.summary)·추천 태그는 분석 워크플로우 산출물이라 탭이 아니라
-// 왼쪽 메타데이터 패널로 이동했다 — 나머지는 전부 전처리 워크플로우 산출물
-// (사용자 확인 2026-07-20, "왼쪽 패널 확장으로 진행해줘").
+// 왼쪽 메타데이터 패널로 이동했다 — 나머지는 전부 전처리 워크플로우 산출물이다.
 const TABS: { key: TabKey; label: string; pdfOnly?: boolean }[] = [
   { key: 'original', label: '원문 대조' },
   { key: 'structure', label: '구조' },
@@ -51,10 +50,8 @@ const QUALITY_STATUS_LABELS: Record<string, string> = {
 
 // REVIEW_REQUIRED는 실제 품질 경고 때문일 수도, 이 워크플로우의 "모든 문서
 // 검토" 정책 때문일 수도 있다 — 후자인데 점수가 100점이어도 그냥 "검토 필요"
-// 배지(주황색)만 뜨면 마치 문제가 있는 것처럼 오해하기 쉽다(사용자 확인
-// 2026-07-21, "품질이 100점인데... 검토 필요라는 문구는 오해를 발생시킬 수
-// 있다"). 경고가 실제로 있을 때만 경고 색/문구를 쓰고, 정책만으로 검토가
-// 걸린 경우는 중립색 + "정책상 검토"로 구분한다.
+// 배지(주황색)만 뜨면 마치 문제가 있는 것처럼 오해하기 쉽다. 경고가 실제로 있을 때만
+// 경고 색/문구를 쓰고, 정책만으로 검토가 걸린 경우는 중립색 + "정책상 검토"로 구분한다.
 function qualityStatusDisplay(
   status: string, warningCount: number,
 ): { label: string; badgeClass: string } {
@@ -73,8 +70,7 @@ const QUALITY_CATEGORY_LABELS: Record<string, string> = {
 
 // 경고 카테고리 → 실제로 확인할 수 있는 탭. textExtraction/ocr은 추출된 원문
 // 텍스트 자체의 문제라 원문 대조 탭에서, structure는 구조 탭에서, chunking은
-// 청크 탭(길이 기준 경고 청크가 이미 강조 표시됨)에서 확인한다(사용자 확인
-// 2026-07-21, "경고에 있는 사항들은 네비게이션 기능을 넣어서").
+// 청크 탭(길이 기준 경고 청크가 이미 강조 표시됨)에서 확인한다.
 const QUALITY_WARNING_TAB: Record<string, TabKey> = {
   textExtraction: 'original', ocr: 'original', structure: 'structure',
   chunking: 'chunks', chunking_short: 'chunks', chunking_long: 'chunks',
@@ -82,7 +78,7 @@ const QUALITY_WARNING_TAB: Record<string, TabKey> = {
 
 // quality_blocks.py의 QualityCheckBlock.run()이 계산해 QualityReport.metrics에
 // 저장하는 수치들 — 점수만으로는 알 수 없는 "왜 이 점수인지" 근거를 카테고리별로
-// 보여준다(사용자 확인 2026-07-21, "품질값에 대한 근거가 필요할듯하다").
+// 보여준다.
 function qualityEvidenceText(category: string, metrics: QualityMetrics): string {
   switch (category) {
     case 'textExtraction':
@@ -267,8 +263,7 @@ export default function DocumentDetailPage() {
   const { data: doc, isLoading, isError } = useDocument(id)
   const [activeTab, setActiveTab] = useState<TabKey>('original')
   // 품질 탭의 "너무 짧은/큰 청크" 경고를 클릭했을 때 청크 탭으로 이동만 하는 게
-  // 아니라 실제 문제 청크로 스크롤하기 위한 목표 id 목록(사용자 확인 2026-07-21,
-  // "청크텝에서 확인이아니라 문제가 되는 청크로 바로 이동하게 해야지").
+  // 아니라 실제 문제 청크로 스크롤하기 위한 목표 id 목록.
   const [highlightChunkIds, setHighlightChunkIds] = useState<string[] | null>(null)
   const needsContent = activeTab === 'edit' || activeTab === 'original'
   const { data: content, isLoading: isContentLoading, isError: isContentError } = useDocumentContent(id, needsContent)
@@ -277,7 +272,7 @@ export default function DocumentDetailPage() {
   // 청크 탭을 열지 않아도 왼쪽 RAG 현황 패널이 청크 개수를 보여줘야 하므로
   // INDEXED 상태가 되면 곧바로 가져온다(탭 진입 시점까지 미루지 않음). WAITING_REVIEW도
   // 포함 — 검토 게이트에 걸린 문서도 chunk_split이 이미 만든(아직 미임베딩) 청크를
-  // 패널에서 바로 보여줘야 한다(사용자 확인 2026-07-21, "청크가 0으로 나온다").
+  // 패널에서 바로 보여줘야 한다.
   const { data: chunksResult, isLoading: isChunksLoading, isError: isChunksError } = useDocumentChunks(id, activeTab === 'chunks' || doc?.status === 'INDEXED' || doc?.status === 'WAITING_REVIEW')
   const { data: previewResult, isError: isPreviewError } = useDocumentPreview(id, activeTab === 'original')
   const { data: pagesTextResult } = useDocumentPagesText(id, activeTab === 'original')
@@ -316,8 +311,7 @@ export default function DocumentDetailPage() {
   }, [activeTab, content, editBaseline])
 
   // 품질 경고 클릭으로 청크 탭에 들어왔을 때 실제 문제 청크로 스크롤한다 — 청크
-  // 탭으로만 이동시키면 결국 사용자가 목록을 훑어 찾아야 하는 문제가 그대로다
-  // (사용자 확인 2026-07-21).
+  // 탭으로만 이동시키면 결국 사용자가 목록을 훑어 찾아야 하는 문제가 그대로다.
   useEffect(() => {
     if (activeTab !== 'chunks' || !highlightChunkIds?.length || !chunksResult) return
     const targetId = highlightChunkIds.find((cid) => chunksResult.chunks.some((c) => c.id === cid))
@@ -334,8 +328,8 @@ export default function DocumentDetailPage() {
 
   const isProcessing = doc && PROCESSING_STATUSES.has(doc.status)
   // "전처리 단계" 패널의 데이터 소스 — ProcessingJob은 13개 블록 중 text_extract만
-  // 기록해 그 외 블록 진행이 전혀 안 보였다(사용자 확인 2026-07-20, 이슈 4). DAG
-  // 실행기가 남기는 WorkflowRun의 실제 스텝별 진행 상황으로 대체한다.
+  // 기록해 그 외 블록 진행이 전혀 안 보였다. DAG 실행기가 남기는 WorkflowRun의 실제
+  // 스텝별 진행 상황으로 대체한다.
   const { data: activeRunPanel } = useWorkflowRun(doc?.active_run_id ?? null)
   const isIndexed = doc?.status === 'INDEXED'
   const isAnalyzing = doc?.status === 'ANALYZING'
@@ -570,8 +564,8 @@ export default function DocumentDetailPage() {
             <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
               {doc.suggested_tags.map((tag) => {
                 // 추천 태그는 수락해도 목록에서 사라지지 않는다(백엔드가
-                // suggested_tags를 그대로 둠, 사용자 확인 2026-07-20) — 이미
-                // 추가된 항목은 "+"를 "✓ 추가됨"으로 바꿔 중복 클릭을 막는다.
+                // suggested_tags를 그대로 둠) — 이미 추가된 항목은 "+"를 "✓ 추가됨"으로
+                // 바꿔 중복 클릭을 막는다.
                 const alreadyAdded = (doc.tags ?? []).includes(tag)
                 return (
                   <span
