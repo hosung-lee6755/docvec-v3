@@ -1384,27 +1384,20 @@ async def list_document_chunks(
         }
 
     hits = qdrant_service.scroll_by_document(str(document_id))
-    # 이 문서의 "현재" run이 아닌 다른(초과/삭제된) run이 남긴 포인트는 무시한다 —
-    # reprocess로 새 run이 만들어져도 rag_store가 재실행되기 전까지는 Qdrant에
-    # 이전 run의 임베딩이 그대로 남아 있고, 심지어 그 run 행 자체가 나중에
-    # 삭제돼도(workflow_runs FK CASCADE는 Postgres document_chunks만 지우고
-    # Qdrant는 건드리지 않음) 포인트는 고아 상태로 계속 남는다. 이걸 그대로
-    # 보여주면 RAG 현황/품질 탭의 청크 수가 서로 달라 보이는 버그가 된다(사용자
-    # 확인 2026-07-21, "01 포항세라믹... RAG 현황의 청크 수치랑 품질의 청크
-    # 수치가 다르다" — 실제로 존재하지도 않는 run_id d5de7cc8...의 고아 포인트
-    # 16개가 현재 run의 실제 청크 25개 대신 보이고 있었다).
+    # Filter to the current run only. Qdrant points from prior/deleted runs persist
+    # in the vector store even though their rows are gone (workflow_runs FK CASCADE
+    # only touches Postgres document_chunks, not Qdrant vectors). Without filtering,
+    # orphaned vectors from older runs cause chunk counts to diverge between the
+    # RAG status and quality tabs.
     hits = [h for h in hits if h["payload"].get("workflow_run_id") == run_id]
     hits.sort(key=lambda h: h["payload"].get("chunk_index", 0))
 
     if not hits:
-        # rag_store(임베딩+Qdrant 적재)는 quality_check 등 검토 게이트보다
-        # 하류라서, WAITING_REVIEW로 멈춘 문서는 chunk_split이 이미 만든
-        # document_chunks(Postgres) 행은 있어도 Qdrant는 아직 비어 있다.
-        # 이전에는 이 상태의 문서가 항상 "청크 0개"로 보였다.
-        # DocumentChunk 모델 자체의 설계 의도("Qdrant 없이도 청크 탭이 목록을
-        # 볼 수 있도록")대로 Postgres를 폴백 소스로 사용한다 — 단, 이 경로로
-        # 나온 항목은 embedded=False로 표시해 프런트가 수정/삭제(Qdrant 전용
-        # 엔드포인트)를 비활성화하도록 한다.
+        # rag_store (embedding + Qdrant upload) runs downstream of review gates,
+        # so documents stuck at WAITING_REVIEW have Postgres document_chunks rows
+        # (already created by chunk_split) but no Qdrant vectors yet. Use Postgres
+        # as fallback source per DocumentChunk design intent, but mark items with
+        # embedded=False so the UI disables edit/delete (Qdrant-only operations).
         pg_chunks = (
             await db.scalars(
                 select(_DocumentChunkModel)

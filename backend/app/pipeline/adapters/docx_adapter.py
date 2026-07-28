@@ -36,10 +36,7 @@ def _iter_block_items(doc) -> Iterator[object]:
     doc.paragraphs and doc.tables are separate flat lists — a table sitting
     between two paragraphs in the source ends up entirely after both once
     read that way, scrambling reading order for any docx with an inline
-    table (문서 파싱 고도화 회고, 2026-07-23: found while auditing docx
-    fidelity against the same "output must match source" bar used for the
-    PDF OCR-reconciliation bug). Walking doc.element.body directly preserves
-    the actual order."""
+    table. Walking doc.element.body directly preserves the actual order."""
     from docx.oxml.ns import qn
     from docx.table import Table as DocxTable
     from docx.text.paragraph import Paragraph as DocxParagraph

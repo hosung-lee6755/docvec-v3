@@ -1,6 +1,6 @@
 """표 행(rows) 데이터를 GFM markdown 표로 렌더링 — chunk_strategies.py의 표
-오버사이즈 행 그룹 분할(Phase 3)과 Document.elements 표시(Phase 4) 양쪽에서
-공유해서 쓴다(Docling 도입 설계서, 2026-07-23)."""
+오버사이즈 행 그룹 분할과 structure_blocks.py의 elements 표시 양쪽에서
+공유해서 쓴다."""
 
 
 def _escape_cell(cell: str) -> str:

@@ -21,10 +21,9 @@ class OutputConfig(BaseModel):
 
 def _match_chunk_keywords(chunk_text: str, document_keywords: list[str]) -> list[str]:
     """청크 텍스트와 문서 레벨 키워드(ExtractKeywordsBlock 출력)를 단순
-    substring으로 매칭한다(메타 정보 생성 설계서, 2026-07-23 Phase 4) —
-    청크마다 새로 LLM을 호출하지 않고 이미 계산된 문서 레벨 키워드를
-    재사용하는 저비용 방식. 대소문자 구분 없이 매칭하되 반환값은 원래
-    표기를 유지한다."""
+    substring으로 매칭한다 — 청크마다 새로 LLM을 호출하지 않고 이미 계산된
+    문서 레벨 키워드를 재사용하는 저비용 방식. 대소문자 구분 없이 매칭하되
+    반환값은 원래 표기를 유지한다."""
     text_lower = chunk_text.lower()
     return [
         kw for kw in document_keywords
@@ -84,20 +83,19 @@ class OutputBlock(BaseBlock):
         # actually re-execute instead of replaying the old result.
         #
         # 1.2.0: classify 블록의 category 출력을 이제 tags 병합과 별도로
-        # Document.category에도 스탬프한다(메타 정보 생성 설계서, 2026-07-23
-        # Phase 1) — 캐시된 이전 결과를 재생하면 category가 채워지지 않는다.
+        # Document.category에도 스탬프한다 — 캐시된 이전 결과를 재생하면
+        # category가 채워지지 않는다.
         #
         # 1.3.0: 문서 레벨 키워드를 이 run의 DocumentChunk.keywords에도
-        # substring 매칭으로 역전파한다(메타 정보 생성 설계서, 2026-07-23
-        # Phase 4) — 캐시된 이전 결과는 청크 keywords를 채우지 않는다.
+        # substring 매칭으로 역전파한다 — 캐시된 이전 결과는 청크 keywords를
+        # 채우지 않는다.
         #
         # 1.4.0: summary가 이번 run에서 갱신되면 Summary Index(Qdrant
-        # document_summaries 컬렉션)에도 upsert한다(메타 정보 생성 설계서,
-        # 2026-07-23 Phase 5) — 캐시된 이전 결과는 이 색인을 만들지 않는다.
+        # document_summaries 컬렉션)에도 upsert한다 — 캐시된 이전 결과는
+        # 이 색인을 만들지 않는다.
         #
         # 1.5.0: 키워드 역전파가 이제 chunk_tier=="child" 청크만 대상으로
-        # 한다 — parent Retrieval 청크(Phase 9)는 제외(메타 정보 생성.txt
-        # 3절, 2026-07-24).
+        # 한다 — parent Retrieval 청크는 제외.
         return "1.5.0"
 
     @property
@@ -174,10 +172,9 @@ class OutputBlock(BaseBlock):
                             "after": list(doc.suggested_tags or []),
                         })
 
-                    # 메타 정보 생성 설계서(2026-07-23) Phase 4 — 문서 레벨
-                    # 키워드가 확정된 지금(OutputBlock은 DAG의 마지막 블록)에서야
-                    # 청크별 매칭이 가능하다. chunk_split은 이 블록보다 항상
-                    # 먼저 끝나므로 이 run의 청크는 이미 전부 존재한다.
+                    # 문서 레벨 키워드가 확정된 지금(OutputBlock은 DAG의 마지막
+                    # 블록)에서야 청크별 매칭이 가능하다. chunk_split은 이 블록보다
+                    # 항상 먼저 끝나므로 이 run의 청크는 이미 전부 존재한다.
                     document_keywords = [
                         k for k in (upstream.get("keywords") or []) if isinstance(k, str) and k.strip()
                     ]
@@ -199,9 +196,8 @@ class OutputBlock(BaseBlock):
                     if saved_fields:
                         db.commit()
 
-                    # 메타 정보 생성 설계서(2026-07-23) Phase 5 — Summary Index.
-                    # 실패해도 이 run의 나머지 결과는 이미 커밋됐으므로 되돌리지
-                    # 않는다(best-effort, Qdrant 장애가 워크플로우 run 자체를
+                    # Summary Index — 실패해도 이 run의 나머지 결과는 이미 커밋됐으므로
+                    # 되돌리지 않는다(best-effort, Qdrant 장애가 워크플로우 run 자체를
                     # 실패시키면 안 됨).
                     if "summary" in saved_fields:
                         try:

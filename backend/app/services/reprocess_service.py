@@ -240,6 +240,8 @@ async def start_partial_reprocess(
 # 시간초과로 SIGKILL된 셀러리 hard time limit은 애플리케이션 코드로 잡을 수 없어(billiard가
 # 워커 fork 프로세스를 직접 죽임) run/step이 RUNNING 상태로 영구히 멈춰 있게 된다 — 별도
 # 워커/beat 인프라 없이, 문서 조회(GET /documents/{id})마다 지연 감지해 FAILED로 확정한다.
+# 30초 여유: task 타임아웃 발동과 DB에 반영되는 시점 사이의 clock skew 및 task
+# 큐/워커 지연을 흡수하고, 사용자 문서 새로고침이 너무 빨리 timeout 판정을 내리지 않도록.
 _TIMEOUT_GRACE_SECONDS = 30
 
 

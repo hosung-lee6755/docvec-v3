@@ -121,11 +121,11 @@ _REVIEW_GATED_BLOCK_TYPES = frozenset({"quality_check"})
 # DocumentChunk, quality_check -> QualityReport, ...) — a cache hit from an
 # EARLIER run would silently skip creating rows under the CURRENT run_id,
 # leaving every doc.active_run_id-scoped query (구조/정제 비교/사전 적용/
-# 민감정보 tabs) empty even though the step shows COMPLETED. Confirmed on a
-# real reprocess (2026-07-25): text_extract through pii_detect were cache
-# hits from an earlier failed attempt and wrote nothing under the new run,
-# while chunk_split (a genuine cache miss) worked fine. Deny-by-default so a
-# newly added block type is safe until explicitly added here.
+# 민감정보 tabs) empty even though the step shows COMPLETED. This bug occurs
+# when text_extract through pii_detect are cache hits from an earlier run and
+# write nothing under the current run_id, while later blocks like chunk_split
+# execute normally. Deny-by-default so a newly added block type is safe
+# until explicitly added here.
 _CACHE_SAFE_BLOCK_TYPES = frozenset({"file_validate", "format_detect", "text_extract"})
 
 
@@ -340,8 +340,8 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
 
         # cache_entry 경로에서도 반드시 확인해야 한다 — 이전에는 cache-hit일 때
         # requires_review를 전혀 확인하지 않고 무조건 _advance()로 넘어가 검토
-        # 게이트를 우회하는 버그가 있었다(2026-07-21 발견, WAITING_REVIEW로 멈춰
-        # 있던 run을 재실행했더니 rag_store까지 진행되어 미승인 상태로 임베딩됨).
+        # 게이트를 우회하는 버그가 있었다. 재실행했을 때 rag_store까지 진행되어
+        # 미승인 상태로 임베딩될 수 있다.
         if requires_review:
             run.status = "WAITING_REVIEW"
             if run.document_id:

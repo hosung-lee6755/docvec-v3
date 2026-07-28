@@ -86,8 +86,7 @@ def _determine_status(
     """overall_score는 5개 지표 평균이라, 청크 0개처럼 그 자체로 치명적인
     신호가 다른 지표(예: 표 문법만으로 min_extraction_chars를 넘겨버린
     textExtraction=100)에 희석돼 SUCCESS_WITH_WARNING으로 조용히 넘어갈 수
-    있다 — 청크 0개는 평균과 무관하게 먼저 FAILURE로 확정한다(2026-07-28
-    test_data E2E 검증, 서울시 도시 범죄 취약지 분석 PDF에서 실제 재현)."""
+    있다 — 청크 0개는 평균과 무관하게 먼저 FAILURE로 확정한다."""
     if chunk_count == 0:
         return "FAILURE"
     if overall_score < fail_below_score:
@@ -142,18 +141,16 @@ class QualityCheckBlock(BaseBlock):
 
     @property
     def block_version(self) -> str:
-        # Bumped: failed_pages/implicit_table_ratio/toc_heading_match_ratio
-        # are now computed and can newly reach PARTIAL_FAILURE (문서 파싱
-        # 고도화 Phase 4) — cached pre-upgrade reports lack these metrics and
-        # must not replay.
+        # Bumped: failed_pages/implicit_table_ratio/toc_heading_match_ratio가
+        # 이제 계산되어 새롭게 PARTIAL_FAILURE에 도달할 수 있다 — 캐시된
+        # 업그레이드 이전 리포트는 이 지표들이 없어 재사용하면 안 된다.
         #
         # 1.3.0: 분할 수준 점검이 이제 chunk_tier=="child" 청크만 센다 — parent
-        # Retrieval 청크(Phase 9)를 포함하면 "너무 긴 청크" 오탐이 생긴다
-        # (메타 정보 생성.txt 3절, 2026-07-24).
+        # Retrieval 청크를 포함하면 "너무 긴 청크" 오탐이 생긴다.
         #
         # 1.4.0: 청크 0개는 overall_score 평균과 무관하게 무조건 FAILURE로
         # 강제한다 — 캐시된 pre-1.4.0 결과는 청크 0개인 문서도 SUCCESS_WITH_
-        # WARNING으로 남아 있을 수 있어 재사용하면 안 된다(2026-07-28).
+        # WARNING으로 남아 있을 수 있어 재사용하면 안 된다.
         return "1.4.0"
 
     @property
@@ -252,7 +249,7 @@ class QualityCheckBlock(BaseBlock):
             if empty_page_ratio > cfg.max_empty_page_ratio:
                 add_warning("structure", f"빈 페이지 비율이 기준을 초과했습니다({empty_page_ratio:.1%} > {cfg.max_empty_page_ratio:.1%}).")
 
-            # --- 구조 수준 ---
+            # --- 구조 수준 — 빈 페이지도 함께 반영 ---
             nodes = (
                 db.query(DocumentNode)
                 .filter(DocumentNode.document_id == doc.id, DocumentNode.run_id == context.run_id)
@@ -346,8 +343,8 @@ class QualityCheckBlock(BaseBlock):
             if status == "PARTIAL_FAILURE":
                 # 일부 페이지만 OCR 신뢰도 기준 미달 — 문서 전체 재작업이
                 # 아니라 해당 페이지만 다시 확인하면 되는 부분 실패로 구분한다
-                # (문서 파싱 고도화 Phase 4, 모든 페이지가 미달이면 이미 ocr_score
-                # 자체가 낮아 위 FAILURE 분기에서 걸린다).
+                # (모든 페이지가 미달이면 이미 ocr_score 자체가 낮아 위
+                # FAILURE 분기에서 걸린다).
                 add_warning("ocr", f"OCR 신뢰도가 낮은 페이지가 있습니다: {failed_pages}.")
 
             status, requires_review = _decide_review(status, cfg.review_policy, context.skip_review)

@@ -239,12 +239,12 @@ def _build_blocks(
     return blocks
 
 
-# Docling 도입 설계서(2026-07-23) Phase 2 — Document.elements(Docling 경로)가
-# 있을 때 아래 타입 매핑으로 DocumentNode를 직접 구성한다. _classify()의
-# 정규식 재분류를 전혀 거치지 않으므로, "목차가 제목/문단으로 오분류"되는
-# 문제의 원인 자체(정규식이 목차 줄을 번호매김 패턴으로 오인)가 이 경로에서는
-# 애초에 발생하지 않는다 — Docling이 목차를 별도 네이티브 타입(document_index)
-# 으로 이미 분리해 주므로 그걸 그대로 TOC로 옮기면 된다.
+# Document.elements(Docling 경로)가 있을 때 아래 타입 매핑으로 DocumentNode를
+# 직접 구성한다. _classify()의 정규식 재분류를 전혀 거치지 않으므로, "목차가
+# 제목/문단으로 오분류"되는 문제의 원인 자체(정규식이 목차 줄을 번호매김
+# 패턴으로 오인)가 이 경로에서는 애초에 발생하지 않는다 — Docling이 목차를
+# 별도 네이티브 타입(document_index)으로 이미 분리해 주므로 그걸 그대로
+# TOC로 옮기면 된다.
 _ELEMENT_TOC_TYPES = {"document_index"}
 _ELEMENT_HEADING_TYPES = {"title", "section_header", "section-header"}
 _ELEMENT_TABLE_TYPES = {"table"}
@@ -319,11 +319,10 @@ def _build_blocks_from_elements(
 def _extract_title(
     built_blocks: list[tuple[str, int | None, int | None, int | None, str, dict | None]],
 ) -> str | None:
-    """트리의 첫 HEADING 블록 텍스트를 문서 제목으로 삼는다(메타 정보 생성
-    설계서, 2026-07-23 Phase 1) — legacy/elements 두 경로 모두
-    `_build_blocks*()`가 만드는 동일한 6-tuple shape를 그대로 받으므로 경로
-    분기가 필요 없다. 헤딩이 하나도 없으면 None(프론트가 original_filename로
-    폴백 표시)."""
+    """트리의 첫 HEADING 블록 텍스트를 문서 제목으로 삼는다 — legacy/elements
+    두 경로 모두 `_build_blocks*()`가 만드는 동일한 6-tuple shape를 그대로
+    받으므로 경로 분기가 필요 없다. 헤딩이 하나도 없으면 None(프론트가
+    original_filename로 폴백 표시)."""
     for node_type, _level, _start, _end, block_text, _layout in built_blocks:
         if node_type == "HEADING" and block_text.strip():
             return block_text.strip()[:500]

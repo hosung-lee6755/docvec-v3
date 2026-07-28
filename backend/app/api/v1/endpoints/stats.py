@@ -17,10 +17,10 @@ from app.db.session import get_db
 
 router = APIRouter()
 
-# document_status DB enum(app/db/models/document.py)의 처리중 상태 전부를 반영해야
-# 한다 — VALIDATING/MASKING/STRUCTURING/NORMALIZING(DAG 워크플로우 엔진 도입분)이
-# 빠져 있어 대시보드 카드(/stats)가 목록(프런트 PROCESSING_STATUSES)보다 적게
-# 세는 불일치가 있었다.
+# Must reflect all processing states from the document_status DB enum
+# (app/db/models/document.py), including VALIDATING, MASKING, STRUCTURING, and
+# NORMALIZING from the DAG workflow engine. Omitting any state causes dashboard
+# stats to undercount vs. the document list.
 _PROCESSING_STATUSES = {
     "QUEUED", "INGESTING", "PARSING", "STRUCTURING", "NORMALIZING",
     "CHUNKING", "EMBEDDING", "UPLOADING", "VALIDATING", "MASKING",
@@ -58,10 +58,9 @@ async def get_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # list_documents(documents.py)가 쓰는 것과 동일한 가시성 범위 — "내가 만든 문서"만이
-    # 아니라 "내가 접근 가능한 컬렉션의 문서"까지 포함해야 한다. 이전엔 created_by만
-    # 필터링해 대시보드 카드가 목록(공유 컬렉션 문서 포함)보다 적게 세는 불일치가
-    # 있었다.
+    # Match list_documents visibility scope: include not only owned documents but
+    # also documents in accessible (shared) collections. Filtering only created_by
+    # would exclude shared collection documents and cause stats to undercount.
     shared_ids = await accessible_collection_ids(db, current_user)
     owned_or_shared = [Document.created_by == str(current_user.id)]
     if shared_ids:

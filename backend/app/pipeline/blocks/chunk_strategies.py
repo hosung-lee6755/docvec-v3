@@ -15,11 +15,10 @@ _HANGUL_TOKEN_RE = re.compile(r"[가-힣]")
 
 
 def _estimate_token_count(text: str) -> int:
-    """정밀 토크나이저 없이 청크의 토큰 수를 저비용으로 근사한다(메타 정보
-    생성 설계서, 2026-07-23 Phase 4) — 한글은 음절 하나가 대체로 토큰 하나에
-    가깝고, 그 외 문자(영문/숫자/기호)는 대략 4글자당 토큰 하나로 어림한다.
-    BGE-M3 등 실제 서브워드 토크나이저와 정확히 일치하지 않지만, 청크 크기
-    감각을 보여주는 용도로는 충분하다."""
+    """정밀 토크나이저 없이 청크의 토큰 수를 저비용으로 근사한다 — 한글은 음절
+    하나가 대체로 토큰 하나에 가깝고, 그 외 문자(영문/숫자/기호)는 대략 4글자당
+    토큰 하나로 어림한다. BGE-M3 등 실제 서브워드 토크나이저와 정확히 일치하지
+    않지만, 청크 크기 감각을 보여주는 용도로는 충분하다."""
     if not text:
         return 0
     hangul_chars = len(_HANGUL_TOKEN_RE.findall(text))
@@ -305,8 +304,7 @@ def _tree_based_chunks(
     # 꼬리 병합: 마지막 청크가 min_chars 미만이면 직전 청크에 합친다 — 단,
     # 같은 section_path일 때만(다른 섹션과는 절대 섞지 않는다), 그리고 둘 중
     # 하나라도 TABLE 노드에서 온 청크면 절대 합치지 않는다 — preserve_table의
-    # "표는 항상 자기 혼자만의 청크" 보장이 꼬리 병합으로 깨지는 것을 방지
-    # (문서 파싱 고도화 회고, 2026-07-23).
+    # "표는 항상 자기 혼자만의 청크" 보장이 꼬리 병합으로 깨지는 것을 방지한다.
     if len(chunks) > 1 and (chunks[-1].end - chunks[-1].start) < min_chars:
         prev, last = chunks[-2], chunks[-1]
         prev_or_last_is_table = bool(

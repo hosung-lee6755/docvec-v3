@@ -16,8 +16,16 @@ from app.services.embedding import get_embedding_provider
 from app.services.mmr_service import mmr_rerank
 from app.services.qdrant_service import qdrant_service
 
+# 4: hybrid search (vector + BM25) needs broader initial candidate pool because
+# the rerank step may substantially reorder results; 3–4x fetch buffer prevents
+# trimming away candidates that would rise on reranking
 _HYBRID_CANDIDATE_MULTIPLIER = 4
+# 3: MMR diversity selection needs fewer candidates than hybrid reranking since
+# the greedy algorithm evaluates redundancy against already-selected items,
+# diminishing returns beyond 3x the requested limit
 _MMR_CANDIDATE_MULTIPLIER = 3
+# 0.7: favors relevance (70%) over diversity (30%) — standard balance for retrieval;
+# queries expecting maximum diversity can override to lower values
 _MMR_LAMBDA = 0.7
 
 

@@ -1,5 +1,7 @@
 import math
 
+# 0.7: favors relevance (70%) over diversity (30%) — standard balance for retrieval;
+# queries expecting maximum diversity can override to lower values
 _DEFAULT_LAMBDA = 0.7
 
 

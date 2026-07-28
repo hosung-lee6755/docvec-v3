@@ -194,19 +194,19 @@ class TextExtractConfig(BaseModel):
     extract_images: bool = True
     recognize_figures: bool = True
     max_figures: int = 40
-    # 문서 파싱 고도화 Phase 1: exclude detected running headers/footers from
-    # parsed_text (chunking/citations/RAG never see repeated page furniture).
+    # Exclude detected running headers/footers from parsed_text (chunking/
+    # citations/RAG never see repeated page furniture).
     exclude_headers_footers: bool = True
-    # 문서 파싱 고도화 Phase 3 — PDF 전용(선 없는 정렬 기반 표 검출).
-    # 표가 거의 없는 문서군에서는 매 페이지 추가 클러스터링 비용을 아끼려고
-    # 끌 수 있게 노출한다. 끄면 이 표들은 그냥 일반 본문 텍스트로 남는다.
+    # PDF 전용(선 없는 정렬 기반 표 검출). 표가 거의 없는 문서군에서는 매 페이지
+    # 추가 클러스터링 비용을 아끼려고 끌 수 있게 노출한다. 끄면 이 표들은 그냥
+    # 일반 본문 텍스트로 남는다.
     detect_implicit_tables: bool = True
-    # 문서 파싱 고도화 Phase 1/2 — Document.extraction_layout(줄 단위 폰트/
-    # 스타일 신호) 계산 자체를 끈다. 끄면 structure_analyze는 항상 정규식-only
-    # 폴백 경로로만 동작한다(extraction_layout이 없는 문서와 동일하게 처리).
+    # Document.extraction_layout(줄 단위 폰트/스타일 신호) 계산 자체를 끈다.
+    # 끄면 structure_analyze는 항상 정규식-only 폴백 경로로만 동작한다
+    # (extraction_layout이 없는 문서와 동일하게 처리).
     extract_font_signals: bool = True
-    # Docling 도입 설계서(2026-07-23) Phase 1 — "docling"이면 PDF에 한해
-    # DoclingAdapter 사용(DOCX/HWP/HWPX는 이 값과 무관하게 항상 기존 어댑터).
+    # "docling"이면 PDF에 한해 DoclingAdapter 사용(DOCX/HWP/HWPX는 이 값과
+    # 무관하게 항상 기존 어댑터).
     engine: str = "legacy"
 
 
@@ -275,9 +275,8 @@ def _strip_excluded_lines(text: str, excluded: set[str]) -> str:
 
 def _assemble_full_text(pages, excluded_lines: set[str]) -> tuple[str, dict[str, tuple[int, int]]]:
     """`doc.parsed_text`가 될 최종 문자열과, 그 문자열 안에서 각 `element_id`가
-    차지하는 (span_start, span_end) 오프셋을 함께 계산한다(Docling 도입
-    설계서, 2026-07-23 Phase 2). 반환된 문자열은 반드시
-    `"\\n\\n".join(...)`으로 조립되므로, structure_analyze(Phase 2)가 elements
+    차지하는 (span_start, span_end) 오프셋을 함께 계산한다. 반환된 문자열은
+    반드시 `"\\n\\n".join(...)`으로 조립되므로, structure_analyze가 elements
     경로에서 줄 단위 fuzzy 매칭 없이 정확한 span으로 DocumentNode를 만들 수
     있다. NUL 제거는 각 조각 단위로 먼저 해서 오프셋이 최종 문자열과
     어긋나지 않게 한다."""

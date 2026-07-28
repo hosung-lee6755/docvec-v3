@@ -68,9 +68,8 @@ class WorkflowRun(Base):
     # Set at upload time from the "검토 없이 진행" UI option — read by
     # quality_check (BlockContext.skip_review) to force review_policy to
     # auto_pass for this run only, without mutating the shared
-    # WorkflowBlockInstance.config (9항목 펀치리스트 #1, 2026-07-24). Does NOT
-    # bypass review for FAILURE/PARTIAL_FAILURE — those always require review
-    # regardless of this flag.
+    # WorkflowBlockInstance.config. Does NOT bypass review for FAILURE/PARTIAL_FAILURE
+    # — those always require review regardless of this flag.
     skip_review: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -46,8 +46,8 @@ class ChunkSplitBlock(BaseBlock):
     def block_version(self) -> str:
         # 1.1.0: _tree_based_chunks의 꼬리 병합이 preserve_table을 무시하고
         # TABLE 노드의 청크를 뒤따르는 짧은 문단과 합칠 수 있던 버그를 수정
-        # (chunk_strategies.py, 문서 파싱 고도화 회고 2026-07-23) — 캐시된
-        # pre-1.1.0 결과는 이 수정을 반영하지 않으므로 재사용하면 안 된다.
+        # (chunk_strategies.py) — 캐시된 pre-1.1.0 결과는 이 수정을 반영하지
+        # 않으므로 재사용하면 안 된다.
         #
         # 1.2.0: 오버사이즈 TABLE 노드가 이제 문자수 컷 대신 헤더 반복 포함
         # 행 그룹으로 나뉜다(신규 table_chunk_max_rows 설정) — 캐시된
@@ -418,12 +418,12 @@ class RagStoreBlock(BaseBlock):
 
             for chunk in chunks:
                 chunk.embedded = True
-                # 메타 정보 생성 설계서(2026-07-23) Phase 4 — 이미 계산된 값을
-                # Qdrant 페이로드뿐 아니라 DB 컬럼에도 그대로 남긴다.
+                # 이미 계산된 값을 Qdrant 페이로드뿐 아니라 DB 컬럼에도
+                # 그대로 남긴다(추후 추적용).
                 chunk.embedding_model = embedding_model
-                # 메타 정보 생성.txt 3절 version(임베딩 버전) — 별도 버전 태그가
-                # 없어 임베딩 차원수를 버전 대용으로
-                # 스탬프한다. 모델이 바뀌어 차원수가 달라지면 값도 함께 바뀐다.
+                # 임베딩 버전 — 별도 버전 태그가 없어 임베딩 차원수를 버전
+                # 대용으로 스탬프한다. 모델이 바뀌어 차원수가 달라지면 값도
+                # 함께 바뀐다.
                 chunk.version = str(provider.dimension)
             doc.status = "INDEXED"
             doc.updated_at = datetime.utcnow()
