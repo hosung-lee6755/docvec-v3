@@ -1,8 +1,12 @@
 # 문서 데이터 RAG 플랫폼 고도화 설계서
 
+**최종 갱신**: 2026-07-28 — 아래 내용은 실제 구현 완료 상태를 반영함
+
 ## 0. 문서 목적
 
-본 문서는 PDF, HWPX, DOCX, PPTX, XLSX, 이미지 등 다양한 문서를 수집·분석·구조화하고, 하이브리드 검색과 LLM을 통해 근거 기반 답변을 제공하는 **문서 데이터 RAG 플랫폼**의 구축 절차와 설계 기준을 정의한다.
+본 문서는 **PDF, HWPX, DOCX** 등 문서를 수집·분석·구조화하고, 하이브리드 검색(Dense + BM25)과 Reranker, LLM을 통해 근거 기반 답변을 제공하는 **문서 데이터 RAG 플랫폼**의 구축 절차와 설계 기준을 정의한다.
+
+> **⚠ 실제 구현 범위**: 설계는 PPTX, XLSX, 이미지 등을 포함하지만, 현재 구현은 **PDF(Native + Docling), DOCX, HWP, HWPX**만 지원함. PPTX, XLSX, 이미지 등은 향후 작업.
 
 본 플랫폼은 단순한 벡터 검색 챗봇이 아니라 다음 기능을 포함하는 통합 플랫폼을 목표로 한다.
 
@@ -165,13 +169,13 @@
 
 ### 4.1 지원 입력
 
-| 유형 | 예시 |
-|---|---|
-| 파일 | PDF, HWPX, DOCX, PPTX, XLSX, TXT, Markdown, 이미지 |
-| 저장소 | S3, MinIO, NAS, Google Drive, SharePoint, OneDrive |
-| 업무 시스템 | 사내 DB, 그룹웨어, 전자결재, 문서관리시스템 |
-| 실시간 연동 | REST API, Webhook |
-| 배치 연동 | 일정 기반 수집, 폴더 감시 |
+| 유형 | 설계 범위 | 실제 구현 |
+|---|---|---|
+| 파일 | PDF, HWPX, DOCX, PPTX, XLSX, TXT, Markdown, 이미지 | **PDF, HWPX, DOCX, HWP만 구현** (PPTX, XLSX, 이미지 미구현) |
+| 저장소 | S3, MinIO, NAS, Google Drive, SharePoint, OneDrive | 파일 업로드 API만 구현 (`POST /v1/documents`) |
+| 업무 시스템 | 사내 DB, 그룹웨어, 전자결재, 문서관리시스템 | 미구현 |
+| 실시간 연동 | REST API, Webhook | 미구현 |
+| 배치 연동 | 일정 기반 수집, 폴더 감시 | 미구현 |
 
 ### 4.2 등록 시 필수 처리
 
@@ -273,41 +277,41 @@ Job에는 입력 버전, 처리기 버전, 모델 버전, 설정값, 시작·종
 - 손상 문서 여부
 - 언어 및 문자 체계
 
-### 6.2 권장 라우팅
+### 6.2 권장 라우팅 (실제 구현)
 
-| 문서 상태 | 기본 처리 | 보조 처리 |
+| 문서 상태 | 기본 처리 | 실제 구현 |
 |---|---|---|
-| 디지털 PDF | Native PDF Parser | Layout Parser |
-| 스캔 PDF | 이미지 전처리 + OCR | VLM 보정 |
-| 혼합 PDF | 페이지별 Native/OCR 분기 | Layout 병합 |
-| DOCX/HWPX | 구조 기반 Parser | 이미지 OCR |
-| PPTX | 슬라이드 구조 Parser | 이미지·도표 VLM |
-| XLSX | 셀·시트 구조 Parser | 표 설명 생성 |
-| 복잡한 표 문서 | Table Parser | OCR/VLM fallback |
-| 손상·저품질 문서 | OCR + 품질 검수 | Human Review |
+| 디지털 PDF | Native PDF Parser | `pdf_adapter.py` — PDF text layer 추출 |
+| 스캔 PDF | 이미지 전처리 + OCR | `docling_adapter.py` — EasyOCR(한국어) + Reading Order 복원 |
+| 혼합 PDF | 페이지별 Native/OCR 분기 | TextExtractBlock에서 config.engine으로 선택 |
+| DOCX/HWPX | 구조 기반 Parser | `docx_adapter.py` (DOCX), `hwp_adapter.py` (HWP/HWPX) |
+| PPTX | 슬라이드 구조 Parser | **미구현** |
+| XLSX | 셀·시트 구조 Parser | **미구현** |
+| 복잡한 표 문서 | Table Parser | Docling table detection |
+| 손상·저품질 문서 | 품질 검수 | `quality_blocks.py`로 평가 후 REVIEW_REQUIRED 상태 |
 
 ---
 
 ## 7. 파싱, OCR, Layout, VLM 처리
 
-### 7.1 처리 우선순위
+### 7.1 처리 우선순위 (실제 구현)
 
 ```text
-Native Parser
-→ 품질 점검
-→ 실패 페이지 OCR
-→ Layout Analysis
-→ 표·이미지·도형 특수 처리
-→ 필요 시 VLM 의미 보완
+Native Parser (pdf_adapter.py / docx_adapter.py / hwp_adapter.py)
+→ 텍스트 추출 성공 확인
+→ 실패 페이지 Docling OCR 선택 (config.engine == "docling")
+→ 표 감지 (Docling built-in)
+→ Reading Order 복원
 → 결과 병합
 ```
 
-VLM은 모든 페이지에 일괄 적용하기보다 다음과 같은 경우에 선택적으로 사용한다.
+**Docling Adapter** (`docling_adapter.py`)는 다음 단계를 수행:
+- EasyOCR (한국어 지원)로 스캔 페이지 OCR
+- 표·이미지·도형 레이아웃 분석
+- Reading order 자동 복원
+- 페이지 내 좌표(bbox) 보존
 
-- OCR만으로 읽기 순서를 복구하기 어려운 문서
-- 복잡한 표, 도식, 체크박스, 서명, 도장 해석
-- 이미지 내부 텍스트와 시각적 관계 해석
-- 문서 유형 및 필드 의미 분류
+**VLM**: 현재 구현에서는 미사용. 필요 시 향후 선택적으로 추가 가능.
 
 ### 7.2 페이지·블록 구조
 
@@ -402,26 +406,34 @@ VLM은 모든 페이지에 일괄 적용하기보다 다음과 같은 경우에 
 
 구조화 결과가 일정 기준을 충족하지 못하면 자동 인덱싱하지 않고 검수 대상으로 전환한다.
 
-### 9.1 품질 지표 예시
+### 9.1 품질 지표 (5단계 — 실제 구현)
 
-- 텍스트 추출 성공 페이지 비율
-- 평균 OCR confidence
-- 빈 페이지 비율
-- 깨진 문자 비율
-- 제목·본문·표 블록 탐지 비율
-- 표 구조 유효성
-- 읽기 순서 이상 여부
-- 페이지·좌표 매핑 성공률
+`backend/app/pipeline/blocks/quality_blocks.py`에서 계산:
 
-### 9.2 품질 정책 예시
+1. **textExtraction** — 추출된 문자 수 / 페이지 수로 정규화된 지표
+2. **ocr** — OCR 신뢰도 (Document.ocr_page_confidence 평균)
+3. **structure** — TOC-Heading 일치율, 암시적 표 검출률
+4. **normalization** — 깨진 문자(U+FFFD, 제어문자) 비율
+5. **chunking** — 생성된 청크 개수 (0개 = 치명적 실패)
+
+### 9.2 품질 상태 판정 (QualityReport.status)
 
 ```text
-OCR 평균 신뢰도 0.90 이상: 자동 게시 가능
-0.75 이상 0.90 미만: 경고와 함께 게시 또는 표본 검수
-0.75 미만: REVIEW_REQUIRED
+FAILURE
+  ├─ overall_score < fail_below_score (threshold)
+  └─ **또는 chunk_count == 0** (2026-07-28 버그 수정)
+
+PARTIAL_FAILURE
+  └─ 일부 페이지 OCR 신뢰도 미달 (전체 미달 아님)
+
+SUCCESS_WITH_WARNING
+  └─ 경고 조건 존재 (has_warnings=True)
+
+SUCCESS
+  └─ 모든 기준 충족
 ```
 
-문서 유형별로 기준을 다르게 설정할 수 있어야 한다.
+> **⚠ 중요**: 청크 0개인 경우, overall_score 평균과 무관하게 **즉시 FAILURE로 강제 확정** (2026-07-28 E2E 테스트 검증). 이는 검색 및 답변이 불가능한 상태를 명확히 구분하기 위함. 실제 사례: 서울시 도시 범죄 취약지 분석 PDF에서 텍스트 추출은 성공했으나 청킹 로직이 청크를 생성하지 못함.
 
 ---
 
@@ -495,7 +507,7 @@ Query
          └─ Citation
 ```
 
-### 11.2 청크 메타데이터 예시
+### 11.2 청크 메타데이터 예시 (메타 정보 생성 Phase 0~9)
 
 ```json
 {
@@ -510,6 +522,7 @@ Query
   "section_path": ["제2장 계약 조건", "제5조 대금 지급"],
   "chunk_type": "paragraph",
   "parent_chunk_id": "parent_005",
+  "chunk_tier": "child",
   "source_block_ids": ["blk_001", "blk_002"],
   "bbox_list": [[120, 80, 460, 120], [120, 140, 800, 240]],
   "language": "ko",
@@ -523,6 +536,8 @@ Query
   "indexed_at": "2026-07-10T10:10:00+09:00"
 }
 ```
+
+> **⚠ 실제 구현**: 메타 정보 생성 Phase 0~9 전체 완료 (`backend/app/pipeline/tasks/metadata.py`). Phase 9는 Parent Retrieval 계층형 구조 (child chunk의 parent_chunk_id와 chunk_tier로 대부분 표현). Qdrant Summary Index는 별도 Phase 5로 document_summaries 컬렉션 구성.
 
 ### 11.3 필수 추적 버전
 
@@ -581,13 +596,21 @@ index_v1 유지
 
 ## 13. 검색 인덱스
 
-### 13.1 권장 구성
+### 13.1 구성 (실제 구현)
 
 ```text
-Dense Vector Index: 의미 유사성
-Sparse/BM25 Index: 정확 키워드와 고유 식별자
-Metadata Index: 권한, 날짜, 버전, 문서 유형
-Optional Entity Index: 인물, 조직, 계약번호, 제품명
+Dense Vector Index: Qdrant (의미 유사성)
+  ├─ 기본 컬렉션: qdrant_collection_name (청크 임베딩)
+  └─ Summary 컬렉션: document_summaries (문서 요약)
+
+Sparse/BM25 Index: BM25 Reranker (정확 키워드)
+  └─ search_service.py:bm25_rerank() — 후보 청크 재정렬
+
+Metadata Filter: Qdrant payload (권한, 날짜, 버전, 문서 유형)
+  └─ collection_id, document_id, section_path 등
+
+Reranker: Cross-Encoder (BAAI/bge-reranker-v2-m3)
+  └─ reranker.py:cross_encoder_rerank() — 최종 정확도 개선
 ```
 
 ### 13.2 인덱스 단위
@@ -724,27 +747,36 @@ Optional Entity Index: 인물, 조직, 계약번호, 제품명
 
 ## 17. Reranking
 
-### 17.1 처리 흐름
+### 17.1 처리 흐름 (실제 구현)
 
 ```text
-Hybrid 후보 Top 20~50
-→ 질문-청크 쌍 생성
-→ Cross-Encoder 또는 Reranker 실행
-→ 문서 다양성·중복·최신성 규칙 적용
-→ 최종 Top 5~10
+Query Expansion (dictionary-based synonym)
+→ Dense Search (Qdrant) Top 30~100
+→ BM25 Rerank (search_service.py)
+→ Merge/Normalize Scores (Reciprocal Rank Fusion)
+→ Optional: Cross-Encoder Rerank (BAAI/bge-reranker-v2-m3)
+→ Top 5~10 Candidates
+→ Context Builder (LLM 전달)
 ```
 
-### 17.2 리랭킹 시 고려 요소
+### 17.2 Reranker 구현
+
+**Model**: BAAI/bge-reranker-v2-m3 (`reranker.py`)
+- FlagEmbedding 라이브러리 사용
+- 질문-청크 쌍을 cross-encoder로 점수 매김
+- 로드 실패 시 자동 fallback (hybrid 순서 유지)
+
+**Dictionary Expansion** (`search_service.py:expand_query`)
+- SEARCH_EXPAND 타입 사전 항목만 사용
+- 동의어 재작성 후 쿼리 임베딩
+- 저비용 in-memory 룩업
+
+### 17.3 고려 요소
 
 - 질문과의 직접 관련성
 - 답변을 완성할 정보 포함 여부
-- 공식·최신 문서 여부
-- 문서 버전과 유효기간
-- 중복 또는 인접 청크 여부
-- 문서 간 다양성
-- 사용자 권한 재검증
-
-Reranker 도입 여부와 후보 개수는 품질과 지연시간을 함께 평가하여 결정한다.
+- 중복 또는 인접 청크 여부 (구현되지 않음)
+- 사용자 권한 재검증 (검색 전 적용)
 
 ---
 
@@ -890,15 +922,15 @@ LangGraph와 같은 상태 머신은 복합 질의, 다단계 검증, 재시도,
 
 ## 22. 평가 체계
 
-### 22.1 문서 처리 평가
+### 22.1 문서 처리 평가 (QualityReport)
 
-| 지표 | 설명 |
-|---|---|
-| OCR CER/WER | 문자·단어 인식 오류율 |
-| Layout Accuracy | 블록 유형·좌표·읽기 순서 정확도 |
-| Table Accuracy | 셀, 행·열, 병합 구조 정확도 |
-| Page Mapping Accuracy | 원문 페이지·좌표 연결 정확도 |
-| Structure Accuracy | 제목·조항 계층 복원 정확도 |
+| 지표 | 설명 | 실제 구현 |
+|---|---|---|
+| textExtraction | 추출된 문자 수 정규화 | quality_blocks.py에서 계산 |
+| ocr | OCR 신뢰도 평균 | ocr_page_confidence 평균 |
+| structure | TOC-Heading 일치율, 암시적 표 검출률 | DocumentNode 트리 기반 계산 |
+| normalization | 깨진 문자(U+FFFD 등) 비율 | regex 기반 탐지 |
+| chunking | 생성된 청크 개수 | chunk_count (0개 = FAILURE) |
 
 ### 22.2 검색 평가
 
@@ -910,8 +942,11 @@ LangGraph와 같은 상태 머신은 복합 질의, 다단계 검증, 재시도,
 - 정답 청크 포함률
 - 권한 위반 검색률 0%
 
-### 22.3 답변 평가
+### 22.3 답변 평가 (GoldenQuery 기반)
 
+DB Model: `golden_query.py`, `golden_eval_run.py`
+
+평가 항목:
 - Answer Correctness
 - Faithfulness / Groundedness
 - Citation Accuracy
@@ -919,6 +954,8 @@ LangGraph와 같은 상태 머신은 복합 질의, 다단계 검증, 재시도,
 - Refusal Accuracy
 - 충돌 문서 처리 정확도
 - 최신 버전 선택 정확도
+
+> **⚠ 구현 상태**: Golden Query 모델과 평가 실행 (GoldenEvalRun) 기반 구조는 구현되어 있으나, 자동 평가 메트릭(Answer Correctness 점수 자동 계산 등)은 부분 구현. 대부분 수동 검증 또는 LLM 기반 판정이 필요.
 
 ### 22.4 운영 평가
 
@@ -963,17 +1000,21 @@ LangGraph와 같은 상태 머신은 복합 질의, 다단계 검증, 재시도,
 
 각 단계에 공통 `trace_id` 또는 연계 ID를 부여한다.
 
-### 23.2 대시보드
+### 23.2 대시보드 (메타 정보 생성 Phase 5)
 
 - 문서 상태별 건수
 - 처리 단계별 대기열
 - 실패 유형 및 재시도 현황
 - OCR·LLM·Embedding 사용량과 비용
-- 검색 품질 추이
-- 골든 쿼리 회귀 결과
+- 검색 품질 추이 (골든 쿼리 회귀)
 - 응답 지연시간
-- 문서 유형별 품질
+- 문서 유형별 품질 점수 (5단계 지표)
+- Summary Index 상태 (document_summaries Qdrant 컬렉션)
+  - 문서 요약 생성 성공률
+  - 문서 레벨 검색 성능
 - 모델·워크플로우 버전별 성능 비교
+
+> **Summary Index 구현** (`summary_index.py`): 문서당 요약 하나를 별도 Qdrant 컬렉션(document_summaries)에 저장. 청크 단위 검색과 독립적으로 "이 요약과 가장 가까운 문서"를 먼저 찾은 후, 해당 문서 내에서 청크 검색으로 구체적 답변을 구성하는 2단계 검색 가능.
 
 ### 23.3 오류 처리
 
@@ -1134,66 +1175,67 @@ POST /v1/answers/ans_001/feedback
 
 ## 28. MVP 및 단계별 구축 계획
 
-### 28.1 1단계: PoC
+### 28.1 1단계: PoC ✅ **완료**
 
 범위:
 
-- PDF, DOCX 핵심 문서
-- Native Parser 중심
-- 기본 구조 기반 청킹
-- Dense Search
-- LLM 답변
-- 문서명·페이지 Citation
-- 골든 쿼리 30~50개
+- ✅ PDF, DOCX, HWP, HWPX 핵심 문서 (PPTX, XLSX 제외)
+- ✅ Native Parser + Docling adapter
+- ✅ 고정 크기/섹션 기반 청킹
+- ✅ Dense Search (Qdrant)
+- ✅ LLM 답변
+- ✅ 문서명·페이지·섹션 Citation
+- ✅ 골든 쿼리 평가 구조
 
 완료 기준:
 
-- 핵심 질문에서 정답 문서가 안정적으로 검색됨
-- 답변과 페이지 출처가 연결됨
-- 전체 처리 흐름이 추적 가능함
+- ✅ 핵심 질문에서 정답 문서 검색 안정적
+- ✅ 답변과 출처(페이지/섹션) 연결
+- ✅ 문서 처리 흐름 추적 가능
 
-### 28.2 2단계: MVP
+### 28.2 2단계: MVP ✅ **대부분 완료**
 
 범위:
 
-- OCR 및 스캔 PDF
-- 표 구조화
-- Hybrid Search
-- Reranker
-- ACL과 메타데이터 필터
-- 관리자 문서 상태 화면
-- 사용자 피드백
-- 골든 쿼리 자동 평가
+- ✅ OCR 및 스캔 PDF (Docling)
+- ✅ 표 구조화
+- ✅ Hybrid Search (Dense + BM25)
+- ✅ Reranker (BAAI bge-reranker-v2-m3)
+- ✅ ACL과 메타데이터 필터 (Collection/Project/User 단위)
+- ✅ 관리자 문서 상태 화면
+- ✅ 사용자 피드백
+- ⚠ 골든 쿼리 자동 평가 (구조만 구현, 자동 메트릭 부분 구현)
 
 완료 기준:
 
-- 지원 문서 유형과 업무 범위에서 정량 품질 목표 달성
-- 권한 위반 검색이 발생하지 않음
-- 실패 문서의 재처리 가능
+- ✅ 지원 문서 유형에서 정량 품질 목표 달성
+- ✅ 권한 위반 검색 0% (ACL 필터 적용)
+- ✅ 실패 문서의 재처리 가능
 
-### 28.3 3단계: 운영 고도화
-
-범위:
-
-- HWPX, PPTX, XLSX 및 외부 커넥터
-- Parent-Child Retrieval
-- Query Decomposition
-- Citation Validator
-- 문서 변경 감지 및 증분 인덱싱
-- 비용·성능·품질 대시보드
-- 인덱스 Blue/Green 전환
-
-### 28.4 4단계: 플랫폼화
+### 28.3 3단계: 운영 고도화 ⚠ **부분 구현**
 
 범위:
 
-- 멀티테넌시
-- 워크플로우 디자이너
-- Parser/OCR/Embedding/LLM 플러그인
-- 모델·프롬프트·평가셋 레지스트리
-- API·SDK
-- Human Review Workflow
-- 도메인별 정책 템플릿
+- ✅ HWPX (완료), ❌ PPTX, XLSX 미구현
+- ❌ Parent-Child Retrieval
+- ❌ Query Decomposition
+- ⚠ Citation Validator (기본 로직 있음)
+- ❌ 문서 변경 감지 및 증분 인덱싱
+- ✅ 비용·성능·품질 대시보드 (기본)
+- ❌ 인덱스 Blue/Green 전환
+- ✅ Summary Index (document_summaries 컬렉션)
+
+### 28.4 4단계: 플랫폼화 ❌ **미구현**
+
+범위:
+
+- ❌ 멀티테넌시 (단일 테넌트 기반 설계)
+- ❌ 워크플로우 디자이너
+- ⚠ Parser/OCR 플러그인 기본 구조 (Adapter 인터페이스)
+- ❌ 모델·프롬프트·평가셋 레지스트리
+- ⚠ API 기본 구현 (SDK 미구현)
+- ❌ Human Review Workflow
+- ❌ 도메인별 정책 템플릿
 
 ---
 

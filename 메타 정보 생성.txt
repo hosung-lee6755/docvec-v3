@@ -1,4 +1,8 @@
-1. Document Metadata(문서 메타정보)
+**최종 갱신**: 2026-07-28 — 아래 내용은 실제 구현 완료 상태를 반영함
+
+**Phase 0~1. Document Metadata(문서 메타정보) — 완료**
+위치: `backend/app/db/models/document.py`
+
 | 필드             | 설명                           | 검색 활용 |
 | -------------- | ---------------------------- | ----- |
 | document_id    | 문서 UUID                      | 문서 고유 ID|
@@ -22,9 +26,12 @@
 | source_system  | SharePoint, S3 등             | 관리    |
 
 
-1.1 Summary Index : 문서 전체 요약을 별도 벡터로 생성, Document/Section 레벨 정보로 관리, 문서 레벨 검색 단위로 활용
+**Phase 8. Summary Index — 완료**
+위치: `backend/app/services/summary_index.py` (신규 Qdrant 컬렉션)
 
-Summary Index
+문서 전체 요약을 별도 벡터로 생성, Document/Section 레벨 정보로 관리, 문서 레벨 검색 단위로 활용
+
+Summary Index 컬렉션
 
 {
  document_id,
@@ -32,10 +39,12 @@ Summary Index
  summary_embedding
 }
 
-2. Element Metadata (Layout Parser 결과)
+**Phase 3~5. Element Metadata (Docling Layout Parser 결과) — 완료**
+위치: `backend/app/db/models/document_node.py::element_id` 컬럼 + Document.tables[*]["id"]
+
 | 필드             | 설명                                  |
 | -------------- | ----------------------------------- |
-| element_id     | Element ID                          |
+| element_id     | Element ID (Docling 엔진 부여)         |
 | document_id    | 문서 ID                               |
 | page           | 페이지                                 |
 | order          | 읽기 순서                               |
@@ -53,27 +62,46 @@ Summary Index
 | table_rows     | 행 개수                                |
 | table_cols     | 열 개수                                |
 
+**Phase 4. Document Structure Tree — 완료**
+`DocumentNode` 모델로 구조 트리 영속화 (`backend/app/db/models/document_node.py`)
+- node_type (HEADING/PARAGRAPH/TABLE/IMAGE/etc.)
+- level (제목 레벨)
+- span_start/span_end (parsed_text 오프셋)
+- user_corrected (사용자 보정 레이어)
 
-3. Chunk Metadata (Vector DB)
+
+**Phase 2~9. Chunk Metadata (Vector DB + DB) — 완료**
+위치: `backend/app/db/models/document_chunk.py`
+
 | 필드              | 추천    | 설명                    |
 | --------------- | ----- | --------------------- |
-| chunk_id        | ⭐⭐⭐⭐⭐ | PK                    |
+| chunk_id        | ⭐⭐⭐⭐⭐ | PK (Qdrant point id와 동일) |
 | document_id     | ⭐⭐⭐⭐⭐ | 문서 연결                 |
-| element_id      | ⭐⭐⭐⭐⭐ | 원본 Element            |
+| element_id      | ⭐⭐⭐⭐⭐ | 원본 Element (Phase 5)  |
 | page_start      | ⭐⭐⭐⭐⭐ | 시작 페이지                |
 | page_end        | ⭐⭐⭐⭐⭐ | 끝 페이지                 |
-| chunk_index     | ⭐⭐⭐⭐⭐ | 순서                    |
-| total_chunks    | ⭐⭐⭐⭐  | 전체 개수                 |
-| section         | ⭐⭐⭐⭐⭐ | 섹션명                   |
-| heading_path    | ⭐⭐⭐⭐⭐ | 제목 경로                 |
-| type            | ⭐⭐⭐⭐⭐ | paragraph/table/image |
+| chunk_order     | ⭐⭐⭐⭐⭐ | 순서 (chunk_index)      |
+| section_path    | ⭐⭐⭐⭐⭐ | 섹션명 배열 (Phase 3)   |
+| heading_path    | ⭐⭐⭐⭐⭐ | 제목 경로 (section_path와 동일) |
+| chunk_type      | ⭐⭐⭐⭐⭐ | paragraph/table/image (Phase 4) |
 | token_count     | ⭐⭐⭐⭐  | 토큰 수                  |
-| char_count      | ⭐⭐⭐   | 문자 수                  |
-| language        | ⭐⭐⭐   | 언어                    |
-| prev_chunk      | ⭐⭐⭐⭐  | 이전 청크                 |
-| next_chunk      | ⭐⭐⭐⭐  | 다음 청크                 |
-| parent_chunk    | ⭐⭐⭐⭐  | Parent Retrieval      |
-| keywords        | ⭐⭐⭐   | 키워드                   |
-| embedding_model | ⭐⭐⭐   | 모델명                   |
-| version         | ⭐⭐⭐   | 임베딩 버전                |
-| source_file     | ⭐⭐⭐   | 파일명                   |
+| char_count      | ⭐⭐⭐   | 문자 수 (Phase 7)       |
+| language        | ⭐⭐⭐   | 언어 (Phase 7)         |
+| prev_chunk_id   | ⭐⭐⭐⭐  | 이전 청크 UUID            |
+| next_chunk_id   | ⭐⭐⭐⭐  | 다음 청크 UUID            |
+| parent_chunk_id | ⭐⭐⭐⭐  | Parent Retrieval (Phase 9) |
+| chunk_tier      | ⭐⭐⭐⭐  | parent \| child (Phase 9) |
+| keywords        | ⭐⭐⭐   | 키워드 배열 (Phase 6)    |
+| embedding_model | ⭐⭐⭐   | 모델명 (Phase 8)        |
+| version         | ⭐⭐⭐   | 임베딩 차원수 (Phase 8)    |
+| source_file     | ⭐⭐⭐   | 파일명 (Phase 7)        |
+| source_node_ids | ⭐⭐⭐⭐  | 원본 노드 ID 배열 (Phase 3) |
+| span_start      | ⭐⭐⭐   | parsed_text 오프셋 시작 |
+| span_end        | ⭐⭐⭐   | parsed_text 오프셋 끝  |
+| excluded_pii    | ⭐⭐⭐   | PII 제외 여부            |
+| workflow_version| ⭐⭐⭐   | 워크플로우 버전            |
+| dictionary_version| ⭐⭐⭐ | 사전 버전                |
+
+**Phase 9. Chunk 계층형 Parent Retrieval — 완료**
+- `parent_chunk_id`: child가 속한 parent 청크
+- `chunk_tier`: "parent" | "child" (임베딩 대상은 child만, parent는 검색 메타데이터)

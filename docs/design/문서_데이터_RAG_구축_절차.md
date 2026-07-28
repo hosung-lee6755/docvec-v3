@@ -1,5 +1,7 @@
 # 문서 데이터 RAG 구축 절차
 
+**최종 갱신**: 2026-07-28 — 아래 내용은 실제 구현 완료 상태를 반영함
+
 ## 0. 개요
 
 문서 데이터 RAG는 단순히 문서를 벡터DB에 넣는 작업이 아니다.  
@@ -34,13 +36,15 @@
 
 먼저 어떤 문서를 RAG 대상으로 삼을지 정의한다.
 
-| 항목 | 예시 |
-|---|---|
-| 문서 형식 | PDF, DOCX, HWPX, TXT, Markdown, 이미지 PDF |
-| 문서 유형 | 계약서, 회의록, 보고서, 매뉴얼, 정책문서, 신청서 등 |
-| 문서 출처 | 업로드, Google Drive, Notion, 사내 DB, S3 |
-| 갱신 주기 | 1회성, 매일, 문서 변경 시 |
-| 권한 | 사용자별, 조직별, 프로젝트별 접근 제어 |
+| 항목 | 예시 | 실제 구현 |
+|---|---|---|
+| 문서 형식 | PDF, DOCX, HWPX, TXT, Markdown, 이미지 | **PDF, DOCX, HWP, HWPX만 구현됨** |
+| 문서 유형 | 계약서, 회의록, 보고서, 매뉴얼, 정책문서, 신청서 등 | 지원 |
+| 문서 출처 | 업로드, Google Drive, Notion, 사내 DB, S3 | 파일 업로드만 구현 |
+| 갱신 주기 | 1회성, 매일, 문서 변경 시 | 1회성, 재처리 지원 |
+| 권한 | 사용자별, 조직별, 프로젝트별 접근 제어 | Tenant/Organization/Project/Collection 단위 RBAC |
+
+> **⚠ 실제 구현과 차이**: 설계는 PPTX, XLSX, 이미지, 외부 커넥터를 포함했으나, 실제로는 파일 업로드 (`POST /v1/documents`) API를 통해 **PDF/DOCX/HWP/HWPX만** 지원됨 (`backend/app/api/v1/endpoints/documents.py:_SUPPORTED_UPLOAD_SUFFIXES`).
 
 이 단계에서 중요한 것은 파일만 저장하는 것이 아니라, 문서의 출처, 소유자, 버전, 권한, 업로드 시점을 함께 저장하는 것이다.
 
@@ -69,19 +73,21 @@
 
 ```text
 1. Native parser 먼저 시도
-2. 텍스트 레이어가 없거나 깨진 경우 OCR
-3. 표/이미지/서명/도장/체크박스는 별도 layout 또는 VLM 처리
-4. page, bbox, block_type 정보를 보존
+2. 텍스트 레이어가 없거나 깨진 경우 OCR (Docling + EasyOCR)
+3. 표/이미지는 Layout Analysis로 탐지
+4. page, bbox, block_type, reading_order 정보를 보존
 ```
 
-| 문서 상태 | 처리 방식 |
-|---|---|
-| 디지털 PDF | PDF text layer 추출 |
-| 스캔 PDF | OCR |
-| 표 중심 문서 | table parser + OCR fallback |
-| 이미지 포함 문서 | OCR/VLM 보조 |
-| HWPX/DOCX | 구조 기반 parser 우선 |
-| 깨진 문서 | OCR + human review 후보 |
+| 문서 상태 | 처리 방식 | 실제 구현 |
+|---|---|---|
+| 디지털 PDF | PDF text layer 추출 | Native PDF adapter (`pdf_adapter.py`) |
+| 스캔 PDF | OCR | Docling adapter (`docling_adapter.py`) — EasyOCR(한국어) + Reading Order 복원 |
+| 표 중심 문서 | table parser + OCR fallback | Docling table detection 내장 |
+| 이미지 포함 문서 | OCR/VLM 보조 | Docling으로 처리 |
+| HWPX/DOCX | 구조 기반 parser 우선 | `hwp_adapter.py`(HWP/HWPX), `docx_adapter.py`(DOCX) |
+| 깨진 문서 | OCR + 품질 검수 후보 | 품질 점검 후 REVIEW_REQUIRED 상태로 전환 |
+
+> **⚠ 실제 구현**: Docling PDF 어댑터(`backend/app/pipeline/adapters/docling_adapter.py`)가 도입되어 PDF에서 OCR, table 인식, reading order 복원을 수행. TextExtractBlock에서 config engine=="docling"일 때만 선택적으로 사용되고, 기본은 Native PDF adapter. 다른 포맷(HWPX/DOCX)은 기존 어댑터 유지.
 
 이 단계의 산출물은 단순 text가 아니라 구조화된 block이어야 한다.
 
@@ -379,7 +385,7 @@ OCR 문서라면 원문 텍스트만 보여주지 말고, 가능하면 문서 �
 
 ## 12. 골든 쿼리 평가
 
-구축 후에는 골든 쿼리로 평가한다.
+구축 후에는 골든 쿼리로 평가한다. 실제 구현은 `backend/app/db/models/golden_query.py` 모델 기반.
 
 ### 골든 쿼리 예시
 
@@ -387,13 +393,15 @@ OCR 문서라면 원문 텍스트만 보여주지 말고, 가능하면 문서 �
 {
   "id": "GQ-001",
   "query": "이 계약서의 계약금액은 얼마야?",
-  "expected_answer": "12,000,000원",
   "expected_document_id": "doc_001",
   "expected_page": 3,
   "expected_section": "제5조 대금 지급",
+  "answerable": true,
   "evaluation_type": "exact_match"
 }
 ```
+
+> **⚠ 실제 구현과 차이**: expected_answer는 선택 사항. 대신 expected_document_id와 answerable 필드로 "이 질문에 대해 어느 문서에 답이 있는가" 여부를 추적. GoldenEvalRun 모델로 평가 실행을 기록하며, 자동 메트릭 계산은 부분 구현.
 
 ### 평가 지표
 
