@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { AlertTriangle, ArrowLeft, Download, Loader2, Save, X } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { AlertTriangle, ArrowLeft, Check, Copy, Download, Loader2, Save, X } from 'lucide-react'
 import { useAcceptTagSuggestion, useDeleteChunk, useDismissTagSuggestion, useDocument, useDocumentChunks, useDocumentContent, useDocumentImages, useDocumentPagesText, useDocumentPreview, useDocumentRevisions, useDocumentTables, useDownloadDocument, useProceedDocument, useReprocessDocument, useRestoreRevision, useRetryDocument, useUpdateChunk, useUpdateDocumentTags } from '../hooks/useDocuments'
 import { useDocumentQuality, useDocumentRuns, type QualityMetrics } from '../hooks/useDocumentRuns'
 import { useCancelRun, useResumeRun, useWorkflowRun } from '../hooks/useWorkflows'
@@ -8,13 +10,16 @@ import { STATUS_BADGE_CLASSES, STATUS_LABELS } from '../lib/documentStatus'
 import StepTimeline from '../components/workflow/StepTimeline'
 import ReprocessModal from '../components/ReprocessModal'
 import StructureTab from '../components/document-detail/StructureTab'
+import ElementsTab from '../components/document-detail/ElementsTab'
 import CleaningChangesTab from '../components/document-detail/CleaningChangesTab'
 import DictionaryApplicationsTab from '../components/document-detail/DictionaryApplicationsTab'
 import PiiDetectionsTab from '../components/document-detail/PiiDetectionsTab'
+import { useUpdateDocumentMetadata, type SecurityLevel } from '../hooks/useDocumentMetadata'
+import { useDocumentNodes } from '../hooks/useDocumentStructure'
 
 type TabKey =
   | 'edit' | 'tables' | 'images' | 'chunks' | 'original' | 'quality' | 'history'
-  | 'structure' | 'cleaning' | 'dictionary' | 'pii'
+  | 'structure' | 'cleaning' | 'dictionary' | 'pii' | 'elements'
 
 // 문서 요약(doc.summary)·추천 태그는 분석 워크플로우 산출물이라 탭이 아니라
 // 왼쪽 메타데이터 패널로 이동했다 — 나머지는 전부 전처리 워크플로우 산출물
@@ -22,6 +27,12 @@ type TabKey =
 const TABS: { key: TabKey; label: string; pdfOnly?: boolean }[] = [
   { key: 'original', label: '원문 대조' },
   { key: 'structure', label: '구조' },
+  // Docling 도입 설계서(2026-07-23) Phase 4 — Docling 엔진(PDF 전용)으로 처리된
+  // 문서에서만 의미가 있다. 탭 자체는 pdfOnly로 PDF 문서에만 노출하고(다른
+  // pdfOnly 탭과 동일한 기존 게이팅 메커니즘 재사용), 실제로 Docling 결과가
+  // 없는 PDF(legacy 엔진)는 ElementsTab이 빈 상태 메시지를 보여준다 — "표" 탭이
+  // 표가 0개일 때도 그냥 빈 메시지를 보여주는 것과 동일한 원칙.
+  { key: 'elements', label: '요소', pdfOnly: true },
   { key: 'cleaning', label: '정제 비교' },
   { key: 'dictionary', label: '사전 적용' },
   { key: 'pii', label: '민감정보' },
@@ -142,8 +153,110 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       borderBottom: '1px solid var(--color-border)',
     }}>
       <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{label}</span>
-      <span style={{ fontSize: 13 }}>{children}</span>
+      <span style={{ fontSize: 13, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+        {children}
+      </span>
     </div>
+  )
+}
+
+function CopyableValue({ value, display }: { value: string; display: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(value)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontFamily: 'monospace', fontSize: 11, overflowWrap: 'anywhere', wordBreak: 'break-all' }}>
+        {display}
+      </span>
+      <button
+        onClick={handleCopy}
+        title="전체 값 복사"
+        className="krds-btn text small"
+        style={{ cursor: 'pointer', padding: 2, display: 'inline-flex', alignItems: 'center' }}
+      >
+        {copied ? <Check size={12} style={{ color: '#16a34a' }} /> : <Copy size={12} />}
+      </button>
+    </span>
+  )
+}
+
+// 메타 정보 생성 설계서(2026-07-23) Phase 2 — author/organization/
+// source_system은 문서 내용에서 자동 생성할 수 없어 사용자가 직접 입력해야
+// 채워진다. 청크/요소 탭의 편집 UX(버튼→입력→저장/취소)와 동일한 패턴.
+function EditableMetaField({
+  label, value, placeholder = '미입력', onSave,
+}: { label: string; value: string | null; placeholder?: string; onSave: (value: string) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value ?? '')
+
+  if (!editing) {
+    return (
+      <Row label={label}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: value ? 'inherit' : 'var(--color-text-muted)' }}>
+            {value || placeholder}
+          </span>
+          <button
+            onClick={() => { setDraft(value ?? ''); setEditing(true) }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--color-primary)', fontSize: 12 }}
+          >
+            편집
+          </button>
+        </span>
+      </Row>
+    )
+  }
+
+  return (
+    <Row label={label}>
+      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          autoFocus
+          style={{ fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 8px', width: 160 }}
+        />
+        <button
+          onClick={() => { onSave(draft); setEditing(false) }}
+          aria-label={`${label} 저장`}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'inline-flex' }}
+        >
+          <Save size={14} />
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          aria-label={`${label} 편집 취소`}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'inline-flex' }}
+        >
+          <X size={14} />
+        </button>
+      </span>
+    </Row>
+  )
+}
+
+const SECURITY_LEVEL_OPTIONS: SecurityLevel[] = ['Public', 'Internal', 'Confidential']
+
+function SecurityLevelField({
+  value, onSave,
+}: { value: string | null; onSave: (value: SecurityLevel | '') => void }) {
+  return (
+    <Row label="보안 등급">
+      <select
+        value={value ?? ''}
+        onChange={(e) => onSave(e.target.value as SecurityLevel | '')}
+        style={{ fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 8px' }}
+      >
+        <option value="">미입력</option>
+        {SECURITY_LEVEL_OPTIONS.map((level) => (
+          <option key={level} value={level}>{level}</option>
+        ))}
+      </select>
+    </Row>
   )
 }
 
@@ -170,6 +283,7 @@ export default function DocumentDetailPage() {
   const { data: pagesTextResult } = useDocumentPagesText(id, activeTab === 'original')
   const [originalPage, setOriginalPage] = useState(1)
   const { data: revisionsResult } = useDocumentRevisions(id, activeTab === 'edit')
+  const { data: editNodesResult } = useDocumentNodes(id, activeTab === 'edit')
   const download = useDownloadDocument()
   const proceed = useProceedDocument()
   const reprocess = useReprocessDocument()
@@ -178,9 +292,13 @@ export default function DocumentDetailPage() {
   const restoreRevision = useRestoreRevision()
   const retryDoc = useRetryDocument()
   const updateTags = useUpdateDocumentTags()
+  const updateMetadata = useUpdateDocumentMetadata()
   const acceptSuggestion = useAcceptTagSuggestion()
   const dismissSuggestion = useDismissTagSuggestion()
   const [chunkEditId, setChunkEditId] = useState<string | null>(null)
+  // Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9) — "상위
+  // 청크 보기" 토글로 펼쳐 보여줄 청크 id(한 번에 하나만).
+  const [expandedParentChunkId, setExpandedParentChunkId] = useState<string | null>(null)
   const [chunkEditText, setChunkEditText] = useState('')
   const [tagInput, setTagInput] = useState('')
   const [reviewTextOverride, setReviewTextOverride] = useState<string | null>(null)
@@ -361,6 +479,53 @@ export default function DocumentDetailPage() {
         <Row label="파일 크기">{(doc.file_size / 1024).toFixed(1)} KB</Row>
         <Row label="생성일">{new Date(doc.created_at).toLocaleString('ko-KR')}</Row>
         <Row label="수정일">{new Date(doc.updated_at).toLocaleString('ko-KR')}</Row>
+        {/* 메타 정보 생성 설계서(2026-07-23) — title/language/category/page_count는
+            문서 내용에서 자동 생성(Phase 1)되므로 읽기 전용, author/organization/
+            security_level/source_system은 자동 생성이 불가능해(Phase 2) 사용자가
+            직접 입력하는 편집 필드로 제공한다. */}
+        <Row label="제목">{doc.title || doc.original_filename}</Row>
+        <Row label="언어">{doc.language ?? '미판별'}</Row>
+        <Row label="분류">{doc.category ?? '미분류'}</Row>
+        <Row label="페이지 수">{doc.page_count ?? '-'}</Row>
+        {/* 메타 정보 생성.txt 1절 — checksum/parser_version/source_path/file_type은
+            기존 file_hash/pipeline_version/minio_key/mime_type 컬럼을 스펙 필드명으로
+            노출한 값이라 읽기 전용(2026-07-24). */}
+        <Row label="체크섬">
+          {doc.checksum
+            ? <CopyableValue value={doc.checksum} display={`${doc.checksum.slice(0, 16)}…`} />
+            : '-'}
+        </Row>
+        <Row label="저장 경로">
+          {doc.source_path
+            ? <CopyableValue value={doc.source_path} display={doc.source_path} />
+            : '-'}
+        </Row>
+        <Row label="파일 형식">{doc.file_type ?? '-'}</Row>
+        <EditableMetaField
+          label="문서 작성일"
+          value={doc.document_created_at ? doc.document_created_at.slice(0, 10) : null}
+          placeholder="자동 추출 불가 — 직접 입력(YYYY-MM-DD)"
+          onSave={(value) => updateMetadata.mutate({ documentId: id, document_created_at: value })}
+        />
+        <EditableMetaField
+          label="작성자"
+          value={doc.author}
+          onSave={(value) => updateMetadata.mutate({ documentId: id, author: value })}
+        />
+        <EditableMetaField
+          label="부서/기관"
+          value={doc.organization}
+          onSave={(value) => updateMetadata.mutate({ documentId: id, organization: value })}
+        />
+        <SecurityLevelField
+          value={doc.security_level}
+          onSave={(value) => updateMetadata.mutate({ documentId: id, security_level: value || null })}
+        />
+        <EditableMetaField
+          label="출처 시스템"
+          value={doc.source_system}
+          onSave={(value) => updateMetadata.mutate({ documentId: id, source_system: value })}
+        />
         <Row label="태그">
           <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
             {(doc.tags ?? []).map((tag) => (
@@ -656,7 +821,15 @@ export default function DocumentDetailPage() {
           }}>
             {doc.error_message ?? '오류 메시지 없음'}
           </pre>
-          <div style={{ marginTop: 'var(--space-3)', display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ marginTop: 'var(--space-3)', display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
+            <button
+              onClick={() => setReprocessModal({ blockInstanceId: null })}
+              className="krds-btn secondary small"
+              style={{ cursor: 'pointer' }}
+              title="시간 제한 등 설정을 조정한 뒤, 멈췄던 블록부터 다시 시작합니다"
+            >
+              재처리 (설정 조정)
+            </button>
             <button
               onClick={() => retryDoc.mutate(id)}
               disabled={retryDoc.isPending}
@@ -722,6 +895,53 @@ export default function DocumentDetailPage() {
                       <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 var(--space-3)', flexShrink: 0 }}>
                         불필요한 부분을 제거하거나 수정한 뒤 저장하면, 이 텍스트를 기준으로 청킹·임베딩이 다시 실행되어 기존 검색 결과를 대체하고 요약도 새로 생성됩니다.
                       </p>
+                      <details style={{ flexShrink: 0, marginBottom: 'var(--space-3)', fontSize: 12 }}>
+                        <summary style={{ cursor: 'pointer', color: 'var(--color-text-muted)', userSelect: 'none' }}>
+                          문서 메타정보
+                        </summary>
+                        <div className="markdown-body" style={{ marginTop: 8, fontSize: 12 }}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {[
+                              `**제목**: ${doc.title || doc.original_filename}`,
+                              `**언어**: ${doc.language ?? '미판별'}`,
+                              `**분류**: ${doc.category ?? '미분류'}`,
+                              `**페이지 수**: ${doc.page_count ?? '-'}`,
+                              `**작성자**: ${doc.author ?? '미입력'}`,
+                              `**부서/기관**: ${doc.organization ?? '미입력'}`,
+                              `**보안 등급**: ${doc.security_level ?? '미입력'}`,
+                              `**출처 시스템**: ${doc.source_system ?? '미입력'}`,
+                            ].join('\n\n')}
+                          </ReactMarkdown>
+                        </div>
+                      </details>
+                      <details style={{ flexShrink: 0, marginBottom: 'var(--space-3)', fontSize: 12 }}>
+                        <summary style={{ cursor: 'pointer', color: 'var(--color-text-muted)', userSelect: 'none' }}>
+                          구조 ({editNodesResult?.nodes.length ?? 0}개 노드)
+                        </summary>
+                        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {editNodesResult && editNodesResult.nodes.length > 0 ? (() => {
+                            const counts = editNodesResult.nodes.reduce<Record<string, number>>((acc, n) => {
+                              acc[n.node_type] = (acc[n.node_type] ?? 0) + 1
+                              return acc
+                            }, {})
+                            return (
+                              <span style={{ color: 'var(--color-text-muted)' }}>
+                                제목 {(counts.HEADING ?? 0) + (counts.SECTION ?? 0)} · 문단 {counts.PARAGRAPH ?? 0} · 표 {counts.TABLE ?? 0} · 목록 {counts.LIST ?? 0}
+                              </span>
+                            )
+                          })() : (
+                            <span style={{ color: 'var(--color-text-muted)' }}>구조 분석 결과가 없습니다.</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('structure')}
+                            className="krds-btn text small"
+                            style={{ cursor: 'pointer', alignSelf: 'flex-start', padding: 0 }}
+                          >
+                            구조 탭에서 전체 보기
+                          </button>
+                        </div>
+                      </details>
                       <details style={{ flexShrink: 0, marginBottom: 'var(--space-3)', fontSize: 12 }}>
                         <summary style={{ cursor: 'pointer', color: 'var(--color-text-muted)', userSelect: 'none' }}>
                           변경 이력 ({revisionsResult?.revisions.length ?? 0})
@@ -873,6 +1093,13 @@ export default function DocumentDetailPage() {
                   )}
                   {!isImagesLoading && !!imagesResult?.images.length && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+                      {imagesResult.detected_count != null
+                        && imagesResult.detected_count > imagesResult.images.length && (
+                        <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>
+                          {imagesResult.detected_count}개 감지됨 · {imagesResult.images.length}개 표시
+                          (너무 작거나 중복된 이미지 {imagesResult.detected_count - imagesResult.images.length}개 제외)
+                        </p>
+                      )}
                       {imagesResult.images.map((img, i) => (
                         <div key={i}>
                           <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 'var(--space-2)' }}>
@@ -925,7 +1152,14 @@ export default function DocumentDetailPage() {
                   {!isChunksLoading && !!chunksResult?.chunks.length && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
                       <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>
-                        총 {chunksResult.chunks.length}개 청크. 텍스트를 수정하면 해당 청크만 다시 임베딩되고,
+                        총 {chunksResult.chunks.length}개 청크
+                        {(() => {
+                          const tokenCounts = chunksResult.chunks.map((c) => c.token_count).filter((t): t is number => t != null)
+                          if (!tokenCounts.length) return null
+                          const avg = Math.round(tokenCounts.reduce((a, b) => a + b, 0) / tokenCounts.length)
+                          return ` · 평균 ${avg}토큰`
+                        })()}
+                        . 텍스트를 수정하면 해당 청크만 다시 임베딩되고,
                         "검색 제외"된 청크는 검색·채팅에서 사용되지 않습니다.
                       </p>
                       {chunksResult.chunks.some((c) => !c.embedded) && (
@@ -962,6 +1196,38 @@ export default function DocumentDetailPage() {
                             {!chunk.embedded && <span className="krds-badge small bg-warning">임베딩 전 미리보기</span>}
                             {chunk.edited && <span className="krds-badge small bg-information">수정됨</span>}
                             {chunk.disabled && <span className="krds-badge small bg-gray">검색 제외</span>}
+                            {chunk.chunk_type && <span className="krds-badge small bg-gray">{chunk.chunk_type}</span>}
+                            {chunk.token_count != null && (
+                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+                                토큰 ~{chunk.token_count}
+                              </span>
+                            )}
+                            {!!chunk.section_path?.length && (
+                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }} title="섹션 경로">
+                                {chunk.section_path.join(' > ')}
+                              </span>
+                            )}
+                            {!!chunk.keywords?.length && (
+                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+                                #{chunk.keywords.join(' #')}
+                              </span>
+                            )}
+                            {chunk.embedding_model && (
+                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }} title="임베딩 모델">
+                                {chunk.embedding_model}
+                                {chunk.version ? ` (v${chunk.version})` : ''}
+                              </span>
+                            )}
+                            {chunk.language && (
+                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }} title="언어">
+                                {chunk.language}
+                              </span>
+                            )}
+                            {chunk.source_file && (
+                              <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }} title="원본 파일명">
+                                📄 {chunk.source_file}
+                              </span>
+                            )}
                             {chunk.embedded && (
                               <span
                                 title="검색/채팅 응답에서 이 청크가 실제로 반환된 횟수"
@@ -974,6 +1240,15 @@ export default function DocumentDetailPage() {
                               </span>
                             )}
                             <span style={{ flex: 1 }} />
+                            {chunk.page_number != null && (
+                              <button
+                                onClick={() => { setOriginalPage(chunk.page_number as number); setActiveTab('original') }}
+                                className="krds-btn text small"
+                                style={{ cursor: 'pointer' }}
+                              >
+                                원문 대조에서 보기
+                              </button>
+                            )}
                             {chunk.embedded && chunkEditId !== chunk.id && (
                               <>
                                 <button
@@ -1006,6 +1281,49 @@ export default function DocumentDetailPage() {
                               </>
                             )}
                           </div>
+                          {(chunk.prev_chunk_id || chunk.next_chunk_id) && (
+                            <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 'var(--space-2)' }}>
+                              {chunk.prev_chunk_id && (
+                                <button
+                                  onClick={() => document.getElementById(`chunk-row-${chunk.prev_chunk_id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                                  className="krds-btn text small"
+                                  style={{ cursor: 'pointer', fontSize: 11, padding: 0 }}
+                                >
+                                  ◀ 이전 청크
+                                </button>
+                              )}
+                              {chunk.next_chunk_id && (
+                                <button
+                                  onClick={() => document.getElementById(`chunk-row-${chunk.next_chunk_id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                                  className="krds-btn text small"
+                                  style={{ cursor: 'pointer', fontSize: 11, padding: 0 }}
+                                >
+                                  다음 청크 ▶
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          {chunk.parent_chunk_text && (
+                            <div style={{ marginBottom: 'var(--space-2)' }}>
+                              <button
+                                onClick={() => setExpandedParentChunkId(expandedParentChunkId === chunk.id ? null : chunk.id)}
+                                className="krds-btn text small"
+                                style={{ cursor: 'pointer', fontSize: 11, padding: 0, color: 'var(--color-text-muted)' }}
+                              >
+                                {expandedParentChunkId === chunk.id ? '▾' : '▸'} 상위 청크 보기 (Parent Retrieval)
+                              </button>
+                              {expandedParentChunkId === chunk.id && (
+                                <pre style={{
+                                  fontSize: 11, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                                  fontFamily: 'inherit', margin: '6px 0 0', padding: 'var(--space-2)',
+                                  background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)',
+                                  color: '#475569',
+                                }}>
+                                  {chunk.parent_chunk_text}
+                                </pre>
+                              )}
+                            </div>
+                          )}
                           {chunkEditId === chunk.id ? (
                             <div>
                               <textarea
@@ -1058,16 +1376,23 @@ export default function DocumentDetailPage() {
               {activeTab === 'original' && (() => {
                 const pages = pagesTextResult?.pages ?? []
                 const isPdfPreview = previewResult?.kind === 'pdf'
-                const maxPage = isPdfPreview && pages.length
-                  ? Math.max(...pages.map((p) => p.page_number))
-                  : 1
+                // 원본이 실제 PDF일 때만 pagesTextResult가 doc.parsed_text(RAG에
+                // 쓰인 실제 텍스트)를 페이지 경계로 자른 것이다. DOCX/HWP 등은
+                // 변환 미리보기 PDF에서 PyMuPDF로 재추출한 텍스트라 RAG 저장
+                // 형태와 다를 수 있어(9항목 펀치리스트 #2/#6), 그 경우 페이지
+                // 네비게이션(좌측 미리보기용)은 유지하되 우측 텍스트는 항상
+                // content.full_text(Qdrant에 저장된 청크를 그대로 재조립한 것)를
+                // 통째로 보여준다.
+                const isNativePdf = (doc?.original_filename ?? '').toLowerCase().endsWith('.pdf')
+                const hasMultiplePages = new Set(pages.map((p) => p.page_number)).size > 1
+                const maxPage = pages.length ? Math.max(...pages.map((p) => p.page_number)) : 1
                 const clampedPage = Math.min(Math.max(originalPage, 1), maxPage)
-                const currentPageText = isPdfPreview
+                const currentPageText = isNativePdf && hasMultiplePages
                   ? pages.filter((p) => p.page_number === clampedPage).map((p) => p.text).join('\n\n')
                   : null
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 'var(--space-2)' }}>
-                    {isPdfPreview && maxPage > 1 && (
+                    {hasMultiplePages && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                         <button
                           className="krds-btn secondary small"
@@ -1089,7 +1414,9 @@ export default function DocumentDetailPage() {
                           다음 ▶
                         </button>
                         <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-                          원본과 파싱 텍스트가 같은 쪽으로 함께 이동합니다
+                          {isNativePdf
+                            ? '원본과 파싱 텍스트가 같은 쪽으로 함께 이동합니다'
+                            : '원본 미리보기만 페이지 이동합니다 (텍스트는 문서 전체가 표시됩니다)'}
                         </span>
                       </div>
                     )}
@@ -1122,7 +1449,7 @@ export default function DocumentDetailPage() {
                       <div style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
                           <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)' }}>
-                            파싱된 텍스트{isPdfPreview && maxPage > 1 ? ` (${clampedPage}쪽)` : ''}
+                            파싱된 텍스트 (RAG 저장 형태){isNativePdf && hasMultiplePages ? ` (${clampedPage}쪽)` : ''}
                           </p>
                           <ViewModeToggle showJson={showJson} onChange={setShowJson} />
                         </div>
@@ -1132,17 +1459,20 @@ export default function DocumentDetailPage() {
                               <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--color-text-muted)' }} />
                             </div>
                           )}
-                          {!isContentLoading && (
+                          {!isContentLoading && showJson && (
                             <pre style={{
-                              fontSize: showJson ? 12 : 12, lineHeight: showJson ? 1.6 : 1.7,
-                              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                              fontFamily: showJson ? 'monospace' : 'inherit', margin: 0,
+                              fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                              fontFamily: 'monospace', margin: 0,
                             }}>
-                              {(() => {
-                                const pageText = currentPageText ?? content?.full_text ?? ''
-                                return showJson ? toBlocksJson(pageText) : pageText
-                              })()}
+                              {toBlocksJson(currentPageText ?? content?.full_text ?? '')}
                             </pre>
+                          )}
+                          {!isContentLoading && !showJson && (
+                            <div className="markdown-body" style={{ fontSize: 13, lineHeight: 1.7 }}>
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {currentPageText ?? content?.full_text ?? ''}
+                              </ReactMarkdown>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -1151,7 +1481,14 @@ export default function DocumentDetailPage() {
                 )
               })()}
 
-              {activeTab === 'structure' && <StructureTab documentId={id} />}
+              {activeTab === 'structure' && (
+                <StructureTab
+                  documentId={id}
+                  onViewInOriginal={(pageNumber) => { setOriginalPage(pageNumber); setActiveTab('original') }}
+                  onReprocessFromStructure={(blockInstanceId) => setReprocessModal({ blockInstanceId })}
+                />
+              )}
+              {activeTab === 'elements' && <ElementsTab documentId={id} />}
               {activeTab === 'cleaning' && <CleaningChangesTab documentId={id} />}
               {activeTab === 'dictionary' && (
                 <DictionaryApplicationsTab

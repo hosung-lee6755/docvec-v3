@@ -5,15 +5,31 @@
 (summary/suggested tags) so it shows up in the existing document UI, in
 addition to being stored on the run step for the run modal / JSON export.
 """
+import logging
 import re
 
 from pydantic import BaseModel
 
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
 
+logger = logging.getLogger(__name__)
+
 
 class OutputConfig(BaseModel):
     save_to_document: bool = True
+
+
+def _match_chunk_keywords(chunk_text: str, document_keywords: list[str]) -> list[str]:
+    """청크 텍스트와 문서 레벨 키워드(ExtractKeywordsBlock 출력)를 단순
+    substring으로 매칭한다(메타 정보 생성 설계서, 2026-07-23 Phase 4) —
+    청크마다 새로 LLM을 호출하지 않고 이미 계산된 문서 레벨 키워드를
+    재사용하는 저비용 방식. 대소문자 구분 없이 매칭하되 반환값은 원래
+    표기를 유지한다."""
+    text_lower = chunk_text.lower()
+    return [
+        kw for kw in document_keywords
+        if isinstance(kw, str) and kw.strip() and kw.strip().lower() in text_lower
+    ]
 
 
 def _dedup(items: list) -> list[str]:
@@ -66,7 +82,23 @@ class OutputBlock(BaseBlock):
         # graph where `output` has more than one incoming edge — must
         # invalidate BlockExecutionCache so already-cached (deficient) runs
         # actually re-execute instead of replaying the old result.
-        return "1.1.0"
+        #
+        # 1.2.0: classify 블록의 category 출력을 이제 tags 병합과 별도로
+        # Document.category에도 스탬프한다(메타 정보 생성 설계서, 2026-07-23
+        # Phase 1) — 캐시된 이전 결과를 재생하면 category가 채워지지 않는다.
+        #
+        # 1.3.0: 문서 레벨 키워드를 이 run의 DocumentChunk.keywords에도
+        # substring 매칭으로 역전파한다(메타 정보 생성 설계서, 2026-07-23
+        # Phase 4) — 캐시된 이전 결과는 청크 keywords를 채우지 않는다.
+        #
+        # 1.4.0: summary가 이번 run에서 갱신되면 Summary Index(Qdrant
+        # document_summaries 컬렉션)에도 upsert한다(메타 정보 생성 설계서,
+        # 2026-07-23 Phase 5) — 캐시된 이전 결과는 이 색인을 만들지 않는다.
+        #
+        # 1.5.0: 키워드 역전파가 이제 chunk_tier=="child" 청크만 대상으로
+        # 한다 — parent Retrieval 청크(Phase 9)는 제외(메타 정보 생성.txt
+        # 3절, 2026-07-24).
+        return "1.5.0"
 
     @property
     def config_schema(self) -> type[BaseModel] | None:
@@ -74,6 +106,7 @@ class OutputBlock(BaseBlock):
 
     def run(self, context: BlockContext) -> BlockResult:
         from app.db.models.document import Document
+        from app.db.models.document_chunk import DocumentChunk
         from app.db.session import get_sync_db
 
         # A graph can feed `output` from more than one branch (e.g. a direct
@@ -127,6 +160,8 @@ class OutputBlock(BaseBlock):
                     category = upstream.get("category")
                     if isinstance(category, str) and category.strip():
                         tags.append(category.strip())
+                        doc.category = category.strip()[:50]
+                        saved_fields.append("category")
                     if tags:
                         before_tags = list(doc.suggested_tags or [])
                         existing = {t.lower() for t in (doc.tags or [])}
@@ -140,8 +175,44 @@ class OutputBlock(BaseBlock):
                             "after": list(doc.suggested_tags or []),
                         })
 
+                    # 메타 정보 생성 설계서(2026-07-23) Phase 4 — 문서 레벨
+                    # 키워드가 확정된 지금(OutputBlock은 DAG의 마지막 블록)에서야
+                    # 청크별 매칭이 가능하다. chunk_split은 이 블록보다 항상
+                    # 먼저 끝나므로 이 run의 청크는 이미 전부 존재한다.
+                    document_keywords = [
+                        k for k in (upstream.get("keywords") or []) if isinstance(k, str) and k.strip()
+                    ]
+                    if document_keywords and context.run_id:
+                        run_chunks = db.query(DocumentChunk).filter(
+                            DocumentChunk.document_id == doc.id,
+                            DocumentChunk.run_id == context.run_id,
+                            # Phase 9 — parent 청크는 키워드 매칭 대상에서 제외
+                            # (부모는 UI에 노출되지 않아 keywords가 쓰이지 않음).
+                            DocumentChunk.chunk_tier == "child",
+                        ).all()
+                        for chunk in run_chunks:
+                            matched = _match_chunk_keywords(chunk.chunk_text, document_keywords)
+                            if matched:
+                                chunk.keywords = matched
+                        if run_chunks:
+                            saved_fields.append("chunk_keywords")
+
                     if saved_fields:
                         db.commit()
+
+                    # 메타 정보 생성 설계서(2026-07-23) Phase 5 — Summary Index.
+                    # 실패해도 이 run의 나머지 결과는 이미 커밋됐으므로 되돌리지
+                    # 않는다(best-effort, Qdrant 장애가 워크플로우 run 자체를
+                    # 실패시키면 안 됨).
+                    if "summary" in saved_fields:
+                        try:
+                            from app.services.summary_index import index_document_summary
+
+                            index_document_summary(str(doc.id), doc.summary)
+                        except Exception:
+                            logger.exception(
+                                "summary index upsert failed", extra={"document_id": str(doc.id)}
+                            )
             finally:
                 db.close()
 

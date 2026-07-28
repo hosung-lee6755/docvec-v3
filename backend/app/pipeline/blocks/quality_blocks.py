@@ -2,13 +2,12 @@
 
 파일/텍스트/구조/사전/분할 5개 수준의 지표를 이번 run이 만든 데이터(Document/
 DocumentNode/DocumentChunk/DictionaryApplication)에서 직접 계산해 QualityReport
-행을 쓴다. 마스터 설계서(문서데이터 전처리 방안.md §12.2)가 나열한 지표 중
-현재 이 코드베이스에 데이터 소스가 없는 것(목차-제목 일치율, 미등록 도메인
-용어 수, 사전 충돌/중복 건수, 페이지 단위 부분 실패 등)은 계산하지 않는다 —
-Phase 6까지의 범위 축소 원칙과 동일. `PARTIAL_FAILURE`는 그래서 이 블록이
-실제로 내리는 판정에는 등장하지 않는다(enum에는 이미 존재, §18.3의
-`metrics.failed_pages`가 어떤 블록에도 구현되지 않았기 때문 — 향후 페이지
-단위 실패 격리가 생기면 그때 이 블록에서 판정 분기를 추가한다).
+행을 쓴다. 문서 파싱 고도화 Phase 4에서 세 지표가 새로 추가됐다 —
+`Document.ocr_page_confidence`(Phase 3)로 페이지 단위 `failed_pages`를,
+`Document.tables[*]["detected_as"]`(Phase 3)로 암시적 표 비율을,
+`DocumentNode`의 TOC/HEADING 노드(Phase 2)로 목차-제목 일치율을 계산한다 —
+이전엔 데이터 소스가 없어 계산 불가능했던 지표들이다. `PARTIAL_FAILURE`는
+이제 `failed_pages`가 일부(전체 아님) 있을 때 실제로 도달 가능하다.
 
 일시정지/재개 배관(WAITING_REVIEW 전환, /workflows/runs/{id}/resume)은 이미
 실행기(app/pipeline/tasks/workflow.py)에 구현되어 있고 pii_detect의
@@ -24,6 +23,11 @@ from app.pipeline.blocks.content_blocks import _carry
 
 # U+FFFD(대체 문자) + 제어문자 — 텍스트 추출이 깨졌을 때 남는 전형적인 신호.
 _BROKEN_CHAR_RE = re.compile(r"[�\x00-\x08\x0b\x0c\x0e-\x1f]")
+# TOC 항목의 점선/공백 리더 + 페이지 번호 꼬리, 그리고 번호매김/장절조 머리를
+# 각각 벗겨내면 TOC 항목과 실제 HEADING 노드 텍스트를 비교할 수 있는 형태가
+# 된다 — structure_blocks.py의 동일 패턴과 의도적으로 맞춘 정규식.
+_TOC_TRAILING_LEADER_RE = re.compile(r"[.…\s]{2,}\d{1,4}\s*$")
+_LEADING_NUMBER_RE = re.compile(r"^(?:\d+(?:\.\d+)*[.\)]?\s+|제?\s*\d+\s*[장절조편]\s*)")
 
 
 def _score_from_ratio(ratio: float, *, warn_above: float) -> float:
@@ -37,17 +41,96 @@ def _score_from_ratio(ratio: float, *, warn_above: float) -> float:
     return max(0.0, 60.0 - 60.0 * ((ratio - warn_above) / warn_above))
 
 
+def _compute_failed_pages(ocr_page_confidence: list[dict] | None, min_confidence: float) -> list[int]:
+    """OCR 신뢰도가 기준 미달인 페이지 번호 목록(문서 파싱 고도화 Phase 4) —
+    페이지 단위 부분 실패를 구분해 PARTIAL_FAILURE 판정에 쓴다."""
+    if not ocr_page_confidence:
+        return []
+    return sorted(
+        entry["page_number"] for entry in ocr_page_confidence
+        if entry.get("confidence") is not None and entry["confidence"] < min_confidence
+    )
+
+
+def _implicit_table_ratio(tables: list[dict] | None) -> float:
+    """전체 표 중 선 없이(정렬 기반으로만) 검출된 표의 비율 — 높을수록 표가
+    아닌 정렬된 텍스트를 오탐했을 가능성 신호(문서 파싱 고도화 Phase 4)."""
+    if not tables:
+        return 0.0
+    implicit = sum(1 for t in tables if t.get("detected_as") == "implicit_alignment")
+    return implicit / len(tables)
+
+
+def _normalize_heading_like(text: str) -> str:
+    stripped = _TOC_TRAILING_LEADER_RE.sub("", text or "").strip()
+    stripped = _LEADING_NUMBER_RE.sub("", stripped).strip()
+    return stripped
+
+
+def _toc_heading_match_ratio(toc_texts: list[str], heading_texts: list[str]) -> float | None:
+    """TOC 항목 중 실제 HEADING 노드로 확인되는 비율(문서 파싱 고도화
+    Phase 4) — 번호매김/장절조 머리와 점선 리더+페이지번호 꼬리를 벗겨낸
+    뒤 정확히 일치하는지로 판단하는 근사치. TOC 노드가 없는 문서는 이 지표
+    자체가 성립하지 않으므로 None(경고 대상 아님)."""
+    if not toc_texts:
+        return None
+    normalized_headings = {_normalize_heading_like(h) for h in heading_texts}
+    matched = sum(1 for t in toc_texts if _normalize_heading_like(t) in normalized_headings)
+    return matched / len(toc_texts)
+
+
+def _determine_status(
+    *, chunk_count: int, overall_score: float, fail_below_score: float,
+    failed_pages: list[int], total_ocr_pages: int, has_warnings: bool,
+) -> str:
+    """overall_score는 5개 지표 평균이라, 청크 0개처럼 그 자체로 치명적인
+    신호가 다른 지표(예: 표 문법만으로 min_extraction_chars를 넘겨버린
+    textExtraction=100)에 희석돼 SUCCESS_WITH_WARNING으로 조용히 넘어갈 수
+    있다 — 청크 0개는 평균과 무관하게 먼저 FAILURE로 확정한다(2026-07-28
+    test_data E2E 검증, 서울시 도시 범죄 취약지 분석 PDF에서 실제 재현)."""
+    if chunk_count == 0:
+        return "FAILURE"
+    if overall_score < fail_below_score:
+        return "FAILURE"
+    if failed_pages and len(failed_pages) < total_ocr_pages:
+        return "PARTIAL_FAILURE"
+    if has_warnings:
+        return "SUCCESS_WITH_WARNING"
+    return "SUCCESS"
+
+
+def _decide_review(status: str, review_policy: str, skip_review: bool) -> tuple[str, bool]:
+    """FAILURE/PARTIAL_FAILURE는 review_policy와 무관하게 항상 검토를
+    강제한다 — skip_review("검토 없이 진행" 업로드 옵션)는 review_policy를
+    이 run에 한해 auto_pass로 낮출 뿐이라, 실제로 실패한 문서까지 조용히
+    통과되지는 않는다(9항목 펀치리스트 #1)."""
+    effective_policy = "auto_pass" if skip_review else review_policy
+    if status in ("FAILURE", "PARTIAL_FAILURE"):
+        return status, True
+    if status == "SUCCESS_WITH_WARNING" and effective_policy in ("review_on_warning", "always_review"):
+        return "REVIEW_REQUIRED", True
+    if status == "SUCCESS" and effective_policy == "always_review":
+        return "REVIEW_REQUIRED", True
+    return status, False
+
+
 class QualityCheckConfig(BaseModel):
     min_extraction_chars: int = 50
     max_broken_char_ratio: float = 0.05
-    # ocr_used=True인 문서에만 적용 — 실제 페이지별 OCR 신뢰도는 어디에도
-    # 저장되지 않는다(pdf_adapter.py가 pytesseract.image_to_string만 쓰고
-    # image_to_data를 쓰지 않음). format_detect 블록이 남긴 has_text_layer
-    # 판정용 confidence(WorkflowRunStep.output에서 조회)를 근사치로 쓴다.
+    # ocr_used=True인 문서에만 적용 — Document.ocr_page_confidence(문서 파싱
+    # 고도화 Phase 3, pytesseract.image_to_data 기반 실측 페이지 평균)가 있으면
+    # 그것을 쓰고, 없으면(Phase 3 이전에 처리된 문서, 또는 전 페이지가 cloud
+    # VLM으로 OCR돼 단어별 신뢰도가 없는 경우) format_detect 블록이 남긴
+    # has_text_layer 판정용 confidence(WorkflowRunStep.output에서 조회)를
+    # 근사치로 폴백한다.
     min_ocr_confidence: float = 0.5
     max_empty_page_ratio: float = 0.2
     min_chunk_chars_warning: int = 50
     max_chunk_chars_warning: int = 2000
+    # 문서 파싱 고도화 Phase 4 — 셋 다 대응하는 데이터 소스가 없어 이전엔
+    # 계산 불가능했던 지표.
+    max_implicit_table_ratio: float = 0.2
+    min_toc_heading_match_ratio: float = 0.5
     review_policy: str = "review_on_warning"  # auto_pass | review_on_warning | always_review
     fail_below_score: float = 30.0
 
@@ -56,6 +139,22 @@ class QualityCheckBlock(BaseBlock):
     @property
     def block_type(self) -> str:
         return "quality_check"
+
+    @property
+    def block_version(self) -> str:
+        # Bumped: failed_pages/implicit_table_ratio/toc_heading_match_ratio
+        # are now computed and can newly reach PARTIAL_FAILURE (문서 파싱
+        # 고도화 Phase 4) — cached pre-upgrade reports lack these metrics and
+        # must not replay.
+        #
+        # 1.3.0: 분할 수준 점검이 이제 chunk_tier=="child" 청크만 센다 — parent
+        # Retrieval 청크(Phase 9)를 포함하면 "너무 긴 청크" 오탐이 생긴다
+        # (메타 정보 생성.txt 3절, 2026-07-24).
+        #
+        # 1.4.0: 청크 0개는 overall_score 평균과 무관하게 무조건 FAILURE로
+        # 강제한다 — 캐시된 pre-1.4.0 결과는 청크 0개인 문서도 SUCCESS_WITH_
+        # WARNING으로 남아 있을 수 있어 재사용하면 안 된다(2026-07-28).
+        return "1.4.0"
 
     @property
     def category(self) -> str:
@@ -114,16 +213,25 @@ class QualityCheckBlock(BaseBlock):
             # --- OCR 수준 (사용된 경우에만) ---
             ocr_score = 100.0
             if doc.ocr_used:
-                step = (
-                    db.query(WorkflowRunStep)
-                    .join(WorkflowBlockInstance, WorkflowRunStep.block_instance_id == WorkflowBlockInstance.id)
-                    .filter(
-                        WorkflowRunStep.run_id == context.run_id,
-                        WorkflowBlockInstance.block_type == "format_detect",
+                page_confidences = [
+                    entry["confidence"] for entry in (doc.ocr_page_confidence or [])
+                    if entry.get("confidence") is not None
+                ]
+                if page_confidences:
+                    confidence = sum(page_confidences) / len(page_confidences)
+                else:
+                    # Phase 3 이전에 처리된 문서, 또는 전 페이지가 cloud VLM으로
+                    # OCR돼 단어별 신뢰도가 없는 경우 — format_detect 근사치로 폴백.
+                    step = (
+                        db.query(WorkflowRunStep)
+                        .join(WorkflowBlockInstance, WorkflowRunStep.block_instance_id == WorkflowBlockInstance.id)
+                        .filter(
+                            WorkflowRunStep.run_id == context.run_id,
+                            WorkflowBlockInstance.block_type == "format_detect",
+                        )
+                        .first()
                     )
-                    .first()
-                )
-                confidence = _resolve_output(step.output if step else None).get("confidence") if step else None
+                    confidence = _resolve_output(step.output if step else None).get("confidence") if step else None
                 if confidence is not None:
                     ocr_score = 100.0 if confidence >= cfg.min_ocr_confidence else 100.0 * confidence / cfg.min_ocr_confidence
                     if confidence < cfg.min_ocr_confidence:
@@ -132,6 +240,8 @@ class QualityCheckBlock(BaseBlock):
                     add_warning("ocr", "OCR을 사용했으나 신뢰도 정보를 확인할 수 없습니다.")
                     ocr_score = 70.0
             scores["ocr"] = round(ocr_score, 1)
+
+            failed_pages = _compute_failed_pages(doc.ocr_page_confidence, cfg.min_ocr_confidence)
 
             # 빈 페이지 비율: page_map은 텍스트가 있었던 페이지만 기록하므로,
             # 관측된 최대 페이지 번호 대비 빠진 페이지 번호 개수로 역산한다.
@@ -161,6 +271,24 @@ class QualityCheckBlock(BaseBlock):
                     add_warning("structure", "제목이 하나도 탐지되지 않았습니다.")
             scores["structure"] = round(structure_score, 1)
 
+            toc_match_ratio = _toc_heading_match_ratio(
+                [n.text for n in nodes if n.node_type == "TOC" and n.text],
+                [n.text for n in nodes if n.node_type == "HEADING" and n.text],
+            )
+            if toc_match_ratio is not None and toc_match_ratio < cfg.min_toc_heading_match_ratio:
+                add_warning(
+                    "structure",
+                    f"목차-제목 일치율이 낮습니다({toc_match_ratio:.1%} < {cfg.min_toc_heading_match_ratio:.1%}).",
+                )
+
+            implicit_table_ratio = _implicit_table_ratio(doc.tables)
+            if doc.tables and implicit_table_ratio > cfg.max_implicit_table_ratio:
+                add_warning(
+                    "table",
+                    f"암시적(선 없는) 표 비율이 높습니다({implicit_table_ratio:.1%} > "
+                    f"{cfg.max_implicit_table_ratio:.1%}) — 오탐 가능성을 확인하세요.",
+                )
+
             # --- 사전 수준 (정보성 — 건수 0은 경고 아님) ---
             dict_application_count = (
                 db.query(DictionaryApplication)
@@ -172,7 +300,13 @@ class QualityCheckBlock(BaseBlock):
             # --- 분할 수준 ---
             chunks = (
                 db.query(DocumentChunk)
-                .filter(DocumentChunk.document_id == doc.id, DocumentChunk.run_id == context.run_id)
+                .filter(
+                    DocumentChunk.document_id == doc.id, DocumentChunk.run_id == context.run_id,
+                    # Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9) —
+                    # parent 행은 의도적으로 훨씬 크므로 포함하면 "너무 긴 청크"
+                    # 경고가 잘못 뜬다.
+                    DocumentChunk.chunk_tier == "child",
+                )
                 .all()
             )
             short_chunk_ids: list[str] = []
@@ -201,23 +335,23 @@ class QualityCheckBlock(BaseBlock):
 
             overall_score = round(sum(scores.values()) / len(scores), 1)
 
-            # --- 상태 판정 (PARTIAL_FAILURE는 이 블록에서 도달 불가 — 모듈 docstring 참고) ---
-            if overall_score < cfg.fail_below_score:
-                status = "FAILURE"
-            elif warnings:
-                status = "SUCCESS_WITH_WARNING"
-            else:
-                status = "SUCCESS"
+            # --- 상태 판정 ---
+            status = _determine_status(
+                chunk_count=len(chunks),
+                overall_score=overall_score,
+                fail_below_score=cfg.fail_below_score,
+                failed_pages=failed_pages,
+                total_ocr_pages=len(doc.ocr_page_confidence or []),
+                has_warnings=bool(warnings),
+            )
+            if status == "PARTIAL_FAILURE":
+                # 일부 페이지만 OCR 신뢰도 기준 미달 — 문서 전체 재작업이
+                # 아니라 해당 페이지만 다시 확인하면 되는 부분 실패로 구분한다
+                # (문서 파싱 고도화 Phase 4, 모든 페이지가 미달이면 이미 ocr_score
+                # 자체가 낮아 위 FAILURE 분기에서 걸린다).
+                add_warning("ocr", f"OCR 신뢰도가 낮은 페이지가 있습니다: {failed_pages}.")
 
-            requires_review = False
-            if status == "FAILURE":
-                requires_review = True
-            elif status == "SUCCESS_WITH_WARNING" and cfg.review_policy in ("review_on_warning", "always_review"):
-                status = "REVIEW_REQUIRED"
-                requires_review = True
-            elif status == "SUCCESS" and cfg.review_policy == "always_review":
-                status = "REVIEW_REQUIRED"
-                requires_review = True
+            status, requires_review = _decide_review(status, cfg.review_policy, context.skip_review)
 
             metrics = {
                 "overall_score": overall_score,
@@ -229,6 +363,11 @@ class QualityCheckBlock(BaseBlock):
                 "chunk_count": len(chunks),
                 "short_chunk_ids": short_chunk_ids,
                 "long_chunk_ids": long_chunk_ids,
+                "failed_pages": failed_pages,
+                "implicit_table_ratio": round(implicit_table_ratio, 4),
+                "toc_heading_match_ratio": (
+                    round(toc_match_ratio, 4) if toc_match_ratio is not None else None
+                ),
                 **scores,
             }
 

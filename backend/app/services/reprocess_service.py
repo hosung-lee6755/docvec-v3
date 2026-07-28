@@ -100,13 +100,14 @@ async def compute_reprocess_impact(
     parent_run = await db.get(WorkflowRun, doc.active_run_id)
     if parent_run is None:
         raise ReprocessError("원본 실행 기록을 찾을 수 없습니다.")
-    if parent_run.status != "COMPLETED":
+    if parent_run.status not in ("COMPLETED", "FAILED"):
         # Document.status는 rag_store 블록이 직접 "INDEXED"로 세팅하는데, 그 시점에도
         # summarize/extract_keywords/output 등 같은 run의 후속 블록은 아직 백그라운드에서
         # 실행 중일 수 있다. 그 상태에서 재처리를 시작하면 새 run이 재실행하는 하류 블록이
         # 원본 run이 아직 끝내지 못한 동일 블록과 동일한 block_execution_cache 키를 두고
-        # 경합해 UniqueViolation을 일으킬 수 있으므로, run이 실제로 COMPLETED일 때까지
-        # 재처리 시작을 막는다.
+        # 경합해 UniqueViolation을 일으킬 수 있으므로, run이 실제로 COMPLETED(정상 종료) 또는
+        # FAILED(watchdog가 시간초과 등으로 확정 종료 처리)일 때까지 재처리 시작을 막는다 —
+        # RUNNING/QUEUED인 동안은 여전히 막아야 위 경합을 피할 수 있다.
         raise ReprocessError(
             "원본 실행이 아직 완료되지 않았습니다(백그라운드 후속 처리 중). 잠시 후 다시 시도하세요."
         )
@@ -144,7 +145,11 @@ async def compute_reprocess_impact(
     )
     affected_chunk_count = await db.scalar(
         select(func.count()).select_from(DocumentChunk).where(
-            DocumentChunk.document_id == doc.id, DocumentChunk.run_id == parent_run.id
+            DocumentChunk.document_id == doc.id, DocumentChunk.run_id == parent_run.id,
+            # Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9) —
+            # 사용자에게 보여주는 "영향받는 청크 수"는 실제 사용자가 인지하는
+            # 청크(child)만 세야 한다. parent까지 세면 배너 숫자가 부풀려진다.
+            DocumentChunk.chunk_tier == "child",
         )
     )
 
@@ -164,6 +169,7 @@ async def compute_reprocess_impact(
 
 async def start_partial_reprocess(
     db: AsyncSession, doc: Document, start_block: WorkflowBlockInstance, reason: str | None,
+    timeout_overrides: dict[str, int] | None = None,
 ) -> WorkflowRun:
     computed = await compute_reprocess_impact(db, doc, start_block, reason=reason)
     parent_run = computed.parent_run
@@ -179,6 +185,15 @@ async def start_partial_reprocess(
         parent_run_id=parent_run.id,
         started_block_id=start_block.id,
         dictionary_version=dictionary_version,
+        # 이 run에서만 적용되는 timeoutSeconds 오버라이드(§ "설정을 바꿔서라도
+        # 다시 처리") — WorkflowBlockInstance.config는 건드리지 않으므로 같은
+        # workflow version을 쓰는 다른 문서에는 영향이 없다.
+        timeout_overrides=timeout_overrides,
+        # WorkflowRun.skip_review는 컬럼 기본값이 False라, 여기서 명시적으로
+        # parent_run에서 복사하지 않으면 "검토 없이 자동 진행"으로 업로드된
+        # 문서도 재처리할 때마다 조용히 검토 게이트가 켜져 WAITING_REVIEW에
+        # 멈춘다(2026-07-27 E2E 검증 중 발견).
+        skip_review=parent_run.skip_review,
     )
     db.add(new_run)
     await db.flush()
@@ -211,10 +226,68 @@ async def start_partial_reprocess(
 
     from app.pipeline.tasks.workflow import run_workflow_step, step_queue_for_block
 
-    timeout_seconds = (start_block.config or {}).get("timeoutSeconds", 300)
+    timeout_seconds = (timeout_overrides or {}).get(start_block.block_type) or (
+        start_block.config or {}
+    ).get("timeoutSeconds", 300)
     run_workflow_step.apply_async(
         args=[str(new_run.id), str(start_block.id)], time_limit=timeout_seconds,
         queue=step_queue_for_block(start_block),
     )
 
     return new_run
+
+
+# 시간초과로 SIGKILL된 셀러리 hard time limit은 애플리케이션 코드로 잡을 수 없어(billiard가
+# 워커 fork 프로세스를 직접 죽임) run/step이 RUNNING 상태로 영구히 멈춰 있게 된다 — 별도
+# 워커/beat 인프라 없이, 문서 조회(GET /documents/{id})마다 지연 감지해 FAILED로 확정한다
+# (사용자 확인 2026-07-22, "제약으로 작업이 멈춰있는 상태가 되면 어떠한이유로 작업이
+# 멈췄다고 알려줘").
+_TIMEOUT_GRACE_SECONDS = 30
+
+
+async def reconcile_stuck_run(db: AsyncSession, doc: Document) -> bool:
+    """doc의 active run이 자신의 timeout(+여유시간)을 넘겨 RUNNING에 멈춰 있으면
+    run/step/문서를 FAILED로 확정하고 사유를 error_message에 남긴다. 반환값은
+    "이번 호출에서 무언가를 확정했는가"이며, 호출부는 보통 반환값을 쓰지 않고
+    호출 직후의 doc 상태를 그대로 읽는다(같은 세션 내에서 in-place로 갱신됨)."""
+    if not doc.active_run_id:
+        return False
+    run = await db.get(WorkflowRun, doc.active_run_id)
+    if run is None or run.status != "RUNNING":
+        return False
+
+    stuck_step = await db.scalar(
+        select(WorkflowRunStep).where(
+            WorkflowRunStep.run_id == run.id,
+            WorkflowRunStep.status == "RUNNING",
+            WorkflowRunStep.started_at.is_not(None),
+        )
+    )
+    if stuck_step is None:
+        return False
+
+    block = await db.get(WorkflowBlockInstance, stuck_step.block_instance_id)
+    block_type = block.block_type if block else None
+    timeout_seconds = (run.timeout_overrides or {}).get(block_type) or (
+        (block.config or {}).get("timeoutSeconds", 300) if block else 300
+    )
+    elapsed = (datetime.utcnow() - stuck_step.started_at).total_seconds()
+    if elapsed <= timeout_seconds + _TIMEOUT_GRACE_SECONDS:
+        return False
+
+    message = (
+        f"'{block_type or stuck_step.block_instance_id}' 처리 시간 제한({timeout_seconds}초)을 "
+        "초과하여 작업이 중단되었습니다. 필요 시 시간 제한을 늘려 재처리할 수 있습니다."
+    )
+    stuck_step.status = "FAILED"
+    stuck_step.error_code = "TIMEOUT_EXCEEDED"
+    stuck_step.error_message = message
+    stuck_step.completed_at = datetime.utcnow()
+    run.status = "FAILED"
+    run.error_message = message
+    run.completed_at = datetime.utcnow()
+    if str(doc.active_run_id) == str(run.id):
+        doc.status = "FAILED"
+        doc.error_message = message
+    await db.commit()
+    return True

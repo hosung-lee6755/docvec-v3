@@ -30,8 +30,11 @@ from app.schemas.document import (
     DocumentChunksResponse,
     DocumentContentResponse,
     DocumentDownloadResponse,
+    DocumentElementItem,
+    DocumentElementsResponse,
     DocumentImagesResponse,
     DocumentListResponse,
+    DocumentMetadataUpdateRequest,
     DocumentNodeItem,
     DocumentNodesResponse,
     DocumentProceedRequest,
@@ -39,10 +42,13 @@ from app.schemas.document import (
     DocumentResponse,
     DocumentRevisionsResponse,
     DocumentRunsResponse,
+    DocumentSummarySearchRequest,
+    DocumentSummarySearchResponse,
     DocumentTablesResponse,
     DocumentTagSuggestionRequest,
     DocumentTagsUpdateRequest,
     DocumentUploadResponse,
+    ElementCorrectionRequest,
     NodeCorrectionRequest,
     PiiDetectionItem,
     PiiDetectionsResponse,
@@ -133,6 +139,7 @@ async def _resolve_preprocess_version_id(
 
 async def _start_preprocess_workflow(
     db: AsyncSession, document: Document, workflow_version_id: str | None = None,
+    skip_review: bool = False,
 ) -> None:
     """Replaces the retired fixed pipeline's create_processing_chain(...).delay()
     — creates a WorkflowRun against the resolved PREPROCESS version and
@@ -149,7 +156,7 @@ async def _start_preprocess_workflow(
 
     run = WorkflowRun(
         version_id=version_id, document_id=document.id, status="QUEUED", trigger="UPLOAD",
-        dictionary_version=dictionary_version,
+        dictionary_version=dictionary_version, skip_review=skip_review,
     )
     db.add(run)
     await db.commit()
@@ -233,10 +240,7 @@ async def upload_document(
     await db.commit()
     await db.refresh(document)
 
-    # skip_review: 표준 워크플로우(Phase 3)에는 아직 검토 게이트(quality_check,
-    # Phase 7)가 없어 항상 즉시 진행과 동일하다 — 하위 호환을 위해 파라미터는
-    # 받되 무시한다.
-    await _start_preprocess_workflow(db, document, workflow_version_id)
+    await _start_preprocess_workflow(db, document, workflow_version_id, skip_review=skip_review)
 
     return {
         "id": document.id,
@@ -359,9 +363,7 @@ async def upload_documents_zip(
             await db.commit()
             await db.refresh(document)
 
-            # skip_review: 이번 단계 표준 워크플로우엔 검토 게이트가 없어
-            # 무시됨(단일 업로드와 동일 — 위 주석 참고).
-            await _start_preprocess_workflow(db, document, workflow_version_id)
+            await _start_preprocess_workflow(db, document, workflow_version_id, skip_review=skip_review)
             results.append({"filename": entry_name, "status": "queued", "document_id": document.id})
             queued += 1
         except Exception as exc:
@@ -455,6 +457,44 @@ async def list_all_tags(
     return {"tags": tags}
 
 
+@router.post("/search/by-summary", response_model=DocumentSummarySearchResponse)
+async def search_documents_by_summary(
+    body: DocumentSummarySearchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """메타 정보 생성 설계서(2026-07-23) Phase 5 — Summary Index 검색.
+    document_summaries 컬렉션에서 top-k를 가져온 뒤, 사용자가 접근 가능한
+    컬렉션의 문서로만 필터링한다(요약 인덱스 자체엔 collection_id payload가
+    없어 Qdrant 쿼리 단계에서 스코핑할 수 없음 — 여기서 후처리로 거른다)."""
+    import asyncio
+
+    from app.services.summary_index import search_document_summaries
+
+    hits = await asyncio.to_thread(search_document_summaries, body.query, body.limit)
+    if not hits:
+        return {"items": []}
+
+    hit_doc_ids = [h["payload"].get("document_id") for h in hits if h["payload"].get("document_id")]
+    shared_ids = await accessible_collection_ids(db, current_user)
+    docs = (await db.scalars(select(Document).where(Document.id.in_(hit_doc_ids)))).all()
+    owned_or_shared_ids = {
+        str(d.id) for d in docs
+        if str(d.created_by) == str(current_user.id) or (d.collection_id and str(d.collection_id) in shared_ids)
+    }
+
+    items = [
+        {
+            "document_id": h["payload"]["document_id"],
+            "score": h["score"],
+            "summary": h["payload"].get("summary", ""),
+        }
+        for h in hits
+        if h["payload"].get("document_id") in owned_or_shared_ids
+    ]
+    return {"items": items}
+
+
 @router.get("/{document_id}", response_model=DocumentResponse)
 async def get_document(
     document_id: UUID,
@@ -465,6 +505,15 @@ async def get_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="viewer")
+
+    # 셀러리 hard time limit(TimeLimitExceeded)는 워커 fork 프로세스를 SIGKILL로
+    # 죽여 애플리케이션 코드가 실패를 기록할 기회 자체가 없다 — 별도 워커/beat 인프라
+    # 없이, 프런트가 이미 처리중 상태를 3초 간격으로 폴링하는 이 조회 경로에서
+    # 지연 감지해 멈춘 이유를 확정한다(사용자 확인 2026-07-22, "제약으로 작업이
+    # 멈춰있는 상태가 되면 어떠한이유로 작업이 멈췄다고 알려줘").
+    from app.services.reprocess_service import reconcile_stuck_run
+
+    await reconcile_stuck_run(db, doc)
     return doc
 
 
@@ -476,6 +525,7 @@ async def batch_delete_documents(
 ):
     from app.services.qdrant_service import qdrant_service
     from app.services.storage import storage_service
+    from app.services.summary_index import delete_document_summary
 
     result = await db.execute(select(Document).where(Document.id.in_(body.ids)))
     candidates = result.scalars().all()
@@ -513,6 +563,7 @@ async def batch_delete_documents(
 
     for doc_id, minio_key, images in cleanup:
         qdrant_service.delete_by_document(settings.qdrant_collection_name, doc_id)
+        delete_document_summary(doc_id)
         storage_service.delete_file(settings.minio_bucket_originals, minio_key)
         for record in images:
             storage_service.delete_file(settings.minio_bucket_artifacts, record["storage_key"])
@@ -527,6 +578,7 @@ async def delete_document(
 ):
     from app.services.qdrant_service import qdrant_service
     from app.services.storage import storage_service
+    from app.services.summary_index import delete_document_summary
 
     doc = await db.scalar(select(Document).where(Document.id == document_id))
     if not doc:
@@ -562,6 +614,7 @@ async def delete_document(
     await db.commit()
 
     qdrant_service.delete_by_document(settings.qdrant_collection_name, str(document_id))
+    delete_document_summary(str(document_id))
     storage_service.delete_file(settings.minio_bucket_originals, minio_key)
     for record in images:
         storage_service.delete_file(settings.minio_bucket_artifacts, record["storage_key"])
@@ -627,19 +680,21 @@ async def reprocess_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="editor")
-    if doc.status != "INDEXED":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Document is not indexed yet (status={doc.status})",
-        )
 
     if body.start_block_type is not None or body.start_block_instance_id is not None:
         from app.db.models.workflow_run import WorkflowRun as _WorkflowRun
         from app.services.reprocess_service import (
             ReprocessError,
+            reconcile_stuck_run,
             resolve_start_block,
             start_partial_reprocess,
         )
+
+        # 셀러리 hard time limit에 걸려 RUNNING으로 멈춰 있던 run/문서를, 재처리를
+        # 시도하는 이 순간에도 한 번 더 확정해 둔다 — 문서 상세 화면을 거치지 않고
+        # 곧바로 재처리 API를 호출하는 경우까지 커버(§ "멈췄으면 설정을 바꿔서라도
+        # 다시 처리하게 할 수 있는 기능").
+        await reconcile_stuck_run(db, doc)
 
         parent_run = await db.get(_WorkflowRun, doc.active_run_id) if doc.active_run_id else None
         if parent_run is None:
@@ -652,7 +707,9 @@ async def reprocess_document(
             start_block = await resolve_start_block(
                 db, parent_run.version_id, body.start_block_type, body.start_block_instance_id,
             )
-            new_run = await start_partial_reprocess(db, doc, start_block, body.reason)
+            new_run = await start_partial_reprocess(
+                db, doc, start_block, body.reason, timeout_overrides=body.timeout_overrides,
+            )
         except ReprocessError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -662,6 +719,12 @@ async def reprocess_document(
             "status": "QUEUED",
             "impact": new_run.impact,
         }
+
+    if doc.status != "INDEXED":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Document is not indexed yet (status={doc.status})",
+        )
 
     from app.pipeline.tasks.process import continue_processing
 
@@ -838,17 +901,123 @@ async def correct_document_node(
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
 
+    changed_fields = []
     if body.node_type is not None:
         allowed_types = DocumentNode.__table__.c.node_type.type.enums
         if body.node_type not in allowed_types:
             raise HTTPException(status_code=422, detail=f"허용되지 않는 node_type: {body.node_type}")
         node.node_type = body.node_type
+        changed_fields.append("node_type")
     if body.level is not None:
         node.level = body.level
+        changed_fields.append("level")
+    # 메타 정보 생성.txt 2절 — HWP/HWPX/Docling 경로처럼 style_name/font_size/
+    # font_name이 자동 생성되지 않는 노드의 수동 보정. 부분 병합(node.style의
+    # 기존 키는 유지하고 전달된 키만 덮어씀).
+    style_updates = {
+        k: v for k, v in {
+            "style_name": body.style_name, "font_size": body.font_size, "font_name": body.font_name,
+        }.items() if v is not None
+    }
+    if style_updates:
+        node.style = {**(node.style or {}), **style_updates}
+        changed_fields.append("style")
     node.user_corrected = True
+    node.correction_type = ",".join(changed_fields)
+    node.correction_notes = body.correction_notes
     await db.commit()
     await db.refresh(node)
     return node
+
+
+@router.get("/{document_id}/elements", response_model=DocumentElementsResponse)
+async def list_document_elements(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Document.elements(Docling 도입 설계서, 2026-07-23 Phase 4) — Docling
+    엔진으로 처리된 PDF만 채워짐. HWP/HWPX나 legacy 엔진 문서는 항상 빈
+    리스트(프런트가 이 탭을 숨기는 신호로 사용, 표 탭과 동일한 원칙)."""
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+
+    return {"document_id": str(document_id), "elements": doc.elements or []}
+
+
+@router.patch("/{document_id}/elements/{element_id}", response_model=DocumentElementItem)
+async def correct_document_element(
+    document_id: UUID,
+    element_id: str,
+    body: ElementCorrectionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from datetime import datetime
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="editor")
+
+    elements = doc.elements or []
+    updated_element = None
+    new_elements = []
+    for el in elements:
+        if el.get("id") == element_id:
+            el = dict(el)
+            el["content"] = {**(el.get("content") or {}), "markdown": body.markdown, "text": body.markdown}
+            el["user_corrected"] = True
+            el["correction_notes"] = body.correction_notes
+            # 메타 정보 생성.txt 2절 — style/font_size/font_name은 Docling
+            # 경로에서 자동 생성이 불가능해 전달된 값만 metadata에 병합한다
+            # (미전달 필드는 기존 값 유지).
+            metadata_updates = {
+                k: v for k, v in {
+                    "style": body.style, "font_size": body.font_size, "font_name": body.font_name,
+                }.items() if v is not None
+            }
+            if metadata_updates:
+                el["metadata"] = {**(el.get("metadata") or {}), **metadata_updates}
+            updated_element = el
+        new_elements.append(el)
+    if updated_element is None:
+        raise HTTPException(status_code=404, detail="Element not found")
+
+    # Document.elements는 JSON 컬럼이라 리스트 원소를 in-place로 바꿔도
+    # SQLAlchemy가 변경을 추적하지 못한다 — 컬럼 전체를 새 리스트로 재할당해야
+    # UPDATE가 나간다(문서 파싱 고도화 Phase 4).
+    doc.elements = new_elements
+    doc.updated_at = datetime.utcnow()
+    await db.commit()
+    return updated_element
+
+
+# normalization_blocks.py::TextCleanBlock._apply()가 내장 규칙에 붙이는
+# "builtin:xxx" 키 -> 한글 라벨. CleaningRule 테이블에 행이 없는 내장 규칙은
+# rule_name 조인이 항상 NULL이라, 이 매핑이 없으면 프런트에 원문 rule_key(영어)가
+# 그대로 노출된다(사용자 확인 2026-07-23, "정제비교에서 규칙이 다 영어야").
+_BUILTIN_RULE_LABELS: dict[str, str] = {
+    "builtin:control_chars": "제어문자 제거",
+    "builtin:unicode_nfc": "유니코드 정규화(NFC)",
+    "builtin:quotes": "따옴표 정규화",
+    "builtin:width": "전각→반각 변환",
+    "builtin:ocr_fix": "OCR 오류 보정(줄바꿈 하이픈 결합)",
+    "builtin:whitespace": "공백·빈 줄 정리",
+    "builtin:repeated_headers": "반복 머리말 제거",
+}
+
+
+def _resolve_cleaning_rule_name(rule_name: str | None, rule_key: str | None) -> str | None:
+    """CleaningRule 조인 결과(커스텀 규칙, 이미 한글)를 우선하고, 없으면 내장
+    규칙 한글 라벨로, 그마저 없으면(알 수 없는 rule_key) 원문을 그대로 반환한다."""
+    if rule_name:
+        return rule_name
+    if rule_key:
+        return _BUILTIN_RULE_LABELS.get(rule_key, rule_key)
+    return None
 
 
 @router.get("/{document_id}/cleaning-changes", response_model=CleaningChangesResponse)
@@ -880,7 +1049,7 @@ async def list_cleaning_changes(
                 "id": change.id,
                 "rule_id": change.rule_id,
                 "rule_key": change.rule_key,
-                "rule_name": rule_name,
+                "rule_name": _resolve_cleaning_rule_name(rule_name, change.rule_key),
                 "node_id": change.node_id,
                 "before_sample": change.before_sample,
                 "after_sample": change.after_sample,
@@ -1162,6 +1331,59 @@ async def list_document_chunks(
     # run 해석 기준(_resolve_display_run_id) — active_run_id 우선, 없으면 최신 run.
     run_id = await _resolve_display_run_id(db, doc)
 
+    # 메타 정보 생성 설계서(2026-07-23) Phase 4 — token_count/chunk_type/
+    # keywords/embedding_model/element_id/prev_chunk_id/next_chunk_id/
+    # workflow_version/dictionary_version은 Postgres DocumentChunk에만 있고
+    # Qdrant 페이로드에는 없어, 히트 경로에서도 이 조회 결과를 병합한다.
+    from app.db.models.document_chunk import DocumentChunk as _DocumentChunkModel
+
+    pg_chunks_by_id: dict[str, _DocumentChunkModel] = {}
+    if run_id:
+        pg_rows = (
+            await db.scalars(
+                select(_DocumentChunkModel).where(
+                    _DocumentChunkModel.document_id == document_id,
+                    _DocumentChunkModel.run_id == run_id,
+                    # Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9) —
+                    # 여기서는 parent 행도 함께 조회해둔다(아래 _pg_fields()가
+                    # child의 parent_chunk_id로 parent 텍스트를 찾아야 하므로).
+                    # parent 자체는 "청크 #N" 카드로는 절대 렌더링되지 않는다 —
+                    # Qdrant 히트 목록(임베딩 대상만 있음)과 WAITING_REVIEW 폴백
+                    # 목록(아래에서 chunk_tier=="child"로 필터링) 둘 다 parent를
+                    # 만들어내지 않기 때문.
+                )
+            )
+        ).all()
+        pg_chunks_by_id = {str(c.id): c for c in pg_rows}
+
+    def _pg_fields(chunk_id: str) -> dict:
+        c = pg_chunks_by_id.get(chunk_id)
+        if c is None:
+            return {}
+        parent = pg_chunks_by_id.get(str(c.parent_chunk_id)) if c.parent_chunk_id else None
+        return {
+            "token_count": c.token_count,
+            "chunk_type": c.chunk_type,
+            "keywords": c.keywords,
+            "embedding_model": c.embedding_model,
+            "element_id": c.element_id,
+            "prev_chunk_id": str(c.prev_chunk_id) if c.prev_chunk_id else None,
+            "next_chunk_id": str(c.next_chunk_id) if c.next_chunk_id else None,
+            "workflow_version": c.workflow_version,
+            "dictionary_version": c.dictionary_version,
+            "section_path": c.section_path,
+            # 메타 정보 생성.txt 3절 후속(2026-07-24) — heading_path는
+            # section_path와 동일한 데이터라 스펙 필드명으로만 별도 노출
+            # (신규 컬럼 아님).
+            "heading_path": c.section_path,
+            # Parent Retrieval(Phase 9) — "상위 청크 보기" 토글용. parent 자체는
+            # 목록에 노출되지 않으므로 child 응답에 텍스트를 인라인으로 실어준다.
+            "parent_chunk_text": parent.chunk_text if parent else None,
+            "language": c.language,
+            "source_file": c.source_file,
+            "version": c.version,
+        }
+
     hits = qdrant_service.scroll_by_document(str(document_id))
     # 이 문서의 "현재" run이 아닌 다른(초과/삭제된) run이 남긴 포인트는 무시한다 —
     # reprocess로 새 run이 만들어져도 rag_store가 재실행되기 전까지는 Qdrant에
@@ -1185,15 +1407,18 @@ async def list_document_chunks(
         # 볼 수 있도록")대로 Postgres를 폴백 소스로 사용한다 — 단, 이 경로로
         # 나온 항목은 embedded=False로 표시해 프런트가 수정/삭제(Qdrant 전용
         # 엔드포인트)를 비활성화하도록 한다.
-        from app.db.models.document_chunk import DocumentChunk
-
         pg_chunks = (
             await db.scalars(
-                select(DocumentChunk)
-                .where(DocumentChunk.document_id == document_id, DocumentChunk.run_id == run_id)
-                .order_by(DocumentChunk.chunk_order)
+                select(_DocumentChunkModel)
+                .where(
+                    _DocumentChunkModel.document_id == document_id, _DocumentChunkModel.run_id == run_id,
+                    # Phase 9 — parent 행은 청크 목록에 노출하지 않는다.
+                    _DocumentChunkModel.chunk_tier == "child",
+                )
+                .order_by(_DocumentChunkModel.chunk_order)
             )
         ).all() if run_id else []
+        total_chunks = len(pg_chunks)
         chunks = [
             {
                 "id": str(c.id),
@@ -1204,12 +1429,16 @@ async def list_document_chunks(
                 "edited": c.edited,
                 "hit_count": 0,
                 "embedded": False,
+                "total_chunks": total_chunks,
+                "char_count": len(c.chunk_text),
+                **_pg_fields(str(c.id)),
             }
             for c in pg_chunks
         ]
         return {"document_id": str(document_id), "chunks": chunks}
 
     hit_counts = await asyncio.to_thread(get_hit_counts, [h["id"] for h in hits])
+    total_chunks = len(hits)
     chunks = [
         {
             "id": h["id"],
@@ -1220,6 +1449,9 @@ async def list_document_chunks(
             "edited": bool(h["payload"].get("edited", False)),
             "hit_count": hit_counts.get(h["id"], 0),
             "embedded": True,
+            "total_chunks": total_chunks,
+            "char_count": len(h["payload"].get("text", "")),
+            **_pg_fields(h["id"]),
         }
         for i, h in enumerate(hits)
     ]
@@ -1456,6 +1688,30 @@ async def update_document_tags(
     return {"tags": tags}
 
 
+@router.patch("/{document_id}/metadata", response_model=DocumentResponse)
+async def update_document_metadata(
+    document_id: UUID,
+    body: DocumentMetadataUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """메타 정보 생성 설계서(2026-07-23) Phase 2 — author/organization/
+    security_level/source_system은 문서 내용에서 자동 생성할 수 없어(사용자
+    확인 2026-07-23), 이 엔드포인트를 통해 사용자가 입력한 값만 저장한다.
+    `exclude_unset`으로 요청에 실제로 포함된 필드만 갱신 — 나머지 필드는
+    건드리지 않는다(부분 업데이트)."""
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="editor")
+
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(doc, field, value)
+    await db.commit()
+    await db.refresh(doc)
+    return doc
+
+
 @router.post("/{document_id}/tags/accept-suggestion")
 async def accept_tag_suggestion(
     document_id: UUID,
@@ -1532,7 +1788,15 @@ async def get_document_images(
         }
         for record in (doc.images or [])
     ]
-    return {"document_id": str(doc.id), "images": images}
+    # Docling 경로에서만 의미 있음 — elements가 없는(legacy 엔진) 문서는 None이라
+    # 프론트가 안내 문구를 아예 표시하지 않는다. detected_count가 len(images)보다
+    # 크면 작은/중복 이미지가 _recognize_document_images(process.py)에서
+    # 필터링된 것(사용자 확인 2026-07-25, "그림에서 표기된 개수와 다르다").
+    detected_count = (
+        sum(1 for el in doc.elements if el.get("type") == "picture")
+        if doc.elements is not None else None
+    )
+    return {"document_id": str(doc.id), "images": images, "detected_count": detected_count}
 
 
 @router.get("/{document_id}/preview")

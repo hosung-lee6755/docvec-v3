@@ -20,6 +20,28 @@ export interface Document {
   suggested_tags: string[] | null
   metadata_status: string
   active_run_id: string | null
+  // 메타 정보 생성 설계서(2026-07-23) — title/language/category/page_count는
+  // 문서 내용에서 자동 생성(Phase 1), author/organization/security_level/
+  // source_system은 PATCH /documents/{id}/metadata로 사용자가 입력해야만
+  // 채워짐(Phase 2). 전부 null이 기본값.
+  title: string | null
+  language: string | null
+  category: string | null
+  page_count: number | null
+  author: string | null
+  organization: string | null
+  security_level: string | null
+  source_system: string | null
+  // 메타 정보 생성.txt 1절 후속(2026-07-24) — checksum/parser_version/
+  // source_path/file_type은 기존 file_hash/pipeline_version/minio_key/
+  // mime_type 컬럼을 스펙 필드명으로 노출한 것(신규 컬럼 아님).
+  // document_created_at은 문서 자체의 작성일(created_at=DB 저장 시각과 별개) —
+  // docx/pdf는 자동 추출, hwp/hwpx는 PATCH /documents/{id}/metadata로 수동 입력.
+  checksum: string | null
+  parser_version: Record<string, unknown> | null
+  source_path: string | null
+  file_type: string | null
+  document_created_at: string | null
 }
 
 export interface DocumentListResponse {
@@ -173,6 +195,9 @@ export interface DocumentImage {
 export interface DocumentImagesResult {
   document_id: string
   images: DocumentImage[]
+  // Docling 요소 중 type=="picture" 개수 — 작은/중복 이미지 필터링 전 원본 개수.
+  // legacy 엔진 문서(elements 없음)는 null.
+  detected_count: number | null
 }
 
 export function useDocumentImages(id: string, enabled: boolean) {
@@ -197,6 +222,32 @@ export interface DocumentChunk2 {
   edited: boolean
   hit_count: number
   embedded: boolean
+  // 메타 정보 생성 설계서(2026-07-23) Phase 4 — token_count/chunk_type/
+  // keywords/embedding_model/element_id/workflow_version/dictionary_version은
+  // tree 기반 청킹 전략(paragraph/section_aware/table_unit)에서만 채워짐.
+  // total_chunks/char_count는 DB에 저장되지 않고 응답 조립 시점에 계산됨.
+  token_count: number | null
+  chunk_type: string | null
+  keywords: string[] | null
+  embedding_model: string | null
+  element_id: string | null
+  prev_chunk_id: string | null
+  next_chunk_id: string | null
+  workflow_version: number | null
+  dictionary_version: number | null
+  total_chunks: number
+  char_count: number
+  section_path: string[] | null
+  // 메타 정보 생성.txt 3절 후속(2026-07-24) — heading_path는 section_path와
+  // 동일한 데이터(스펙 필드명 노출용). language/source_file/version은
+  // DocumentChunk(Postgres) 실컬럼.
+  heading_path: string[] | null
+  language: string | null
+  source_file: string | null
+  version: string | null
+  // Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9) — "상위
+  // 청크 보기" 토글용으로 인라인 제공(parent 자체는 목록에 없음).
+  parent_chunk_text: string | null
 }
 
 export interface DocumentChunksResult {

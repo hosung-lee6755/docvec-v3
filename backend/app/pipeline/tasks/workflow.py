@@ -8,6 +8,7 @@ into one static chain up front.
 """
 import hashlib
 import json
+import re
 from datetime import datetime
 
 from app.pipeline.blocks.base import BlockContext, BlockExecutionError
@@ -105,6 +106,28 @@ def _resolve_output(output: dict | None) -> dict:
 # the dictionary entirely, so including it there would only cause needless
 # cache misses whenever anyone edits an unrelated dictionary entry.
 _DICTIONARY_BLOCK_TYPES = frozenset({"stopword", "synonym", "user_dict", "pii_detect"})
+# skip_review only changes quality_check's requires_review decision (9항목
+# 펀치리스트 #1) — scoped the same way dictionary_version is scoped to
+# _DICTIONARY_BLOCK_TYPES below, so it doesn't perturb every other block's
+# cache key.
+_REVIEW_GATED_BLOCK_TYPES = frozenset({"quality_check"})
+
+# BlockExecutionCache is a cross-run, content-addressed cache — safe ONLY for
+# block types whose real DB side effect lives on the Document row itself
+# (text_extract's parsed_text/elements/images/tables/etc.), since that row
+# already holds the correct final state no matter which run last wrote it.
+# Every other block type persists rows scoped by run_id (structure_analyze ->
+# DocumentNode, text_clean/user_dict/synonym/stopword -> CleaningChange/
+# DictionaryApplication, pii_detect -> PiiDetection, chunk_split ->
+# DocumentChunk, quality_check -> QualityReport, ...) — a cache hit from an
+# EARLIER run would silently skip creating rows under the CURRENT run_id,
+# leaving every doc.active_run_id-scoped query (구조/정제 비교/사전 적용/
+# 민감정보 tabs) empty even though the step shows COMPLETED. Confirmed on a
+# real reprocess (2026-07-25): text_extract through pii_detect were cache
+# hits from an earlier failed attempt and wrote nothing under the new run,
+# while chunk_split (a genuine cache miss) worked fine. Deny-by-default so a
+# newly added block type is safe until explicitly added here.
+_CACHE_SAFE_BLOCK_TYPES = frozenset({"file_validate", "format_detect", "text_extract"})
 
 
 def _compute_cache_key(
@@ -114,6 +137,7 @@ def _compute_cache_key(
     block_version: str,
     config: dict,
     dictionary_version: int | None = None,
+    skip_review: bool = False,
 ) -> str:
     # document_id is required even though most blocks derive their output from
     # upstream_outputs: an entry block (e.g. file_validate) has NO upstream, so
@@ -122,8 +146,10 @@ def _compute_cache_key(
     # the same cache key and each would replay the other's cached output.
     config_hash = _hash_bytes(_serialize(config or {}))
     dict_version_part = dictionary_version if block_type in _DICTIONARY_BLOCK_TYPES else None
+    skip_review_part = skip_review if block_type in _REVIEW_GATED_BLOCK_TYPES else None
     return _hash_bytes(
-        f"{document_id}:{input_hash}:{block_type}:{block_version}:{config_hash}:{dict_version_part}".encode()
+        f"{document_id}:{input_hash}:{block_type}:{block_version}:{config_hash}:"
+        f"{dict_version_part}:{skip_review_part}".encode()
     )
 
 
@@ -137,6 +163,38 @@ def _update_document_status(db, run, block_type: str) -> None:
     if doc is not None:
         doc.status = new_status
         db.commit()
+
+
+_HANGUL_RE = re.compile(r"[가-힣]")
+
+# 알려진 라이브러리/드라이버 예외 문자열 패턴 -> 한글 안내 문구. 원문에 없으면
+# _localize_error_message가 일반 안내 문구로 대체한다.
+_KNOWN_ERROR_PATTERNS: list[tuple[str, str]] = [
+    (
+        "NUL (0x00)",
+        "추출된 문서 텍스트에 데이터베이스가 저장할 수 없는 문자(NUL)가 포함되어 있어 처리에 실패했습니다.",
+    ),
+    ("TimeLimitExceeded", "처리 시간 제한을 초과하여 작업이 중단되었습니다."),
+    ("SoftTimeLimitExceeded", "처리 시간 제한을 초과하여 작업이 중단되었습니다."),
+]
+
+
+def _localize_error_message(exc: Exception) -> str:
+    """워커 내부에서 잡히는 예외(SQLAlchemy/DB 드라이버/셀러리 등 라이브러리 예외)의
+    원문은 영어라, Document/WorkflowRun/WorkflowRunStep.error_message에 그대로
+    노출하면 사용자가 읽을 수 없다(사용자 확인 2026-07-23, "처리 실패에서 실패한
+    이유가 영어로 나오는데 이거 한글로 나오도록해"). 우리 블록 코드가 이미 한글로
+    직접 작성한 BlockExecutionError 메시지(대부분의 경우)는 한글이 포함돼 있으므로
+    그대로 통과시키고, 그 외(알려진 패턴 또는 순수 영어 라이브러리 예외)만 번역한다.
+    원본 예외는 이 함수 호출 후에도 그대로 raise되어 워커 로그에 남으므로, 여기서
+    기술적 세부사항을 생략해도 진단 정보가 소실되지는 않는다."""
+    text = str(exc)
+    for marker, korean_message in _KNOWN_ERROR_PATTERNS:
+        if marker in text:
+            return korean_message
+    if _HANGUL_RE.search(text):
+        return text
+    return "처리 중 예기치 않은 오류가 발생했습니다. 문제가 반복되면 관리자에게 문의하세요."
 
 
 def _fail_document(db, run, error_message: str) -> None:
@@ -231,8 +289,12 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
             str(run.document_id) if run.document_id else None,
             step.input_hash, block.block_type, block_instance.block_version, block.config or {},
             dictionary_version=run.dictionary_version,
+            skip_review=bool(run.skip_review),
         )
-        cache_entry = db.get(BlockExecutionCache, cache_key)
+        cache_entry = (
+            db.get(BlockExecutionCache, cache_key)
+            if block.block_type in _CACHE_SAFE_BLOCK_TYPES else None
+        )
 
         if cache_entry is not None:
             resolved_output = _resolve_output(cache_entry.output_summary)
@@ -253,6 +315,7 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
                 step_id=str(step.id),
                 upstream_outputs=upstream_outputs,
                 config=block.config or {},
+                skip_review=bool(run.skip_review),
                 document_id=str(run.document_id) if run.document_id else None,
                 collection_id=str(run.collection_id) if run.collection_id else None,
             ))
@@ -265,15 +328,16 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
             _store_step_output(run_id, step, result.output)
             db.commit()
 
-            db.add(BlockExecutionCache(
-                cache_key=cache_key,
-                artifact_key=step.artifact_key or "",
-                output_summary=step.output,
-                created_at=datetime.utcnow(),
-                hit_count=0,
-                requires_review=result.requires_review,
-            ))
-            db.commit()
+            if block.block_type in _CACHE_SAFE_BLOCK_TYPES:
+                db.add(BlockExecutionCache(
+                    cache_key=cache_key,
+                    artifact_key=step.artifact_key or "",
+                    output_summary=step.output,
+                    created_at=datetime.utcnow(),
+                    hit_count=0,
+                    requires_review=result.requires_review,
+                ))
+                db.commit()
             requires_review = result.requires_review
 
         # cache_entry 경로에서도 반드시 확인해야 한다 — 이전에는 cache-hit일 때
@@ -306,13 +370,13 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
             raise self.retry(exc=exc, max_retries=retry_count)
         if step is not None:
             step.status = "FAILED"
-            step.error_message = str(exc)[:500]
+            step.error_message = _localize_error_message(exc)[:500]
         run = db.get(WorkflowRun, run_id)
         if run is not None:
             run.status = "FAILED"
-            run.error_message = str(exc)[:500]
+            run.error_message = _localize_error_message(exc)[:500]
             run.completed_at = datetime.utcnow()
-            _fail_document(db, run, str(exc))
+            _fail_document(db, run, _localize_error_message(exc))
         db.commit()
         raise
 
@@ -323,14 +387,14 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
         ).first()
         if step is not None:
             step.status = "FAILED"
-            step.error_message = str(exc)[:500]
+            step.error_message = _localize_error_message(exc)[:500]
             step.completed_at = datetime.utcnow()
         run = db.get(WorkflowRun, run_id)
         if run is not None:
             run.status = "FAILED"
-            run.error_message = str(exc)[:500]
+            run.error_message = _localize_error_message(exc)[:500]
             run.completed_at = datetime.utcnow()
-            _fail_document(db, run, str(exc))
+            _fail_document(db, run, _localize_error_message(exc))
         db.commit()
         raise
 
@@ -410,12 +474,15 @@ def _advance(db, run_id: str, block, output: dict) -> None:
     from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
     from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 
+    run = db.get(WorkflowRun, run_id)
+    timeout_overrides = (run.timeout_overrides or {}) if run else {}
+
     outgoing = db.query(WorkflowEdge).filter(WorkflowEdge.from_block_id == block.id).all()
     taken_edges = [e for e in outgoing if _evaluate_condition(e.condition, output)]
 
     for edge in taken_edges:
         target = db.get(WorkflowBlockInstance, edge.to_block_id)
-        timeout_seconds = (target.config or {}).get("timeoutSeconds", 300)
+        timeout_seconds = timeout_overrides.get(target.block_type) or (target.config or {}).get("timeoutSeconds", 300)
         if target.block_type == "merge":
             incoming_to_target = db.query(WorkflowEdge).filter(
                 WorkflowEdge.to_block_id == target.id

@@ -92,6 +92,17 @@ def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
     return text
 
 
+def _diff_sample(before: str, after: str, window: int = 100) -> tuple[str, str]:
+    """변경 위치를 중심으로 한 자른 before/after 쌍을 반환한다. 문서 전체
+    앞 200자만 보여주는 head-slice는 ocr_fix/unicode_nfc처럼 문서 전역을
+    스캔하는 규칙에서 실제 변경이 200자 이후에만 있으면 before_sample==
+    after_sample처럼 보이는 버그를 만든다(9항목 펀치리스트 #8)."""
+    min_len = min(len(before), len(after))
+    pos = next((i for i in range(min_len) if before[i] != after[i]), min_len)
+    start = max(0, pos - window)
+    return before[start:start + 2 * window], after[start:start + 2 * window]
+
+
 class TextCleanConfig(BaseModel):
     collapse_whitespace: bool = True
     normalize_unicode: bool = True  # NFC
@@ -141,9 +152,10 @@ class TextCleanBlock(BaseBlock):
                 result = fn(before)
                 after, count, samples = result if len(result) == 3 else (*result, None)
                 if after != before and count:
+                    before_sample, after_sample = _diff_sample(before, after)
                     changes.append({
                         "rule_key": rule_key, "rule_id": rule_id,
-                        "before_sample": before[:200], "after_sample": after[:200],
+                        "before_sample": before_sample, "after_sample": after_sample,
                         "change_count": count,
                         "sample_matches": samples[:20] if samples else None,
                     })

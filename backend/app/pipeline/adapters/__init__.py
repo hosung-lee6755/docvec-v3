@@ -13,12 +13,18 @@ class UnsupportedFileTypeError(Exception):
         )
 
 
-def get_adapter(file_path: Path, mime_type: str) -> BaseAdapter:
+def get_adapter(file_path: Path, mime_type: str, engine: str = "legacy") -> BaseAdapter:
     from app.pipeline.adapters.docx_adapter import DOCXAdapter
     from app.pipeline.adapters.hwp_adapter import HWPAdapter
     from app.pipeline.adapters.pdf_adapter import PDFAdapter
 
     for adapter in (PDFAdapter(), HWPAdapter(), DOCXAdapter()):
         if adapter.can_handle(file_path, mime_type):
+            # Docling은 PDF만 지원 — DOCX/HWP/HWPX는 engine 값과 무관하게
+            # 항상 기존 어댑터(Docling 도입 설계서, 2026-07-23 Phase 1).
+            if engine == "docling" and adapter.format_id == "pdf":
+                from app.pipeline.adapters.docling_adapter import DoclingAdapter
+
+                return DoclingAdapter()
             return adapter
     raise UnsupportedFileTypeError(file_path, mime_type)

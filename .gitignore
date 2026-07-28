@@ -20,6 +20,9 @@ frontend/.vite/
 backups/
 input_pdfs/
 phase5_test.pdf
+test_data/
+screenshots/
+*_검증_보고서.docx
 
 # OS
 .DS_Store

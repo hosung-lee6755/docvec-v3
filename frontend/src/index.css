@@ -116,3 +116,27 @@ html .krds-table-wrap {
   color: #cbd5e1;
   cursor: not-allowed;
 }
+
+/* 원문 대조/RAG 데이터 수정 탭의 RAG 저장 텍스트 렌더링 (9항목 펀치리스트 #2/#4) */
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid #e2e8f0;
+  padding: 4px 8px;
+  text-align: left;
+}
+.markdown-body th {
+  background: #f8fafc;
+}
+.markdown-body p {
+  margin: 0 0 8px;
+}
+.markdown-body pre {
+  background: #f8fafc;
+  padding: 8px;
+  overflow-x: auto;
+}

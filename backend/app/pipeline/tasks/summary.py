@@ -86,6 +86,17 @@ def generate_summary(document_id: str) -> dict:
         doc.summary = summary.strip()
         doc.summary_status = "DONE"
         db.commit()
+
+        # 메타 정보 생성 설계서(2026-07-23) Phase 5 — Summary Index. 실패해도
+        # 요약 자체는 이미 저장됐으므로 이 문서의 처리 결과를 되돌리지 않는다
+        # (best-effort, Qdrant 장애가 요약 생성 자체를 실패시키면 안 됨).
+        try:
+            from app.services.summary_index import index_document_summary
+
+            index_document_summary(document_id, doc.summary)
+        except Exception:
+            logger.exception("summary index upsert failed", extra={"document_id": document_id})
+
         return {"document_id": document_id, "status": "DONE"}
 
     except Exception as exc:

@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
-from app.pipeline.tasks.workflow import _advance, _evaluate_condition
+from app.pipeline.tasks.workflow import _advance, _evaluate_condition, _localize_error_message
 
 
 def test_evaluate_condition_none_is_always_true():
@@ -118,6 +118,73 @@ def test_merge_fires_once_last_incoming_edge_completes(mock_task):
 
     assert existing_step.completed_incoming_edges == 2
     mock_task.delay.assert_called_once_with(run_id, str(merge_id))
+
+
+@patch("app.pipeline.tasks.workflow.run_workflow_step")
+def test_advance_uses_run_timeout_override_over_block_config(mock_task):
+    # A stuck run retried via reprocess_service.start_partial_reprocess carries
+    # a per-run {block_type: timeoutSeconds} override (WorkflowRun.timeout_overrides)
+    # that must win over the block's own persisted config.timeoutSeconds, without
+    # mutating that shared config (other documents on the same workflow version
+    # still use the block's default).
+    run_id = str(uuid4())
+    source = MagicMock(id=uuid4())
+    target_id = uuid4()
+    edge = MagicMock(from_block_id=source.id, to_block_id=target_id, condition=None)
+    target = MagicMock(id=target_id, block_type="text_extract", config={"timeoutSeconds": 300})
+    run = MagicMock(timeout_overrides={"text_extract": 1200})
+
+    db = _mock_db(edges=[edge], get_map={WorkflowBlockInstance: target, WorkflowRun: run})
+    _advance(db, run_id, source, {})
+
+    mock_task.apply_async.assert_called_once_with(
+        args=[run_id, str(target_id)], time_limit=1200, queue="normal",
+    )
+
+
+@patch("app.pipeline.tasks.workflow.run_workflow_step")
+def test_advance_falls_back_to_block_config_when_no_override_for_block_type(mock_task):
+    run_id = str(uuid4())
+    source = MagicMock(id=uuid4())
+    target_id = uuid4()
+    edge = MagicMock(from_block_id=source.id, to_block_id=target_id, condition=None)
+    target = MagicMock(id=target_id, block_type="text_extract", config={"timeoutSeconds": 300})
+    # Override exists for this run, but not for this block's type.
+    run = MagicMock(timeout_overrides={"structure_analyze": 1200})
+
+    db = _mock_db(edges=[edge], get_map={WorkflowBlockInstance: target, WorkflowRun: run})
+    _advance(db, run_id, source, {})
+
+    mock_task.apply_async.assert_called_once_with(
+        args=[run_id, str(target_id)], time_limit=300, queue="normal",
+    )
+
+
+def test_localize_error_message_maps_known_nul_byte_pattern_to_korean():
+    exc = Exception(
+        "This Session's transaction has been rolled back due to a previous "
+        "exception during flush. Original exception was: A string literal "
+        "cannot contain NUL (0x00) characters."
+    )
+    result = _localize_error_message(exc)
+    assert "0x00" not in result
+    assert "rolled back" not in result
+    assert "문자" in result
+
+
+def test_localize_error_message_passes_through_existing_korean_message():
+    # BlockExecutionError raised by our own block code is almost always
+    # already authored in Korean — must not be replaced with the generic
+    # fallback (that would discard useful, specific detail).
+    exc = Exception("지원하지 않는 파일 형식입니다: .xyz")
+    assert _localize_error_message(exc) == "지원하지 않는 파일 형식입니다: .xyz"
+
+
+def test_localize_error_message_falls_back_for_unrecognized_english_exception():
+    exc = Exception("division by zero")
+    result = _localize_error_message(exc)
+    assert "division by zero" not in result
+    assert "오류" in result
 
 
 def test_terminal_block_completes_run_when_nothing_else_pending():

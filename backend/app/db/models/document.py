@@ -76,6 +76,32 @@ class Document(Base):
     # app/pipeline/tasks/process.py. Used to attribute chunks to a page number for
     # RAG citations; may drift after a manual REVIEW_PENDING text edit.
     page_map: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Per-visual-line font/position signals from the adapter (문서 파싱 고도화
+    # Phase 1) — a side artifact alongside parsed_text, not a replacement for
+    # it. Shape: [{page_number, text, bbox, font_size, is_bold, is_italic,
+    # style_name, role}], role is "header"/"footer"/"footnote"/None (see
+    # extraction_blocks.py::_detect_header_footer_footnote_lines). None for
+    # documents with no per-line font signal source (HWP/HWPX) or parsed
+    # before this field existed — structure_analyze falls back to its
+    # regex-only path in that case.
+    extraction_layout: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Per-page OCR quality (문서 파싱 고도화 Phase 3), populated only for pages
+    # that actually went through Tesseract (not cloud VLM, which exposes no
+    # word-level confidence, and not natively-extracted pages). Shape:
+    # [{page_number, confidence (0-1 mean word confidence), word_count}].
+    # None when ocr_used is False or no page's OCR produced confidence data.
+    # Consumed by quality_check in place of format_detect's page-level
+    # approximation.
+    ocr_page_confidence: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Docling 도입 설계서(2026-07-23) Phase 1 — DoclingAdapter(engine="docling",
+    # PDF 전용)로 처리된 문서에서만 채워지는 통합 요소 JSON. 사용자가 제안한
+    # 형태 그대로: [{id, page, type, bbox, content: {text, markdown},
+    # metadata: {section_path, is_header, is_footer, confidence, detected_as,
+    # user_corrected, correction_notes}}]. legacy 엔진(기존 pdf/docx/hwp/hwpx
+    # 어댑터)로 처리된 문서는 None — GET/PATCH /documents/{id}/elements와
+    # structure_analyze(Phase 2)가 None이면 각각 표 탭/정규식 폴백 경로로
+    # 동작한다.
+    elements: Mapped[list | None] = mapped_column(JSON, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Plain string, not SQLEnum: PENDING -> GENERATING -> DONE | FAILED, set by
     # app/pipeline/tasks/summary.py::generate_summary, triggered automatically
@@ -120,3 +146,22 @@ class Document(Base):
     # Snapshot of {block_type: block_version, embedding_model, ...} from the
     # last successful run — 설계서 §16.2 처리 버전 예시.
     pipeline_version: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 메타 정보 생성 설계서(2026-07-23) Document 레벨 자동 생성 필드 — 문서
+    # 내용에서 유도되며 structure_analyze/extraction_blocks/output_blocks가
+    # 채운다. None이면 아직 처리되지 않았거나(구버전 재처리 전) 추출 실패.
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 문서 내용에서 신뢰성 있게 자동 추출할 수 없어(사용자 확인 2026-07-23),
+    # 자동 생성 로직 없이 PATCH /documents/{id}/metadata를 통해 사용자가 직접
+    # 입력해야만 채워지는 필드. 기본값은 항상 None.
+    author: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    organization: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    security_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    source_system: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # 메타 정보 생성.txt 1절 — 문서 자체의 작성일(파일 내부 core properties에서
+    # 추출). 위 created_at은 DB row 생성/업로드 시각(ingestion_time 개념)이라
+    # 별개다. docx/pdf는 extraction_blocks.py가 자동 채우고, hwp/hwpx는 자동
+    # 불가해 PATCH /documents/{id}/metadata로 사용자가 직접 입력해야 한다.
+    document_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

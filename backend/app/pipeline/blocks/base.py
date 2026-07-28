@@ -30,6 +30,9 @@ class BlockContext:
     # .collection_id) — how the 입력 block knows which document to load.
     document_id: str | None = None
     collection_id: str | None = None
+    # Mirrors WorkflowRun.skip_review — quality_check reads this to force
+    # review_policy to auto_pass for this run only (9항목 펀치리스트 #1).
+    skip_review: bool = False
 
     def load_artifact(self, ref: str) -> dict:
         """Fetches a large block output stored in MinIO (통합 설계서 §2.3,

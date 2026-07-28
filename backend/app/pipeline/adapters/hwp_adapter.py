@@ -228,6 +228,12 @@ class HWPAdapter(BaseAdapter):
         }
 
     def extract(self, file_path: Path, options: dict) -> RawParsedDocument:
+        # Deliberately does not populate metadata["line_layout"] (문서 파싱
+        # 고도화 Phase 1) — pyhwp exposes no stable per-run font-size/bold API
+        # for HWP/HWPX, unlike pdfplumber's page.chars or python-docx's
+        # run.font. structure_blocks.py falls back to its regex-only path for
+        # any document with no line_layout, so this is a silent, safe no-op
+        # rather than a half-populated/misleading signal.
         suffix = file_path.suffix.lower()
         if suffix == ".hwpx":
             return self._extract_hwpx(file_path)

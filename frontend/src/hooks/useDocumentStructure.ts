@@ -36,11 +36,19 @@ export function useUpdateDocumentNode() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({
-      documentId, nodeId, level, nodeType,
-    }: { documentId: string; nodeId: string; level?: number; nodeType?: string }) => {
+      documentId, nodeId, level, nodeType, styleName, fontSize, fontName,
+    }: {
+      documentId: string; nodeId: string; level?: number; nodeType?: string
+      // 메타 정보 생성.txt 2절 — HWP/HWPX/Docling 경로처럼 자동 생성이
+      // 불가능한 노드의 style_name/font_size/font_name 수동 보정.
+      styleName?: string; fontSize?: number; fontName?: string
+    }) => {
       const { data } = await apiClient.patch(`/documents/${documentId}/nodes/${nodeId}`, {
         level: level ?? null,
         node_type: nodeType ?? null,
+        style_name: styleName || null,
+        font_size: fontSize ?? null,
+        font_name: fontName || null,
       })
       return data as DocumentNodeItem
     },

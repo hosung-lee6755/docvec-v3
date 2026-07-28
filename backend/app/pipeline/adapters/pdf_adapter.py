@@ -1,4 +1,8 @@
+import re
+from datetime import datetime
 from pathlib import Path
+
+from app.pipeline.blocks.table_markdown import rows_to_markdown
 
 from app.pipeline.adapters.base import (
     BaseAdapter,
@@ -15,6 +19,25 @@ _POINTS_PER_CM = 72 / 2.54
 # §13.5's text_density < 5.0 chars/cm² OCR-candidate threshold. Used to derive
 # a 0-1 native_text_coverage ratio from raw character density.
 _FULL_PAGE_TEXT_DENSITY = 5.0
+
+
+def _parse_pdf_date(raw: str | None) -> datetime | None:
+    """PDF info dict creationDate, e.g. "D:20230415120000+00'00'" (PDF spec
+    §7.9.4). Only the date/time digits are required; timezone suffix is
+    ignored since Document.document_created_at only needs an authored-date
+    signal, not exact instant. Returns None for missing/malformed values."""
+    if not raw:
+        return None
+    match = re.match(r"D:(\d{4})(\d{2})(\d{2})(\d{2})?(\d{2})?(\d{2})?", raw)
+    if not match:
+        return None
+    year, month, day, hour, minute, second = (
+        int(g) if g else 0 for g in match.groups()
+    )
+    try:
+        return datetime(year, month or 1, day or 1, hour, minute, second)
+    except ValueError:
+        return None
 
 
 def _text_coverage(text: str, width: float, height: float) -> float:
@@ -94,6 +117,39 @@ def _cloud_vlm_ocr(image_bytes: bytes, vision_backend: str, vision_api_key: str)
 _TESSERACT_CONFIG = "--oem 1 --psm 3"
 
 
+def _ocr_page_with_confidence(image, pytesseract) -> tuple[str, float | None, int]:
+    """Runs image_to_data (word-level confidence + position) instead of
+    image_to_string (문서 파싱 고도화 Phase 3) — reconstructs the same flowing
+    text (grouped by Tesseract's block/paragraph/line indices, one line per
+    group) while also returning the page's mean word confidence (0-1) and
+    word count, so quality_check can validate OCR quality against a real
+    measurement instead of format_detect's page-level approximation."""
+    data = pytesseract.image_to_data(
+        image, lang="kor+eng", config=_TESSERACT_CONFIG, output_type=pytesseract.Output.DICT,
+    )
+    lines: dict[tuple[int, int, int], list[str]] = {}
+    order: list[tuple[int, int, int]] = []
+    confidences: list[float] = []
+    for i, word in enumerate(data["text"]):
+        word = word.strip()
+        if not word:
+            continue
+        try:
+            conf = float(data["conf"][i])
+        except (TypeError, ValueError):
+            conf = -1.0
+        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        if key not in lines:
+            lines[key] = []
+            order.append(key)
+        lines[key].append(word)
+        if conf >= 0:
+            confidences.append(conf)
+    text = "\n".join(" ".join(lines[key]) for key in order)
+    mean_confidence = (sum(confidences) / len(confidences) / 100.0) if confidences else None
+    return text, mean_confidence, len(confidences)
+
+
 def _preprocess_for_ocr(image):
     """Grayscale → autocontrast → Otsu binarization. Tesseract's Korean
     recognition degrades badly on gray/noisy scans, producing interleaved
@@ -128,14 +184,10 @@ def _preprocess_for_ocr(image):
     return Image.fromarray(((arr > threshold) * 255).astype("uint8"))
 
 
-def _text_block_bbox(page) -> tuple[float, float, float, float] | None:
+def _text_block_bbox(words: list[dict]) -> tuple[float, float, float, float] | None:
     """Bounding box enclosing every extracted word on the page. Native text
     only — OCR'd pages have no word-level geometry without pytesseract's
     image_to_data, which this adapter doesn't call."""
-    try:
-        words = page.extract_words()
-    except Exception:
-        return None
     if not words:
         return None
     return (
@@ -162,6 +214,243 @@ def _text_excluding_tables(page, table_bboxes: list):
         except Exception:
             continue
     return page.extract_text() or ""
+
+
+# Chars within this many points of each other's baseline are treated as the
+# same visual line — small enough to not merge two genuinely stacked lines,
+# large enough to absorb normal font-rendering jitter within one line.
+_LINE_TOP_TOLERANCE = 2.0
+
+
+def _extract_line_layout(page, exclude_bboxes: list) -> list[dict]:
+    """Per-visual-line text + font signals from pdfplumber's char-level data
+    (`page.chars`), independent of and without altering the flattened `text`
+    used for parsed_text/chunking/citations/page_map. Populates
+    `RawParsedDocument.metadata["line_layout"]` for font-aware structure
+    analysis (문서 파싱 고도화 Phase 1/2 — see base.py's RawTextBlock comment).
+    Chars inside `exclude_bboxes` (already-detected table regions) are
+    skipped, same as `_text_excluding_tables`, so table text isn't
+    double-reported here. Returns [] when there's no char data at all (OCR'd
+    pages have none — pytesseract's image_to_string carries no font info)."""
+    try:
+        chars = page.chars
+    except Exception:
+        return []
+    if not chars:
+        return []
+
+    def _excluded(c) -> bool:
+        cx = (c.get("x0", 0) + c.get("x1", 0)) / 2
+        cy = (c.get("top", 0) + c.get("bottom", 0)) / 2
+        return any(
+            x0 <= cx <= x1 and top <= cy <= bottom
+            for x0, top, x1, bottom in exclude_bboxes
+        )
+
+    usable = [c for c in chars if c.get("text") and not _excluded(c)]
+    if not usable:
+        return []
+
+    # pdfplumber yields chars in content-stream order, not guaranteed
+    # top-to-bottom — sort before clustering into lines.
+    usable.sort(key=lambda c: (c["top"], c["x0"]))
+    lines: list[list[dict]] = []
+    for c in usable:
+        if lines and abs(c["top"] - lines[-1][-1]["top"]) <= _LINE_TOP_TOLERANCE:
+            lines[-1].append(c)
+        else:
+            lines.append([c])
+
+    result = []
+    for line_chars in lines:
+        line_chars.sort(key=lambda c: c["x0"])
+        text = "".join(c["text"] for c in line_chars).strip()
+        if not text:
+            continue
+        sizes = [round(c["size"], 1) for c in line_chars if c.get("size")]
+        font_size = max(set(sizes), key=sizes.count) if sizes else None
+        fontnames = [c.get("fontname") or "" for c in line_chars]
+        # 메타 정보 생성.txt 2절 font_name — pdfplumber가 이미 char별로 주는
+        # embedded font 이름(예: "Times-Bold")을 가장 빈도 높은 것으로 채택.
+        # bold/italic 판정에만 쓰고 버리던 fontnames를 재사용(신규 파싱 없음).
+        named_fonts = [fn for fn in fontnames if fn]
+        font_name = max(set(named_fonts), key=named_fonts.count) if named_fonts else None
+        result.append({
+            "text": text,
+            "bbox": (
+                min(c["x0"] for c in line_chars),
+                min(c["top"] for c in line_chars),
+                max(c["x1"] for c in line_chars),
+                max(c["bottom"] for c in line_chars),
+            ),
+            "font_size": font_size,
+            "is_bold": any("bold" in fn.lower() for fn in fontnames),
+            "is_italic": any("italic" in fn.lower() or "oblique" in fn.lower() for fn in fontnames),
+            "style_name": None,
+            "font_name": font_name,
+        })
+    return result
+
+
+# Implicit (line-less) table detection (문서 파싱 고도화 Phase 3):
+# pdfplumber's find_tables() only sees ruled/bordered tables — a table whose
+# columns are aligned purely by whitespace (common in reports exported from
+# spreadsheets without borders) is invisible to it. This looks for runs of
+# consecutive text rows that share whitespace-gap positions at consistent
+# x-coordinates and reports each run as a lower-confidence table candidate.
+_IMPLICIT_TABLE_MIN_ROWS = 3
+_IMPLICIT_TABLE_MIN_COLUMNS = 2
+_IMPLICIT_TABLE_ROW_TOLERANCE = 3.0
+# Minimum horizontal whitespace (points) between two words to count as a
+# column break rather than a normal inter-word space.
+_IMPLICIT_TABLE_GAP_THRESHOLD = 8.0
+# How much a column boundary's x position may drift row-to-row and still be
+# treated as "the same" column — real tables aren't pixel-perfect.
+_IMPLICIT_TABLE_COLUMN_X_TOLERANCE = 6.0
+_IMPLICIT_TABLE_CONFIDENCE = 0.6
+
+
+def _cluster_words_into_rows(words: list[dict]) -> list[list[dict]]:
+    ordered = sorted(words, key=lambda w: (w["top"], w["x0"]))
+    rows: list[list[dict]] = []
+    for w in ordered:
+        if rows and abs(w["top"] - rows[-1][-1]["top"]) <= _IMPLICIT_TABLE_ROW_TOLERANCE:
+            rows[-1].append(w)
+        else:
+            rows.append([w])
+    for row in rows:
+        row.sort(key=lambda w: w["x0"])
+    return rows
+
+
+def _row_gap_positions(row: list[dict]) -> list[float]:
+    return [
+        (a["x1"] + b["x0"]) / 2
+        for a, b in zip(row, row[1:])
+        if b["x0"] - a["x1"] >= _IMPLICIT_TABLE_GAP_THRESHOLD
+    ]
+
+
+def _shared_gaps(a: list[float], b: list[float]) -> list[float]:
+    return [ga for ga in a if any(abs(ga - gb) <= _IMPLICIT_TABLE_COLUMN_X_TOLERANCE for gb in b)]
+
+
+# A numbered/bulleted list item's marker ("▪", "1.", "2)") sits at a fixed
+# left-indent before the wrapped sentence that follows — to this heuristic's
+# gap-based column detector, that indent is indistinguishable from a real
+# 2-column table's boundary. Root-caused 2026-07-23: this false-positive
+# cropped a real paragraph out of a 988-page document's page 13, which then
+# starved that page's native-text coverage and helped trigger a bad OCR
+# override (see _MIN_TRUSTED_NATIVE_CHARS). A real 2-column table has
+# comparably-sized content in both columns across rows; a list marker column
+# is always a single glyph while the other column is long prose.
+#
+# The original version additionally required column 2 to be long prose
+# (>=15 chars) in most rows, to avoid rejecting genuine short-value 2-column
+# tables. Verified against a real 988-page document (문서 파싱 고도화 회고,
+# 2026-07-23): that co-requirement left plenty of numbered section indexes
+# with SHORT labels (e.g. "00. 기관 적용 범위 및 항목" / "01. 색상" / "02. 서체")
+# undetected, since "색상"/"서체" never reach 15 chars. Column 2's length no
+# longer matters — an overwhelming majority of marker-like column-1 values is
+# a strong enough signal by itself. Marker matching is also no longer limited
+# to a fixed glyph set: real PDFs sometimes render a bullet as a substituted
+# CJK compatibility character (e.g. "㏂" standing in for "▪") or a bare
+# unpunctuated number ("01" with no "."), so any very short column-1 token
+# counts as marker-like too.
+_LIST_MARKER_RE = re.compile(r"^[▪▫•‣◦∙·※\-–—*]$|^\(?\d{1,3}[.\)]?$")
+_LIST_MARKER_MAX_CHARS = 2
+_LIST_MARKER_RATIO_THRESHOLD = 0.8
+
+
+def _looks_like_list_marker_token(token: str) -> bool:
+    return bool(_LIST_MARKER_RE.match(token)) or len(token) <= _LIST_MARKER_MAX_CHARS
+
+
+def _looks_like_list_markers_not_table(table_rows: list[list[str]]) -> bool:
+    if not table_rows or len(table_rows[0]) != 2:
+        return False
+    col0 = [row[0].strip() for row in table_rows]
+    marker_like = sum(1 for c in col0 if c and _looks_like_list_marker_token(c))
+    return marker_like >= len(col0) * _LIST_MARKER_RATIO_THRESHOLD
+
+
+def _implicit_table_from_run(page_num: int, run: list[tuple[list[dict], list[float]]]) -> RawTableCandidate | None:
+    if len(run) < _IMPLICIT_TABLE_MIN_ROWS:
+        return None
+    # `common` tracks each boundary's most recent x position rather than
+    # freezing it at row 0's value — a boundary that drifts a little on
+    # every row (e.g. 164 → 167 → 171) must be judged against its immediate
+    # neighbor, not accumulate error against a value many rows back.
+    common = run[0][1]
+    for _, gaps in run[1:]:
+        updated = []
+        for c in common:
+            candidates = [g for g in gaps if abs(g - c) <= _IMPLICIT_TABLE_COLUMN_X_TOLERANCE]
+            if candidates:
+                updated.append(min(candidates, key=lambda g: abs(g - c)))
+        common = updated
+    if len(common) < _IMPLICIT_TABLE_MIN_COLUMNS - 1:
+        return None
+    boundaries = sorted(common)
+    row_words = [words_in_row for words_in_row, _ in run]
+    table_rows = []
+    for words_in_row in row_words:
+        cells = [""] * (len(boundaries) + 1)
+        for w in words_in_row:
+            cx = (w["x0"] + w["x1"]) / 2
+            col = sum(1 for b in boundaries if cx > b)
+            cells[col] = (cells[col] + " " + w["text"]).strip()
+        table_rows.append(cells)
+    if _looks_like_list_markers_not_table(table_rows):
+        return None
+    bbox = (
+        min(w["x0"] for words_in_row in row_words for w in words_in_row),
+        min(w["top"] for words_in_row in row_words for w in words_in_row),
+        max(w["x1"] for words_in_row in row_words for w in words_in_row),
+        max(w["bottom"] for words_in_row in row_words for w in words_in_row),
+    )
+    return RawTableCandidate(
+        page_number=page_num,
+        rows=table_rows,
+        bbox=bbox,
+        confidence=_IMPLICIT_TABLE_CONFIDENCE,
+        detected_as="implicit_alignment",
+    )
+
+
+def _detect_implicit_tables(
+    words: list[dict], page_num: int, exclude_bboxes: list,
+) -> list[RawTableCandidate]:
+    """Column-aligned, line-less table detection. Words inside `exclude_bboxes`
+    (already-detected ruled tables) are skipped so implicit detection can
+    never overlap a ruled table already found by find_tables()."""
+    if not words:
+        return []
+
+    def _excluded(w) -> bool:
+        cx, cy = (w["x0"] + w["x1"]) / 2, (w["top"] + w["bottom"]) / 2
+        return any(x0 <= cx <= x1 and top <= cy <= bottom for x0, top, x1, bottom in exclude_bboxes)
+
+    usable = [w for w in words if not _excluded(w)]
+    if not usable:
+        return []
+
+    tables: list[RawTableCandidate] = []
+    run: list[tuple[list[dict], list[float]]] = []
+    for row in _cluster_words_into_rows(usable):
+        gaps = _row_gap_positions(row)
+        is_table_row = len(row) >= _IMPLICIT_TABLE_MIN_COLUMNS and len(gaps) >= _IMPLICIT_TABLE_MIN_COLUMNS - 1
+        if is_table_row and (not run or _shared_gaps(run[-1][1], gaps)):
+            run.append((row, gaps))
+            continue
+        table = _implicit_table_from_run(page_num, run)
+        if table:
+            tables.append(table)
+        run = [(row, gaps)] if is_table_row else []
+    table = _implicit_table_from_run(page_num, run)
+    if table:
+        tables.append(table)
+    return tables
 
 
 def _image_area_ratio(page) -> float:
@@ -205,6 +494,17 @@ class PDFAdapter(BaseAdapter):
     # drops below 30%, or when images dominate the page (table/scan artifacts).
     _OCR_COVERAGE_THRESHOLD = 0.3
     _OCR_IMAGE_AREA_THRESHOLD = 0.5
+    # A page whose native text (after excluding tables) already has at least
+    # this many characters is treated as reliably parsed and skips the
+    # coverage-based OCR trigger entirely, even if char density alone reads
+    # low (bulleted/indented layouts are legitimately sparse per unit area).
+    # Root-caused 2026-07-23: a 988-page real document's page with a fully
+    # correct text layer tripped the density trigger anyway, and Tesseract's
+    # Korean misread of that same bulleted layout ("longer text wins")
+    # silently overwrote the correct text with garbled OCR output. OCR must
+    # only fill in for pages with next to no usable native text, never
+    # compete by length against a text layer that already parsed cleanly.
+    _MIN_TRUSTED_NATIVE_CHARS = 50
 
     def extract(self, file_path: Path, options: dict) -> RawParsedDocument:
         import io
@@ -214,10 +514,38 @@ class PDFAdapter(BaseAdapter):
         import pytesseract
         from PIL import Image
 
+        # 문서 파싱 고도화 Phase 3 설정 토글 — TextExtractConfig에서 전달됨
+        # (extraction_blocks.py). 옵션이 아예 없는 호출자(과거 캐시 재생 등)는
+        # 기존 동작(둘 다 켜짐)과 동일하게 기본값 True를 쓴다.
+        detect_implicit_tables_enabled = options.get("detect_implicit_tables", True)
+        extract_font_signals_enabled = options.get("extract_font_signals", True)
+
         pages = []
         warnings = []
         ocr_used = False
         fitz_doc = None
+        line_layout: list[dict] = []
+        # 메타 정보 생성.txt 1절 document_created_at — PDF info dict의
+        # creationDate("D:YYYYMMDDHHmmSS..." 형식)를 읽는다. 별도의 짧은 fitz
+        # 세션으로 처리해 아래 본문 추출(pdfplumber 기반) 로직과 독립적으로
+        # 동작하며, 손상되었거나 값이 없으면 None으로 남긴다(그레이스풀 폴백).
+        document_created_at = None
+        try:
+            meta_doc = fitz.open(str(file_path))
+            try:
+                document_created_at = _parse_pdf_date(meta_doc.metadata.get("creationDate"))
+            finally:
+                meta_doc.close()
+        except Exception:
+            pass
+        # Global, not per-page — Document.tables[*] (extraction_blocks.py) is
+        # built by iterating pages then their tables in this same order, so a
+        # document-wide "[표 N]" ordinal lets structure_analyze recover which
+        # doc.tables entry a TABLE node came from (source_table_id, 문서 파싱
+        # 고도화 Phase 3) just by parsing the marker text — no separate lookup
+        # table needed. Per-page numbering would collide across pages (every
+        # page's first table would show as "[표 1]") and couldn't be reversed.
+        table_ordinal = 0
         try:
             with pdfplumber.open(file_path) as pdf:
                 for page_num, page in enumerate(pdf.pages, 1):
@@ -252,12 +580,40 @@ class PDFAdapter(BaseAdapter):
                                 )
                             )
 
+                    # Computed once and shared with _text_block_bbox below —
+                    # pdfplumber's extract_words() re-runs word-clustering over
+                    # page.chars on every call (not cached like .chars itself),
+                    # so calling it twice per page measurably added up across a
+                    # whole document. One call, reused, is a pure speed win.
+                    try:
+                        words = page.extract_words()
+                    except Exception:
+                        words = []
+
+                    if detect_implicit_tables_enabled:
+                        try:
+                            table_candidates.extend(
+                                _detect_implicit_tables(
+                                    words, page_num, [t.bbox for t in table_candidates],
+                                )
+                            )
+                        except Exception as implicit_exc:
+                            warnings.append(f"page {page_num} implicit table detection failed: {implicit_exc}")
+
                     text = _text_excluding_tables(page, [t.bbox for t in table_candidates])
                     block_type = "paragraph"
                     coverage = _text_coverage(text, page.width, page.height)
                     image_ratio = _image_area_ratio(page)
+                    # Only populated by the Tesseract path below — a cloud VLM
+                    # OCR result carries no word-level confidence at all.
+                    page_ocr_confidence: float | None = None
+                    page_ocr_word_count: int | None = None
 
-                    if coverage < self._OCR_COVERAGE_THRESHOLD or image_ratio > self._OCR_IMAGE_AREA_THRESHOLD:
+                    trusted_native_text = len(text.strip()) >= self._MIN_TRUSTED_NATIVE_CHARS
+                    needs_ocr = image_ratio > self._OCR_IMAGE_AREA_THRESHOLD or (
+                        coverage < self._OCR_COVERAGE_THRESHOLD and not trusted_native_text
+                    )
+                    if needs_ocr:
                         if fitz_doc is None:
                             fitz_doc = fitz.open(str(file_path))
                         ocr_text = ""
@@ -278,20 +634,29 @@ class PDFAdapter(BaseAdapter):
                         if not ocr_text.strip() and page_image_bytes:
                             try:
                                 image = Image.open(io.BytesIO(page_image_bytes))
-                                ocr_text = pytesseract.image_to_string(
-                                    _preprocess_for_ocr(image),
-                                    lang="kor+eng",
-                                    config=_TESSERACT_CONFIG,
+                                ocr_text, page_ocr_confidence, page_ocr_word_count = _ocr_page_with_confidence(
+                                    _preprocess_for_ocr(image), pytesseract,
                                 )
                             except Exception as ocr_exc:
                                 warnings.append(f"page {page_num} OCR failed: {ocr_exc}")
                                 ocr_text = ""
+                                page_ocr_confidence, page_ocr_word_count = None, None
 
-                        if ocr_text.strip() and len(ocr_text.strip()) > len(text.strip()):
+                        # OCR only replaces native text when that native text wasn't
+                        # already trustworthy — never by raw length alone (see
+                        # _MIN_TRUSTED_NATIVE_CHARS above for why "longer wins" is
+                        # unsafe: a bad OCR misread can out-count a short but
+                        # perfectly correct text layer).
+                        if not trusted_native_text and ocr_text.strip() and len(ocr_text.strip()) > len(text.strip()):
                             text = ocr_text
                             block_type = "ocr"
                             ocr_used = True
                             coverage = _text_coverage(text, page.width, page.height)
+                        else:
+                            # OCR ran but lost to the native/table text already
+                            # extracted — the confidence figure would describe
+                            # discarded text, not what this page actually reports.
+                            page_ocr_confidence, page_ocr_word_count = None, None
 
                     text_blocks = []
                     if text.strip():
@@ -299,16 +664,21 @@ class PDFAdapter(BaseAdapter):
                             RawTextBlock(
                                 text=text,
                                 page_number=page_num,
-                                bbox=_text_block_bbox(page) if block_type != "ocr" else None,
+                                bbox=_text_block_bbox(words) if block_type != "ocr" else None,
                                 block_type=block_type,
                             )
                         )
+                        if block_type != "ocr" and extract_font_signals_enabled:
+                            for line in _extract_line_layout(page, [t.bbox for t in table_candidates]):
+                                line["page_number"] = page_num
+                                line_layout.append(line)
 
-                    for i, table in enumerate(table_candidates):
-                        table_text = "\n".join(" | ".join(row) for row in table.rows)
+                    for table in table_candidates:
+                        table_ordinal += 1
+                        table_text = rows_to_markdown(table.rows)
                         text_blocks.append(
                             RawTextBlock(
-                                text=f"[표 {i + 1}]\n{table_text}",
+                                text=f"[표 {table_ordinal}]\n{table_text}",
                                 page_number=page_num,
                                 bbox=table.bbox,
                                 block_type="table",
@@ -351,6 +721,8 @@ class PDFAdapter(BaseAdapter):
                             image_regions=image_regions,
                             native_text_coverage=coverage,
                             image_area_ratio=image_ratio,
+                            ocr_confidence=page_ocr_confidence if block_type == "ocr" else None,
+                            ocr_word_count=page_ocr_word_count if block_type == "ocr" else None,
                         )
                     )
 
@@ -358,7 +730,11 @@ class PDFAdapter(BaseAdapter):
                     format_id="pdf",
                     page_count=len(pdf.pages),
                     pages=pages,
-                    metadata={"ocr_used": ocr_used},
+                    metadata={
+                        "ocr_used": ocr_used,
+                        "line_layout": line_layout,
+                        "document_created_at": document_created_at,
+                    },
                     warnings=warnings,
                 )
         except Exception as e:

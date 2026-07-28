@@ -69,6 +69,7 @@ httpx = "^0.28.0"
 structlog = "^24.4.0"
 pyhwp = "^0.1b15"
 mammoth = "^1.12.0"
+playwright = "^1.61.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"
@@ -87,6 +88,12 @@ transformers = "^4.47.0"
 sentence-transformers = "^3.3.0"
 openai = "^1.57.0"
 anthropic = "^0.40.0"
+
+# Docling 도입 설계서(2026-07-23) Phase 1 — PDF 전용 대체 파서(TableFormer 표
+# 구조 인식 + EasyOCR 한국어). torch에 의존하므로 다른 임베딩 의존성과 같은
+# 그룹(worker 이미지에만 설치, api 이미지는 --without embed로 계속 제외).
+docling = "^2.0.0"
+easyocr = "^1.7.0"
 
 [build-system]
 requires = ["poetry-core"]

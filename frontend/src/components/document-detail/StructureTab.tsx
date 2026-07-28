@@ -3,6 +3,10 @@ import { Loader2 } from 'lucide-react'
 import {
   useDocumentNodes, useUpdateDocumentNode, type DocumentNodeItem,
 } from '../../hooks/useDocumentStructure'
+import { useDocumentRuns, useReprocessImpact } from '../../hooks/useDocumentRuns'
+import { useWorkflowRun } from '../../hooks/useWorkflows'
+
+const STRUCTURE_ANALYZE_BLOCK_TYPE = 'structure_analyze'
 
 const NODE_TYPES = [
   'DOCUMENT', 'COVER', 'TOC', 'SECTION', 'HEADING', 'PARAGRAPH', 'SENTENCE',
@@ -66,20 +70,49 @@ function TreeRow({
   )
 }
 
-export default function StructureTab({ documentId }: { documentId: string }) {
+interface StructureTabProps {
+  documentId: string
+  onViewInOriginal?: (pageNumber: number) => void
+  onReprocessFromStructure?: (blockInstanceId: string) => void
+}
+
+export default function StructureTab({ documentId, onViewInOriginal, onReprocessFromStructure }: StructureTabProps) {
   const { data, isLoading } = useDocumentNodes(documentId)
   const updateNode = useUpdateDocumentNode()
   const [selected, setSelected] = useState<DocumentNodeItem | null>(null)
   const [levelInput, setLevelInput] = useState('')
   const [typeInput, setTypeInput] = useState('')
+  // 메타 정보 생성.txt 2절 — HWP/HWPX/Docling 경로처럼 style_name/font_size/
+  // font_name이 자동 생성 안 되는 노드의 수동 입력(9항목 펀치리스트 후속,
+  // 2026-07-24).
+  const [styleNameInput, setStyleNameInput] = useState('')
+  const [fontSizeInput, setFontSizeInput] = useState('')
+  const [fontNameInput, setFontNameInput] = useState('')
+  const [showReprocessBanner, setShowReprocessBanner] = useState(false)
 
   const nodes = data?.nodes ?? []
   const tree = useMemo(() => buildTree(nodes), [nodes])
+
+  // 보정 저장 후 "구조 변경이 청크 N개에 영향" 배너(와이어프레임 §3.2)에
+  // 쓸 구조분석 블록의 영향 범위 — history 탭의 "[이 블록부터 재처리]"와
+  // 동일하게 structure_analyze 블록 instance를 재처리 시작점으로 쓴다.
+  const { data: runsData } = useDocumentRuns(documentId)
+  const latestRunId = runsData?.runs[0]?.id ?? null
+  const { data: runDetail } = useWorkflowRun(latestRunId)
+  const structureStep = runDetail?.steps.find((s) => s.block_type === STRUCTURE_ANALYZE_BLOCK_TYPE) ?? null
+  const { data: impact } = useReprocessImpact(
+    documentId, null, showReprocessBanner ? structureStep?.block_instance_id ?? null : null,
+  )
 
   const handleSelect = (node: DocumentNodeItem) => {
     setSelected(node)
     setLevelInput(node.level != null ? String(node.level) : '')
     setTypeInput(node.node_type)
+    const style = (node.style ?? {}) as { style_name?: string; font_size?: number; font_name?: string }
+    setStyleNameInput(style.style_name ?? '')
+    setFontSizeInput(style.font_size != null ? String(style.font_size) : '')
+    setFontNameInput(style.font_name ?? '')
+    setShowReprocessBanner(false)
   }
 
   const handleSave = () => {
@@ -89,7 +122,10 @@ export default function StructureTab({ documentId }: { documentId: string }) {
       nodeId: selected.id,
       level: levelInput.trim() ? Number(levelInput) : undefined,
       nodeType: typeInput !== selected.node_type ? typeInput : undefined,
-    })
+      styleName: styleNameInput || undefined,
+      fontSize: fontSizeInput ? Number(fontSizeInput) : undefined,
+      fontName: fontNameInput || undefined,
+    }, { onSuccess: () => setShowReprocessBanner(true) })
   }
 
   if (isLoading) {
@@ -135,6 +171,11 @@ export default function StructureTab({ documentId }: { documentId: string }) {
               {selected.text && (
                 <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: 0 }}>{selected.text}</p>
               )}
+              {selected.style && Object.keys(selected.style).length > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
+                  스타일 {Object.entries(selected.style).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center' }}>
                 <label style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                   제목 레벨
@@ -160,9 +201,78 @@ export default function StructureTab({ documentId }: { documentId: string }) {
                   </select>
                 </label>
               </div>
+              {/* 메타 정보 생성.txt 2절 — 자동 생성 불가 노드(HWP/HWPX,
+                  Docling)의 style_name/font_size/font_name 수동 입력. */}
+              <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center' }}>
+                <label style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                  스타일명
+                  <input
+                    value={styleNameInput}
+                    onChange={(e) => setStyleNameInput(e.target.value)}
+                    placeholder="예: Heading1"
+                    style={{ marginLeft: 6, width: 90, fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px' }}
+                  />
+                </label>
+                <label style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                  글자 크기
+                  <input
+                    type="number"
+                    value={fontSizeInput}
+                    onChange={(e) => setFontSizeInput(e.target.value)}
+                    placeholder="pt"
+                    style={{ marginLeft: 6, width: 60, fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px' }}
+                  />
+                </label>
+                <label style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                  글꼴
+                  <input
+                    value={fontNameInput}
+                    onChange={(e) => setFontNameInput(e.target.value)}
+                    placeholder="예: 맑은 고딕"
+                    style={{ marginLeft: 6, width: 100, fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px' }}
+                  />
+                </label>
+              </div>
               {selected.span_start != null && (
-                <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
-                  원문 위치 span {selected.span_start}–{selected.span_end}
+                <div style={{ fontSize: 11, color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>원문 위치 span {selected.span_start}–{selected.span_end}</span>
+                  {onViewInOriginal && selected.page_number != null && (
+                    <button
+                      type="button"
+                      onClick={() => onViewInOriginal(selected.page_number as number)}
+                      className="krds-btn text small"
+                      style={{ cursor: 'pointer', fontSize: 11, padding: 0 }}
+                    >
+                      원문 대조에서 보기
+                    </button>
+                  )}
+                </div>
+              )}
+              {showReprocessBanner && impact && (
+                <div style={{
+                  fontSize: 12, color: '#b45309', background: '#fffbeb',
+                  border: '1px solid #fde68a', borderRadius: 'var(--radius-sm)',
+                  padding: 'var(--space-2)', display: 'flex', alignItems: 'center', gap: 8,
+                }}>
+                  <span>구조 변경이 청크 {impact.affectedChunkCount}개에 영향 —</span>
+                  {structureStep && onReprocessFromStructure && (
+                    <button
+                      type="button"
+                      onClick={() => onReprocessFromStructure(structureStep.block_instance_id)}
+                      className="krds-btn text small"
+                      style={{ cursor: 'pointer', fontSize: 12, padding: 0, color: '#b45309', textDecoration: 'underline' }}
+                    >
+                      지금 재처리
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowReprocessBanner(false)}
+                    className="krds-btn text small"
+                    style={{ cursor: 'pointer', fontSize: 12, padding: 0, color: '#b45309' }}
+                  >
+                    나중에
+                  </button>
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

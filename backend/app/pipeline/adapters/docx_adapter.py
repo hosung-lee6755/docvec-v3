@@ -1,4 +1,7 @@
 from pathlib import Path
+from typing import Iterator
+
+from app.pipeline.blocks.table_markdown import rows_to_markdown
 
 from app.pipeline.adapters.base import (
     AdapterCapabilities,
@@ -25,6 +28,27 @@ def _docx_embedded_images(file_path: Path) -> list[bytes]:
             if name.startswith("word/media/") and name.lower().endswith(_IMAGE_SUFFIXES):
                 images.append(z.read(name))
     return images
+
+
+def _iter_block_items(doc) -> Iterator[object]:
+    """Yield each body-level paragraph/table in true document order.
+
+    doc.paragraphs and doc.tables are separate flat lists — a table sitting
+    between two paragraphs in the source ends up entirely after both once
+    read that way, scrambling reading order for any docx with an inline
+    table (문서 파싱 고도화 회고, 2026-07-23: found while auditing docx
+    fidelity against the same "output must match source" bar used for the
+    PDF OCR-reconciliation bug). Walking doc.element.body directly preserves
+    the actual order."""
+    from docx.oxml.ns import qn
+    from docx.table import Table as DocxTable
+    from docx.text.paragraph import Paragraph as DocxParagraph
+
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            yield DocxParagraph(child, doc)
+        elif child.tag == qn("w:tbl"):
+            yield DocxTable(child, doc)
 
 
 class DOCXAdapter(BaseAdapter):
@@ -64,28 +88,65 @@ class DOCXAdapter(BaseAdapter):
             )
 
         try:
+            from docx.table import Table as DocxTable
+            from docx.text.paragraph import Paragraph as DocxParagraph
+
             doc = DocxDocument(str(file_path))
-            paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-            full_text = "\n".join(paragraphs)
+            extract_font_signals = options.get("extract_font_signals", True)
 
-            text_blocks = []
-            if full_text:
-                text_blocks.append(RawTextBlock(text=full_text, page_number=1))
-
+            text_blocks: list[RawTextBlock] = []
             table_candidates: list[RawTableCandidate] = []
-            for table in doc.tables:
-                rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
-                cleaned_rows = [row for row in rows if any(cell for cell in row)]
-                if cleaned_rows:
-                    table_candidates.append(RawTableCandidate(page_number=1, rows=cleaned_rows))
+            # Per-paragraph font signals for font-aware structure analysis
+            # (문서 파싱 고도화 Phase 1/2) — a side artifact alongside full_text,
+            # not a replacement for it (see base.py's RawTextBlock comment).
+            # Skippable via options["extract_font_signals"] (문서 파싱 고도화
+            # Phase 3 config toggle, TextExtractConfig.extract_font_signals) —
+            # default True matches pre-toggle behavior.
+            line_layout: list[dict] = []
+            table_ordinal = 0
 
-            for i, table in enumerate(table_candidates):
-                table_text = "\n".join(" | ".join(row) for row in table.rows)
-                text_blocks.append(
-                    RawTextBlock(
-                        text=f"[표 {i + 1}]\n{table_text}", page_number=1, block_type="table"
+            for item in _iter_block_items(doc):
+                if isinstance(item, DocxParagraph):
+                    stripped = item.text.strip()
+                    if not stripped:
+                        continue
+                    text_blocks.append(RawTextBlock(text=stripped, page_number=1))
+                    if extract_font_signals:
+                        sizes = [r.font.size.pt for r in item.runs if r.font.size]
+                        font_size = max(set(sizes), key=sizes.count) if sizes else None
+                        # 메타 정보 생성.txt 2절 font_name — run.font.name(직접
+                        # 지정된 글꼴)이 비어 있으면 문단 style의 글꼴을 폴백으로
+                        # 쓴다(item.style.font.name, 대부분의 본문 텍스트는 직접
+                        # run.font.name을 지정하지 않고 스타일의 글꼴을 상속받음).
+                        names = [r.font.name for r in item.runs if r.font.name] or (
+                            [item.style.font.name] if item.style and item.style.font.name else []
+                        )
+                        font_name = max(set(names), key=names.count) if names else None
+                        line_layout.append({
+                            "page_number": 1,
+                            "text": stripped,
+                            "bbox": None,
+                            "font_size": font_size,
+                            "is_bold": any(r.font.bold for r in item.runs if r.font.bold is True),
+                            "is_italic": any(r.font.italic for r in item.runs if r.font.italic is True),
+                            "style_name": item.style.name if item.style else None,
+                            "font_name": font_name,
+                        })
+                elif isinstance(item, DocxTable):
+                    rows = [[cell.text.strip() for cell in row.cells] for row in item.rows]
+                    cleaned_rows = [row for row in rows if any(cell for cell in row)]
+                    if not cleaned_rows:
+                        continue
+                    table_ordinal += 1
+                    table_candidates.append(RawTableCandidate(page_number=1, rows=cleaned_rows))
+                    table_text = rows_to_markdown(cleaned_rows)
+                    text_blocks.append(
+                        RawTextBlock(
+                            text=f"[표 {table_ordinal}]\n{table_text}",
+                            page_number=1,
+                            block_type="table",
+                        )
                     )
-                )
 
             warnings: list[str] = []
             image_regions: list[RawImageRegion] = []
@@ -105,8 +166,21 @@ class DOCXAdapter(BaseAdapter):
                 table_candidates=table_candidates,
                 image_regions=image_regions,
             )
+            # 메타 정보 생성.txt 1절 document_created_at — docx core properties에
+            # 이미 있는 값을 읽기만 하면 되므로(신규 의존성 없음) 문서 자체의
+            # 작성일로 그대로 사용한다. 손상된 파일 등으로 못 읽으면 None.
+            document_created_at = None
+            try:
+                document_created_at = doc.core_properties.created
+            except Exception:
+                pass
+
             return RawParsedDocument(
-                format_id="docx", page_count=1, pages=[page], metadata={}, warnings=warnings
+                format_id="docx",
+                page_count=1,
+                pages=[page],
+                metadata={"line_layout": line_layout, "document_created_at": document_created_at},
+                warnings=warnings,
             )
         except Exception as exc:
             return RawParsedDocument(

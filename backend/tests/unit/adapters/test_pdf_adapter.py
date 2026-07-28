@@ -2,8 +2,9 @@ from pathlib import Path
 
 import fitz
 import pytest
+import pytesseract as real_pytesseract
 
-from app.pipeline.adapters.pdf_adapter import PDFAdapter
+from app.pipeline.adapters.pdf_adapter import PDFAdapter, _looks_like_list_markers_not_table
 
 
 def _make_pdf_with_text_and_image(tmp_path: Path) -> Path:
@@ -68,3 +69,322 @@ def test_page_with_no_images_returns_no_image_regions(tmp_path):
     result = PDFAdapter().extract(path, {})
 
     assert result.pages[0].image_regions == []
+
+
+def test_line_layout_captures_font_size_and_bold_per_line(tmp_path):
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 80), "Document Title", fontsize=20, fontname="hebo")
+    page.insert_text((72, 120), "Regular body text line.", fontsize=11, fontname="helv")
+    # Enough filler text to keep native_text_coverage above the OCR trigger
+    # threshold (0.3) — otherwise this near-empty page falls through to the
+    # OCR branch, which has no char-level font data at all.
+    for i in range(20):
+        page.insert_text(
+            (72, 150 + i * 14),
+            "Filler paragraph line to keep text density high enough.",
+            fontsize=11, fontname="helv",
+        )
+    path = tmp_path / "fonts.pdf"
+    doc.save(str(path))
+
+    result = PDFAdapter().extract(path, {})
+
+    lines = result.metadata["line_layout"]
+    title_line = next(line for line in lines if "Title" in line["text"])
+    body_line = next(line for line in lines if "body" in line["text"].lower())
+    assert title_line["font_size"] == pytest.approx(20.0, abs=0.5)
+    assert title_line["is_bold"] is True
+    assert body_line["font_size"] == pytest.approx(11.0, abs=0.5)
+    assert body_line["is_bold"] is False
+
+
+def test_line_layout_is_empty_for_ocr_pages(tmp_path):
+    # A page with no extractable text (blank) forces the OCR branch; OCR'd
+    # pages have no char-level font data (pytesseract.image_to_string carries
+    # none), so line_layout must stay empty rather than reporting bogus signals.
+    doc = fitz.open()
+    doc.new_page(width=595, height=842)
+    path = tmp_path / "blank.pdf"
+    doc.save(str(path))
+
+    result = PDFAdapter().extract(path, {})
+
+    assert result.metadata["line_layout"] == []
+
+
+def _make_pdf_with_borderless_column_grid(tmp_path):
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    rows = [
+        ("Header", "Value", "Status"),
+        ("RowOne", "111", "OK"),
+        ("RowTwo", "222", "OK"),
+        ("RowThree", "333", "FAIL"),
+    ]
+    for i, (c1, c2, c3) in enumerate(rows):
+        y = 100 + i * 20
+        page.insert_text((72, y), c1, fontsize=11)
+        page.insert_text((220, y), c2, fontsize=11)
+        page.insert_text((340, y), c3, fontsize=11)
+    # Enough surrounding prose that excluding the table region still leaves
+    # native_text_coverage above the OCR trigger threshold (0.3) — otherwise
+    # the page falls through to the OCR branch, which re-reads the table
+    # from the rendered image with no notion of the logical exclusion.
+    for i in range(20):
+        page.insert_text(
+            (72, 220 + i * 14),
+            "Filler paragraph line to keep text density high enough.",
+            fontsize=11,
+        )
+    path = tmp_path / "implicit_table.pdf"
+    doc.save(str(path))
+    return path
+
+
+def test_implicit_table_detected_from_column_aligned_text_without_ruling_lines(tmp_path):
+    path = _make_pdf_with_borderless_column_grid(tmp_path)
+
+    result = PDFAdapter().extract(path, {})
+
+    tables = result.pages[0].table_candidates
+    assert len(tables) == 1
+    table = tables[0]
+    assert table.detected_as == "implicit_alignment"
+    assert table.confidence < 1.0
+    assert len(table.rows) == 4
+    assert all(len(row) == 3 for row in table.rows)
+    assert table.rows[0][0] == "Header"
+
+
+def test_detect_implicit_tables_option_disables_implicit_detection(tmp_path):
+    # 문서 파싱 고도화 Phase 3 config toggle (TextExtractConfig.detect_implicit_tables) —
+    # disabled means the aligned text is left as ordinary paragraph text.
+    path = _make_pdf_with_borderless_column_grid(tmp_path)
+
+    result = PDFAdapter().extract(path, {"detect_implicit_tables": False})
+
+    assert result.pages[0].table_candidates == []
+
+
+def test_extract_font_signals_option_disables_line_layout(tmp_path):
+    # 문서 파싱 고도화 Phase 3 config toggle (TextExtractConfig.extract_font_signals).
+    path = _make_pdf_with_borderless_column_grid(tmp_path)
+
+    result = PDFAdapter().extract(path, {"extract_font_signals": False})
+
+    assert result.metadata["line_layout"] == []
+
+
+def test_implicit_table_text_is_excluded_from_plain_text_extraction(tmp_path):
+    # Same reasoning as ruled tables (_text_excluding_tables): an implicit
+    # table's cell text must not also show up as ordinary flowing prose,
+    # or downstream structure analysis would double-count it.
+    path = _make_pdf_with_borderless_column_grid(tmp_path)
+
+    result = PDFAdapter().extract(path, {})
+
+    plain_text = result.pages[0].text_blocks[0].text if result.pages[0].text_blocks else ""
+    assert "RowOne" not in plain_text
+
+
+class _FakeOutput:
+    DICT = "dict"
+
+
+class _FakePytesseract:
+    Output = _FakeOutput()
+
+    def __init__(self, data):
+        self._data = data
+
+    def image_to_data(self, image, lang, config, output_type):
+        return self._data
+
+
+def test_ocr_page_with_confidence_groups_words_into_lines_and_averages_confidence():
+    from app.pipeline.adapters.pdf_adapter import _ocr_page_with_confidence
+
+    data = {
+        "text": ["Hello", "World", "", "Second", "Line"],
+        "conf": ["95", "85", "-1", "70", "90"],
+        "block_num": [1, 1, 1, 1, 1],
+        "par_num": [1, 1, 1, 1, 1],
+        "line_num": [1, 1, 1, 2, 2],
+    }
+
+    text, confidence, word_count = _ocr_page_with_confidence(object(), _FakePytesseract(data))
+
+    assert text == "Hello World\nSecond Line"
+    assert word_count == 4
+    assert confidence == pytest.approx((95 + 85 + 70 + 90) / 4 / 100.0)
+
+
+def test_ocr_page_with_confidence_returns_none_when_no_words_found():
+    from app.pipeline.adapters.pdf_adapter import _ocr_page_with_confidence
+
+    data = {
+        "text": ["", ""], "conf": ["-1", "-1"],
+        "block_num": [1, 1], "par_num": [1, 1], "line_num": [1, 1],
+    }
+
+    text, confidence, word_count = _ocr_page_with_confidence(object(), _FakePytesseract(data))
+
+    assert text == ""
+    assert confidence is None
+    assert word_count == 0
+
+
+def test_table_marker_numbering_is_global_across_pages_not_reset_per_page(tmp_path):
+    # structure_analyze recovers a TABLE node's Document.tables[*]["id"] by
+    # parsing the "[표 N]" marker and treating N-1 as a list index (문서 파싱
+    # 고도화 Phase 3) — that only works if N is assigned once across the whole
+    # document. A per-page-reset counter would print "[표 1]" on every page.
+    doc = fitz.open()
+    for page_i in range(2):
+        page = doc.new_page(width=595, height=842)
+        rows = [
+            ("Header", "Value", "Status"),
+            ("RowOne", "111", "OK"),
+            ("RowTwo", "222", "OK"),
+            ("RowThree", "333", "FAIL"),
+        ]
+        for i, (c1, c2, c3) in enumerate(rows):
+            y = 100 + i * 20
+            page.insert_text((72, y), c1, fontsize=11)
+            page.insert_text((220, y), c2, fontsize=11)
+            page.insert_text((340, y), c3, fontsize=11)
+        for i in range(20):
+            page.insert_text(
+                (72, 220 + i * 14),
+                f"Filler paragraph line page {page_i} to keep text density high.",
+                fontsize=11,
+            )
+    path = tmp_path / "two_page_tables.pdf"
+    doc.save(str(path))
+
+    result = PDFAdapter().extract(path, {})
+
+    markers = [
+        tb.text.splitlines()[0]
+        for page in result.pages
+        for tb in page.text_blocks
+        if tb.block_type == "table"
+    ]
+    assert markers == ["[표 1]", "[표 2]"]
+
+
+def test_ocr_does_not_override_trusted_native_text_even_when_longer(tmp_path, monkeypatch):
+    # A sparse-but-legitimate layout (one short paragraph on a big, mostly
+    # empty page) can trip the coverage-based OCR trigger even though the
+    # native text is already >= _MIN_TRUSTED_NATIVE_CHARS and parsed cleanly —
+    # OCR must never win by raw length in that case. Root cause of a real
+    # incident: Tesseract's Korean misread of a bulleted layout produced more
+    # raw characters than the (correct, shorter) native text and silently
+    # replaced it (문서 파싱 고도화 회고, 2026-07-23).
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    native_text = "This is a short but completely valid paragraph of native PDF text."
+    page.insert_text((72, 100), native_text, fontsize=11)
+    path = tmp_path / "sparse_valid.pdf"
+    doc.save(str(path))
+
+    garbled_tokens = ["가", "이", "드", "라", "인"] * 20  # far longer than native_text
+
+    def fake_image_to_data(image, lang, config, output_type):
+        return {
+            "text": garbled_tokens,
+            "conf": ["90"] * len(garbled_tokens),
+            "block_num": [1] * len(garbled_tokens),
+            "par_num": [1] * len(garbled_tokens),
+            "line_num": [1] * len(garbled_tokens),
+        }
+
+    monkeypatch.setattr(real_pytesseract, "image_to_data", fake_image_to_data)
+
+    result = PDFAdapter().extract(path, {})
+
+    assert result.pages[0].text_blocks[0].text == native_text
+    assert result.pages[0].text_blocks[0].block_type == "paragraph"
+
+
+def test_implicit_table_not_detected_for_numbered_bulleted_list(tmp_path):
+    # A numbered/bulleted list's fixed-indent marker column must not be
+    # misdetected as a borderless table's column boundary — this exact
+    # pattern (marker + wrapped prose) cropped real paragraph text out of a
+    # real 988-page document (문서 파싱 고도화 회고, 2026-07-23).
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    items = [
+        ("1.", "사용자 관점의 핵심 UI/UX 문제를 해결할 수 있는 실질적인 방안 제시"),
+        ("▪", "VOC, 국민평가, 사용성 및 접근성 진단 등 실제 사용자가 겪는 불편과 어려움을 분석"),
+        ("▪", "사용자 데이터 분석 결과를 기반으로 사용성 가이드라인을 제시"),
+    ]
+    for i, (marker, body) in enumerate(items):
+        y = 100 + i * 20
+        page.insert_text((72, y), marker, fontsize=11)
+        page.insert_text((100, y), body, fontsize=11)
+    for i in range(20):
+        page.insert_text(
+            (72, 200 + i * 14),
+            "Filler paragraph line to keep text density high enough.",
+            fontsize=11,
+        )
+    path = tmp_path / "numbered_list.pdf"
+    doc.save(str(path))
+
+    result = PDFAdapter().extract(path, {})
+
+    implicit = [t for t in result.pages[0].table_candidates if t.detected_as == "implicit_alignment"]
+    assert implicit == []
+
+
+def test_numbered_list_with_short_labels_is_recognized_as_a_list():
+    # Verified against a real 988-page document (문서 파싱 고도화 회고,
+    # 2026-07-23): the original heuristic additionally required column 2 to
+    # be long prose, which missed numbered section indexes with short labels
+    # like this one ("00. 기관 적용 범위 및 항목" / "01. 색상" / "02. 서체" / ...)
+    # since "색상"/"서체" never reach the old 15-char prose threshold. Column
+    # 2's length must no longer gate detection.
+    rows = [
+        ["00.", "기관 적용 범위 및 항목"],
+        ["01.", "색상"],
+        ["02.", "서체"],
+        ["03.", "형태"],
+        ["04.", "배치"],
+        ["05.", "아이콘"],
+    ]
+    assert _looks_like_list_markers_not_table(rows) is True
+
+
+def test_font_substituted_bullet_symbol_is_recognized_as_a_marker():
+    # A real 988-page document rendered its "▪" bullet as the CJK
+    # compatibility character "㏂" in several places (PDF font substitution),
+    # which the original fixed-glyph regex never matched (문서 파싱 고도화
+    # 회고, 2026-07-23). Any very short column-1 token should count as
+    # marker-like regardless of exact character identity.
+    rows = [
+        ["㏂", "사용성 가이드라인"],
+        ["㏂", "접근성 가이드라인"],
+        ["㏂", "상호작용 가이드라인"],
+        ["㏂", "플랫폼에 대한 고려 사항"],
+    ]
+    assert _looks_like_list_markers_not_table(rows) is True
+
+
+def test_plain_prose_is_not_misdetected_as_implicit_table(tmp_path):
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    for i in range(5):
+        page.insert_text(
+            (72, 100 + i * 16),
+            "This is an ordinary sentence of flowing prose text.",
+            fontsize=11,
+        )
+    path = tmp_path / "prose.pdf"
+    doc.save(str(path))
+
+    result = PDFAdapter().extract(path, {})
+
+    implicit = [t for t in result.pages[0].table_candidates if t.detected_as == "implicit_alignment"]
+    assert implicit == []

@@ -38,6 +38,9 @@ const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: str
     extract_images: { label: '이미지 추출' },
     recognize_figures: { label: '그림·도표 설명 인식' },
     max_figures: { label: '최대 그림 개수' },
+    exclude_headers_footers: { label: '머리말·꼬리말 제외', help: '페이지마다 반복되는 머리말/꼬리말을 감지해 본문 텍스트에서 제외합니다.' },
+    detect_implicit_tables: { label: '선 없는 표 검출', help: '테두리선 없이 정렬만으로 이루어진 표를 검출합니다. 표가 거의 없는 문서군이라면 꺼서 처리 속도를 높일 수 있습니다.' },
+    extract_font_signals: { label: '글꼴 신호 추출', help: '줄 단위 글꼴 크기·굵기 등을 추출해 구조 분석(제목 승격, 목차·각주 인식)에 활용합니다. 끄면 구조 분석은 정규식 기반으로만 동작합니다.' },
   },
   ocr: {
     force_ocr: { label: '항상 OCR 실행', help: '텍스트 레이어가 있어도 강제로 OCR을 수행합니다.' },
@@ -124,10 +127,12 @@ const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: str
   quality_check: {
     min_extraction_chars: { label: '최소 추출 글자 수' },
     max_broken_char_ratio: { label: '깨진 문자 최대 비율(0~1)' },
-    min_ocr_confidence: { label: '최소 OCR 신뢰도(0~1)' },
+    min_ocr_confidence: { label: '최소 OCR 신뢰도(0~1)', help: '문서에 OCR 신뢰도 실측값이 있으면 그 평균을, 없으면 형식 판별 단계의 근사치를 이 기준과 비교합니다.' },
     max_empty_page_ratio: { label: '빈 페이지 최대 비율(0~1)' },
     min_chunk_chars_warning: { label: '청크 최소 글자 경고 기준' },
     max_chunk_chars_warning: { label: '청크 최대 글자 경고 기준' },
+    max_implicit_table_ratio: { label: '선 없는 표 최대 비율(0~1)', help: '전체 표 중 테두리선 없이(정렬만으로) 검출된 표의 비율이 이 값을 넘으면 오탐 가능성 경고를 표시합니다.' },
+    min_toc_heading_match_ratio: { label: '목차-제목 최소 일치율(0~1)', help: '목차 항목 중 실제 제목 노드와 일치하는 비율이 이 값보다 낮으면 경고를 표시합니다. 목차가 없는 문서에는 적용되지 않습니다.' },
     review_policy: { label: '검토 정책', options: [
       { value: 'auto_pass', label: '자동 통과' },
       { value: 'review_on_warning', label: '경고 시 검토' },

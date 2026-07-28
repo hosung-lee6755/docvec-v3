@@ -1,0 +1,79 @@
+1. Document Metadata(문서 메타정보)
+| 필드             | 설명                           | 검색 활용 |
+| -------------- | ---------------------------- | ----- |
+| document_id    | 문서 UUID                      | 문서 고유 ID|
+| file_name      | 원본 파일명                       | 출처    |
+| source_path    | 저장 경로                        | 다운로드  |
+| file_type      | pdf/docx/hwp/hwpx            | 필터    |
+| title          | 문서 제목                        | 검색    |
+| summary          | 문서 요약                        | 문서 탐색, 라우팅    |
+| author         | 작성자                          | 필터    |
+| organization   | 부서/기관                        | 필터    |
+| created_at     | 작성일                          | 정렬    |
+| modified_at    | 수정일                          | 정렬    |
+| language       | ko/en                        | 검색    |
+| page_count     | 총 페이지                        | UI    |
+| checksum       | SHA256                       | 중복 제거 |
+| parser_version | 파서 버전                        | 재색인   |
+| ingestion_time | DB 저장 시각                     | 관리    |
+| tags           | 태그                           | 필터    |
+| category       | 계약서/보고서/매뉴얼                  | 필터    |
+| security_level | Public/Internal/Confidential | 권한    |
+| source_system  | SharePoint, S3 등             | 관리    |
+
+
+1.1 Summary Index : 문서 전체 요약을 별도 벡터로 생성, Document/Section 레벨 정보로 관리, 문서 레벨 검색 단위로 활용
+
+Summary Index
+
+{
+ document_id,
+ summary,
+ summary_embedding
+}
+
+2. Element Metadata (Layout Parser 결과)
+| 필드             | 설명                                  |
+| -------------- | ----------------------------------- |
+| element_id     | Element ID                          |
+| document_id    | 문서 ID                               |
+| page           | 페이지                                 |
+| order          | 읽기 순서                               |
+| type           | heading / paragraph / table / image |
+| bbox           | 위치                                  |
+| parent_section | 상위 Section                          |
+| heading_level  | H1~H6                               |
+| style          | Normal / Heading1                   |
+| font_size      | 글자 크기                               |
+| font_name      | 글꼴                                  |
+| is_header      | Header 여부                           |
+| is_footer      | Footer 여부                           |
+| is_caption     | Caption 여부                          |
+| image_path     | 이미지 파일                              |
+| table_rows     | 행 개수                                |
+| table_cols     | 열 개수                                |
+
+
+3. Chunk Metadata (Vector DB)
+| 필드              | 추천    | 설명                    |
+| --------------- | ----- | --------------------- |
+| chunk_id        | ⭐⭐⭐⭐⭐ | PK                    |
+| document_id     | ⭐⭐⭐⭐⭐ | 문서 연결                 |
+| element_id      | ⭐⭐⭐⭐⭐ | 원본 Element            |
+| page_start      | ⭐⭐⭐⭐⭐ | 시작 페이지                |
+| page_end        | ⭐⭐⭐⭐⭐ | 끝 페이지                 |
+| chunk_index     | ⭐⭐⭐⭐⭐ | 순서                    |
+| total_chunks    | ⭐⭐⭐⭐  | 전체 개수                 |
+| section         | ⭐⭐⭐⭐⭐ | 섹션명                   |
+| heading_path    | ⭐⭐⭐⭐⭐ | 제목 경로                 |
+| type            | ⭐⭐⭐⭐⭐ | paragraph/table/image |
+| token_count     | ⭐⭐⭐⭐  | 토큰 수                  |
+| char_count      | ⭐⭐⭐   | 문자 수                  |
+| language        | ⭐⭐⭐   | 언어                    |
+| prev_chunk      | ⭐⭐⭐⭐  | 이전 청크                 |
+| next_chunk      | ⭐⭐⭐⭐  | 다음 청크                 |
+| parent_chunk    | ⭐⭐⭐⭐  | Parent Retrieval      |
+| keywords        | ⭐⭐⭐   | 키워드                   |
+| embedding_model | ⭐⭐⭐   | 모델명                   |
+| version         | ⭐⭐⭐   | 임베딩 버전                |
+| source_file     | ⭐⭐⭐   | 파일명                   |

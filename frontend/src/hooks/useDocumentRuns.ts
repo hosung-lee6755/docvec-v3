@@ -114,17 +114,20 @@ export function useStartPartialReprocess() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({
-      documentId, startBlockType, startBlockInstanceId, reason,
+      documentId, startBlockType, startBlockInstanceId, reason, timeoutOverrides,
     }: {
       documentId: string
       startBlockType?: string
       startBlockInstanceId?: string
       reason?: string
+      // {block_type: timeoutSeconds} — 이 재처리 run에만 적용되는 시간 제한 오버라이드.
+      timeoutOverrides?: Record<string, number>
     }) => {
       const { data } = await apiClient.post(`/documents/${documentId}/reprocess`, {
         start_block_type: startBlockType ?? null,
         start_block_instance_id: startBlockInstanceId ?? null,
         reason: reason ?? null,
+        timeout_overrides: timeoutOverrides ?? null,
       })
       return data as { message: string; run_id: string; status: string; impact: ReprocessImpact }
     },
