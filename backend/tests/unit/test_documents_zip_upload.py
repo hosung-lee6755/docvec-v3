@@ -35,7 +35,12 @@ async def test_upload_zip_flattens_path_traversal_entries():
 
     with (
         patch("app.services.storage.storage_service.upload_file") as mock_upload,
-        patch("app.pipeline.tasks.pipeline.create_processing_chain") as mock_chain,
+        # The retired fixed pipeline's create_processing_chain(...).delay() was
+        # replaced by _start_preprocess_workflow (see its docstring) — patch
+        # that instead so this test doesn't try to actually enqueue a Celery task.
+        patch(
+            "app.api.v1.endpoints.documents._start_preprocess_workflow", new=AsyncMock()
+        ) as mock_start_workflow,
     ):
         response = await upload_documents_zip(
             file=upload, collection_id=None, skip_review=False, db=db, current_user=MagicMock()
@@ -43,7 +48,7 @@ async def test_upload_zip_flattens_path_traversal_entries():
 
     assert response["results"][0]["filename"] == "evil.pdf"
     assert response["results"][0]["status"] == "queued"
-    mock_chain.return_value.delay.assert_called_once()
+    mock_start_workflow.assert_awaited_once()
     stored_key = mock_upload.call_args[0][1]
     assert ".." not in stored_key
     added_doc = db.add.call_args[0][0]
@@ -71,10 +76,7 @@ async def test_upload_zip_skips_unsupported_extensions():
     db = AsyncMock()
     db.add = MagicMock()
 
-    with (
-        patch("app.services.storage.storage_service.upload_file"),
-        patch("app.pipeline.tasks.pipeline.create_processing_chain"),
-    ):
+    with patch("app.services.storage.storage_service.upload_file"):
         response = await upload_documents_zip(
             file=upload, collection_id=None, skip_review=False, db=db, current_user=MagicMock()
         )

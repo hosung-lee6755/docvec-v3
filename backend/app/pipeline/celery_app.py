@@ -47,3 +47,15 @@ celery_app.conf.task_queues = (
 celery_app.conf.task_routes = {
     "tasks.process_document": {"queue": "high"},
 }
+
+# 문서 상세 페이지를 열어야만 멈춘 run을 정리하던 지연 감지(reconcile_stuck_run)를
+# 능동적으로 보완한다 — beat 컨테이너가 이 간격마다 sweep_stuck_workflow_runs를
+# 실행해, 아무도 페이지를 열지 않아도 timeout+grace를 넘긴 run을 FAILED로 확정한다.
+# 30초 = reprocess_service._TIMEOUT_GRACE_SECONDS와 동일한 간격 — 그보다 길면
+# grace 기간 자체가 무의미해지고, 그보다 짧아도 최소 grace 이내에는 정리되지 않는다.
+celery_app.conf.beat_schedule = {
+    "sweep-stuck-workflow-runs": {
+        "task": "tasks.sweep_stuck_workflow_runs",
+        "schedule": 30.0,
+    },
+}

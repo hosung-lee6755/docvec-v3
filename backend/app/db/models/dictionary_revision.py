@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum as SQLEnum, ForeignKey, Integer, String
+from sqlalchemy import Enum as SQLEnum, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
+from app.db.types import UTCDateTime
 
 from app.db.base import Base
 
@@ -30,4 +31,4 @@ class DictionaryRevision(Base):
     created_by: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)

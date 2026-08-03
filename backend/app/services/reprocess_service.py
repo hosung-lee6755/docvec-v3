@@ -7,7 +7,7 @@
 전혀 건드리지 않고 그대로 재사용한다.
 """
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
@@ -203,6 +203,18 @@ async def start_partial_reprocess(
     # 요청했을 때 두 번째 호출이 상류 스텝을 최신 run이 아니라 stale한 원본 run에서
     # 복사해 오는 것을 막는다.
     doc.active_run_id = new_run.id
+    # run_workflow_step의 _update_document_status는 block_type이
+    # _STATUS_FOR_BLOCK_TYPE에 있을 때만 doc.status를 바꾼다 — 매핑에 없는
+    # 분석 계열 블록(classify/extract_entities/extract_keywords/summarize)에서
+    # 재처리를 시작하면 그 블록이 실제로 도는 동안에도 doc.status가 이전
+    # 실행의 terminal 값(FAILED/INDEXED)에 그대로 머물러, 대시보드 "처리중"
+    # 집계에서 빠진다(item #2와 같은 부류의 버그, 2026-08-03 실측 — 일괄
+    # 재처리한 15건 중 classify/extract_entities/extract_keywords로 시작한
+    # 10건이 처리 중에도 계속 FAILED로 표시됨). _maybe_trigger_analysis가
+    # 이미 쓰는 것과 같은 패턴으로, 매핑에 없으면 "ANALYZING"으로 fallback.
+    from app.pipeline.tasks.workflow import _STATUS_FOR_BLOCK_TYPE
+
+    doc.status = _STATUS_FOR_BLOCK_TYPE.get(start_block.block_type, "ANALYZING")
 
     for b in computed.upstream_blocks:
         step = computed.parent_steps_by_block[str(b.id)]
@@ -228,7 +240,7 @@ async def start_partial_reprocess(
 
     timeout_seconds = (timeout_overrides or {}).get(start_block.block_type) or (
         start_block.config or {}
-    ).get("timeoutSeconds", 300)
+    ).get("timeoutSeconds", 1800)
     run_workflow_step.apply_async(
         args=[str(new_run.id), str(start_block.id)], time_limit=timeout_seconds,
         queue=step_queue_for_block(start_block),
@@ -243,6 +255,18 @@ async def start_partial_reprocess(
 # 30초 여유: task 타임아웃 발동과 DB에 반영되는 시점 사이의 clock skew 및 task
 # 큐/워커 지연을 흡수하고, 사용자 문서 새로고침이 너무 빨리 timeout 판정을 내리지 않도록.
 _TIMEOUT_GRACE_SECONDS = 30
+
+
+def _seconds_since(moment: datetime) -> float:
+    """`app/db/types.py::UTCDateTime`으로 감싼 컬럼(started_at 등)은 읽을 때
+    tzinfo=UTC가 붙은 aware datetime을 반환하는데, `datetime.utcnow()`는
+    naive라 그대로 빼면 TypeError(offset-naive/aware 혼합)가 난다(2026-07-30,
+    beat 도입 직후 워커 로그에서 실제로 발생 확인). moment의 tzinfo 유무와
+    무관하게 항상 UTC 기준 경과 초를 반환한다."""
+    now = datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (now - moment).total_seconds()
 
 
 async def reconcile_stuck_run(db: AsyncSession, doc: Document) -> bool:
@@ -269,9 +293,9 @@ async def reconcile_stuck_run(db: AsyncSession, doc: Document) -> bool:
     block = await db.get(WorkflowBlockInstance, stuck_step.block_instance_id)
     block_type = block.block_type if block else None
     timeout_seconds = (run.timeout_overrides or {}).get(block_type) or (
-        (block.config or {}).get("timeoutSeconds", 300) if block else 300
+        (block.config or {}).get("timeoutSeconds", 1800) if block else 1800
     )
-    elapsed = (datetime.utcnow() - stuck_step.started_at).total_seconds()
+    elapsed = _seconds_since(stuck_step.started_at)
     if elapsed <= timeout_seconds + _TIMEOUT_GRACE_SECONDS:
         return False
 

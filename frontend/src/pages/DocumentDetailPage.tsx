@@ -862,7 +862,7 @@ export default function DocumentDetailPage() {
           </div>
 
           <div style={{
-            display: 'flex', flexDirection: 'column', height: 560,
+            display: 'flex', flexDirection: 'column', height: 'calc(100vh - 220px)', minHeight: 720,
             background: '#fff', border: '1px solid #e2e8f0',
             borderRadius: 'var(--radius-md)', overflow: 'hidden',
           }}>

@@ -30,6 +30,8 @@ export default function DocumentsPage() {
   const [filenameFilter, setFilenameFilter] = useState('')
   const [sortBy, setSortBy] = useState<DocumentSortBy>('created_at')
   const [order, setOrder] = useState<SortOrder>('desc')
+  const [page, setPage] = useState(1)
+  const [limit, setLimit] = useState(20)
 
   useEffect(() => {
     const id = setTimeout(() => setFilenameFilter(filenameInput.trim()), 300)
@@ -60,6 +62,8 @@ export default function DocumentsPage() {
   }, [location, navigate])
 
   const { data, isLoading } = useDocuments({
+    page,
+    limit,
     collectionId: filterCollectionId,
     projectId,
     status: filterStatus,
@@ -67,6 +71,13 @@ export default function DocumentsPage() {
     sortBy,
     order,
   })
+  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / limit))
+
+  // 필터/정렬/표시건수가 바뀌면 이전 페이지 번호가 새 결과 범위를 벗어날 수
+  // 있어(예: 3페이지 보다가 필터링하면 결과가 1페이지뿐) 1페이지로 되돌린다.
+  useEffect(() => {
+    setPage(1)
+  }, [filterCollectionId, filterStatus, filenameFilter, sortBy, order, limit])
   const upload = useUploadDocument()
   const uploadZip = useUploadZip()
   const deleteDoc = useDeleteDocument()
@@ -262,6 +273,17 @@ export default function DocumentsPage() {
             <X size={14} /> 필터 초기화
           </button>
         )}
+
+        <select
+          value={limit}
+          onChange={(e) => setLimit(Number(e.target.value))}
+          className="krds-form-select small"
+          style={{ flex: '0 0 110px', width: 110 }}
+        >
+          {[10, 20, 50, 100, 200].map((n) => (
+            <option key={n} value={n}>{n}건씩 보기</option>
+          ))}
+        </select>
       </div>
 
       {selectedIds.size > 0 && (
@@ -434,6 +456,31 @@ export default function DocumentsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {!!data?.items.length && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--space-3)',
+          marginTop: 'var(--space-4)',
+        }}>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            className="krds-btn small secondary"
+          >
+            이전
+          </button>
+          <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
+            {page} / {totalPages} 페이지 (총 {data.total}건)
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+            className="krds-btn small secondary"
+          >
+            다음
+          </button>
         </div>
       )}
 

@@ -1,9 +1,10 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Enum as SQLEnum, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, Enum as SQLEnum, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
+from app.db.types import UTCDateTime
 
 from app.db.base import Base
 
@@ -46,4 +47,4 @@ class DictionaryApplication(Base):
     start_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reverted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)

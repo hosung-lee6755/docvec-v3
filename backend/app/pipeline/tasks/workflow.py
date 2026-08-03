@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from datetime import datetime
+from uuid import uuid4
 
 from app.pipeline.blocks.base import BlockContext, BlockExecutionError
 from app.pipeline.blocks.registry import BLOCK_REGISTRY
@@ -192,7 +193,14 @@ def _localize_error_message(exc: Exception) -> str:
             return korean_message
     if _HANGUL_RE.search(text):
         return text
-    return "처리 중 예기치 않은 오류가 발생했습니다. 문제가 반복되면 관리자에게 문의하세요."
+    # 알려진 패턴에도 없고 한글도 없는 예외는 그동안 이 안내 문구 하나로 완전히
+    # 뭉개버려, 워커가 재시작되어 로그가 사라지면 원인을 영영 알 수 없었다
+    # (2026-07-29 classify 블록 실패 건에서 실측 확인 — 워커 재시작 이후 원본
+    # 예외 정보가 로그에도, Document.error_message에도 남아있지 않았다).
+    # 사용자 안내 문구는 유지하되 예외 타입 + 원문 일부를 덧붙여 DB 자체에
+    # 최소한의 진단 단서를 남긴다.
+    detail = f"{type(exc).__name__}: {text}"[:200]
+    return f"처리 중 예기치 않은 오류가 발생했습니다. 문제가 반복되면 관리자에게 문의하세요. [{detail}]"
 
 
 def _fail_document(db, run, error_message: str) -> None:
@@ -207,6 +215,12 @@ def _fail_document(db, run, error_message: str) -> None:
     if doc is not None:
         doc.status = "FAILED"
         doc.error_message = error_message[:500]
+        # AUTO_ANALYSIS run이 실패했을 때도 active_run_id는 이 run을 가리켜야
+        # 한다 — _maybe_trigger_analysis가 그 run을 만들 때 이미 그렇게
+        # 해두지만(2026-08-03 수정), 그 이전에 생성된 run이거나 다른 경로로
+        # active_run_id가 어긋난 경우까지 실패 확정 시점에 한 번 더 바로잡아
+        # "이 문서의 최신 run"이라는 불변식을 지킨다.
+        doc.active_run_id = run.id
 
 
 def _find_paused_step(db, run_id: str):
@@ -262,6 +276,20 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
             db.add(step)
             db.commit()
             db.refresh(step)
+        elif step.status in ("COMPLETED", "FAILED"):
+            # 브로커 재전송(예: 워커 재시작 중 visibility-timeout 재전달)으로
+            # 이미 끝난 step에 중복 실행이 들어오면, 아래 step.started_at 갱신이
+            # 이미 커밋된 completed_at보다 뒤로 밀려 음수 처리시간을 만든다
+            # (처리현황 블록별 평균시간에서 확인, 2026-07-30). 이미 종결된
+            # step은 재실행하지 않고 그대로 반환한다.
+            #
+            # 이 경로는 non-merge fan-in 중복 디스패치의 "늦게 도착한 쪽"이
+            # 도달하는 지점이기도 하다 — 그 늦은 쪽이 run 전체를 완료로 확정
+            # 짓는 마지막 기회일 수 있으므로(다른 모든 step은 이미 COMPLETED),
+            # 여기서도 완료 여부를 재확인한다(2026-08-03 실측 회귀).
+            if run is not None:
+                _maybe_complete_run(db, run_id)
+            return {"status": step.status, "output": _resolve_output(step.output)}
 
         _update_document_status(db, run, block.block_type)
 
@@ -438,6 +466,7 @@ def _maybe_trigger_analysis(db, run) -> None:
         return
 
     analysis_run = WorkflowRun(
+        id=uuid4(),
         version_id=analysis_version.id, document_id=document.id, collection_id=collection.id,
         status="QUEUED", trigger="AUTO_ANALYSIS", dictionary_version=run.dictionary_version,
     )
@@ -448,6 +477,13 @@ def _maybe_trigger_analysis(db, run) -> None:
     # own completion path (_advance's terminal-block branch, above) already
     # sets doc.status back to "INDEXED" unconditionally when it finishes.
     document.status = "ANALYZING"
+    # doc.active_run_id는 항상 "이 문서의 최신 run"을 가리켜야 한다
+    # (reprocess_service.start_partial_reprocess도 동일 불변식을 명시적으로
+    # 유지함). 이걸 빼먹으면 active_run_id가 이미 COMPLETED된 이전 PREPROCESS
+    # run을 계속 가리켜, 이 analysis run이 멈추거나 실패해도 재처리/정체감지가
+    # 전부 엉뚱한(이미 끝난) run을 보게 된다(2026-08-03 실측 — 문서
+    # 17c08458.../92f34f36.../3bf3c8d4... 전부 이 경로로 확인).
+    document.active_run_id = analysis_run.id
     db.commit()
     db.refresh(analysis_run)
 
@@ -458,7 +494,12 @@ def _maybe_trigger_analysis(db, run) -> None:
     has_incoming = {e.to_block_id for e in edges}
     entry_blocks = [b for b in blocks if b.id not in has_incoming]
     for block in entry_blocks:
-        timeout_seconds = (block.config or {}).get("timeoutSeconds", 300)
+        # 300s 기본값은 Docling+cloud-VLM-OCR 에스컬레이션(2026-07-29 도입) 이후
+        # 표/이미지 밀도가 높은 PDF의 text_extract에서 반복적으로 초과됐다.
+        # celery의 hard time_limit 초과는 SIGKILL이라 step.status="RUNNING"
+        # 커밋 이후 어떤 예외 핸들러도 못 돌고 그대로 영구 정지한다(2026-07-29
+        # 배치 24건 중 24건이 이 경로로 멈춘 것을 로그로 확인).
+        timeout_seconds = (block.config or {}).get("timeoutSeconds", 1800)
         run_workflow_step.apply_async(
             args=[str(analysis_run.id), str(block.id)], time_limit=timeout_seconds,
             queue=step_queue_for_block(block),
@@ -479,7 +520,7 @@ def _advance(db, run_id: str, block, output: dict) -> None:
 
     for edge in taken_edges:
         target = db.get(WorkflowBlockInstance, edge.to_block_id)
-        timeout_seconds = timeout_overrides.get(target.block_type) or (target.config or {}).get("timeoutSeconds", 300)
+        timeout_seconds = timeout_overrides.get(target.block_type) or (target.config or {}).get("timeoutSeconds", 1800)
         if target.block_type == "merge":
             incoming_to_target = db.query(WorkflowEdge).filter(
                 WorkflowEdge.to_block_id == target.id
@@ -509,32 +550,55 @@ def _advance(db, run_id: str, block, output: dict) -> None:
             )
 
     if not taken_edges:
-        # Terminal block for this branch. If no other step in the run is still
-        # pending/running, the whole run is done.
-        unfinished = db.query(WorkflowRunStep).filter(
-            WorkflowRunStep.run_id == run_id,
-            WorkflowRunStep.status.in_(["PENDING", "RUNNING"]),
-        ).count()
-        if unfinished == 0:
-            from app.db.models.document import Document
+        # Terminal block for this branch — check whether the whole run is done.
+        _maybe_complete_run(db, run_id)
 
-            run = db.get(WorkflowRun, run_id)
-            run.status = "COMPLETED"
-            run.completed_at = datetime.utcnow()
-            if run.document_id:
-                # rag_store normally sets Document.status="INDEXED" itself, but that
-                # side effect is skipped whenever rag_store is served from
-                # block_execution_cache instead of actually running (e.g. reprocessing
-                # a document whose input is unchanged) — mirrors _fail_document's
-                # unconditional terminal-status write on the failure side, so a run
-                # that genuinely finishes always leaves the document in a consistent
-                # terminal state regardless of which blocks were cache hits.
-                doc = db.get(Document, run.document_id)
-                if doc is not None and doc.status != "FAILED":
-                    doc.status = "INDEXED"
-                    doc.updated_at = datetime.utcnow()
-            db.commit()
-            _maybe_trigger_analysis(db, run)
+
+def _maybe_complete_run(db, run_id: str) -> None:
+    """If no step in the run is still PENDING/RUNNING, marks the run COMPLETED.
+
+    A block with multiple incoming edges that isn't a "merge" block type gets
+    dispatched once per completed upstream edge (no fan-in dedup), so it can
+    run twice concurrently. Both duplicate runs call _advance() on
+    completion; whichever finishes LAST is the only one guaranteed to see
+    every other step as done. But that last one may itself resolve to an
+    already-COMPLETED downstream step (run_workflow_step's dedup early
+    return, above) and never reach this check at all — leaving every step
+    COMPLETED yet the run stuck in RUNNING forever (실측: 2026-08-03,
+    documents 17c08458.../92f34f36..., AUTO_ANALYSIS runs whose summarize
+    block fan-in duplicated). So this check must also run from that dedup
+    early-return path, not just from a fresh _advance() call — see its call
+    site in run_workflow_step."""
+    from app.db.models.document import Document
+    from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
+
+    unfinished = db.query(WorkflowRunStep).filter(
+        WorkflowRunStep.run_id == run_id,
+        WorkflowRunStep.status.in_(["PENDING", "RUNNING"]),
+    ).count()
+    if unfinished != 0:
+        return
+
+    run = db.get(WorkflowRun, run_id)
+    if run is None or run.status != "RUNNING":
+        return
+
+    run.status = "COMPLETED"
+    run.completed_at = datetime.utcnow()
+    if run.document_id:
+        # rag_store normally sets Document.status="INDEXED" itself, but that
+        # side effect is skipped whenever rag_store is served from
+        # block_execution_cache instead of actually running (e.g. reprocessing
+        # a document whose input is unchanged) — mirrors _fail_document's
+        # unconditional terminal-status write on the failure side, so a run
+        # that genuinely finishes always leaves the document in a consistent
+        # terminal state regardless of which blocks were cache hits.
+        doc = db.get(Document, run.document_id)
+        if doc is not None and doc.status != "FAILED":
+            doc.status = "INDEXED"
+            doc.updated_at = datetime.utcnow()
+    db.commit()
+    _maybe_trigger_analysis(db, run)
 
 
 @celery_app.task(name="tasks.resume_workflow_run", queue="normal", bind=True)
@@ -560,5 +624,65 @@ def resume_workflow_run(self, run_id: str) -> dict:
         db.commit()
         _advance(db, run_id, block, _resolve_output(step.output))
         return {"status": "RESUMED"}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="tasks.sweep_stuck_workflow_runs", queue="normal")
+def sweep_stuck_workflow_runs() -> dict:
+    """Celery beat이 주기적으로 호출해, 아무도 문서 상세 페이지를 열어보지
+    않아도 RUNNING에 멈춘 run을 스스로 정리한다.
+
+    Celery hard time_limit 초과는 billiard가 워커 fork 프로세스를 SIGKILL로
+    직접 죽여서 애플리케이션 코드가 절대 잡을 수 없다 — run/step이 RUNNING으로
+    영구히 남는다. 이전에는 `reprocess_service.reconcile_stuck_run()`이
+    GET /documents/{id} 호출 시점에만 지연을 감지했는데, 그 문서를 아무도
+    열어보지 않으면 정리가 영영 일어나지 않는 문제가 있었다. 판정 로직은
+    reconcile_stuck_run과 동일 — 그쪽은 API 요청 컨텍스트의 AsyncSession을
+    쓰고 이쪽은 셀러리 워커의 동기 세션을 쓰기 때문에 별도 구현이지만,
+    `_TIMEOUT_GRACE_SECONDS`(유예시간)는 reprocess_service에서 그대로
+    가져와 두 경로의 판정 기준이 어긋나지 않게 한다."""
+    from app.db.models.workflow import WorkflowBlockInstance
+    from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
+    from app.db.session import get_sync_db
+    from app.services.reprocess_service import _TIMEOUT_GRACE_SECONDS, _seconds_since
+
+    db = get_sync_db()
+    swept_run_ids = []
+    try:
+        running_runs = db.query(WorkflowRun).filter(WorkflowRun.status == "RUNNING").all()
+        for run in running_runs:
+            stuck_step = db.query(WorkflowRunStep).filter(
+                WorkflowRunStep.run_id == run.id,
+                WorkflowRunStep.status == "RUNNING",
+                WorkflowRunStep.started_at.isnot(None),
+            ).first()
+            if stuck_step is None:
+                continue
+
+            block = db.get(WorkflowBlockInstance, stuck_step.block_instance_id)
+            block_type = block.block_type if block else None
+            timeout_seconds = (run.timeout_overrides or {}).get(block_type) or (
+                (block.config or {}).get("timeoutSeconds", 1800) if block else 1800
+            )
+            elapsed = _seconds_since(stuck_step.started_at)
+            if elapsed <= timeout_seconds + _TIMEOUT_GRACE_SECONDS:
+                continue
+
+            message = (
+                f"'{block_type or stuck_step.block_instance_id}' 처리 시간 제한({timeout_seconds}초)을 "
+                "초과하여 작업이 중단되었습니다. 필요 시 시간 제한을 늘려 재처리할 수 있습니다."
+            )
+            stuck_step.status = "FAILED"
+            stuck_step.error_code = "TIMEOUT_EXCEEDED"
+            stuck_step.error_message = message
+            stuck_step.completed_at = datetime.utcnow()
+            run.status = "FAILED"
+            run.error_message = message
+            run.completed_at = datetime.utcnow()
+            _fail_document(db, run, message)
+            db.commit()
+            swept_run_ids.append(str(run.id))
+        return {"swept_run_ids": swept_run_ids}
     finally:
         db.close()

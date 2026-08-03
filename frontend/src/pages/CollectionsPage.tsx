@@ -14,6 +14,7 @@ import {
   type Collection,
 } from '../hooks/useCollections'
 import { useProjects } from '../hooks/useProjects'
+import { useAuthStore } from '../store/authStore'
 import { useWorkflowGraph, useWorkflowVersions, useWorkflows, type WorkflowGraph } from '../hooks/useWorkflows'
 import { getBlockMeta } from '../lib/workflowBlocks'
 import { apiClient } from '../lib/apiClient'
@@ -94,6 +95,7 @@ export default function CollectionsPage() {
   const { data: memberData, isLoading: membersLoading } = useCollectionMembers(shareId)
   const inviteMember = useInviteMember()
   const removeMember = useRemoveMember()
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
 
   // Only projects where this user has editor+ access can receive a new/reassigned
   // collection (create_collection/update_collection enforce this server-side too).
@@ -455,7 +457,7 @@ export default function CollectionsPage() {
                         >
                           <Layers size={17} />
                         </button>
-                        {col.is_owner && (
+                        {(col.is_owner || isAdmin) && (
                           <button
                             type="button"
                             onClick={() => setConfirmDeleteId(col.id)}

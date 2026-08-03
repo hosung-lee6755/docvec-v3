@@ -1,9 +1,10 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Text
+from sqlalchemy import ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
+from app.db.types import UTCDateTime
 
 from app.db.base import Base
 
@@ -21,7 +22,7 @@ class ChatConversation(Base):
     )
     model_key: Mapped[str] = mapped_column(Text)
     title: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        UTCDateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )

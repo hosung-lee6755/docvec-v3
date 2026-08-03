@@ -4,12 +4,20 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user, require_admin
 from app.core.crypto import encrypt_secret
 from app.core.security import get_password_hash, verify_password
+from app.db.models.chat_conversation import ChatConversation
+from app.db.models.chat_message import ChatMessage
+from app.db.models.collection import Collection
+from app.db.models.collection_member import CollectionMember
+from app.db.models.document_revision import DocumentTextRevision
+from app.db.models.project import Project
+from app.db.models.project_member import ProjectMember
 from app.db.models.user import User
 from app.db.models.user_api_key import UserApiKey
 from app.db.session import get_db
@@ -149,9 +157,62 @@ async def delete_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # 계정이 소유한 프로젝트/컬렉션/문서는 users.id를 참조하는 FK에
+    # ON DELETE CASCADE가 하나도 없어 그냥 db.delete(user)만 하면 항상
+    # IntegrityError로 실패한다(실제로 프로젝트/컬렉션을 소유한 계정 3개가
+    # 삭제 안 되는 문제로 확인됨, 2026-07-29) — project/collection 삭제와
+    # 동일한 cascade 헬퍼를 재사용해 소유 리소스를 먼저 정리한다.
+    from app.api.v1.endpoints.collections import cascade_delete_collection
+    from app.api.v1.endpoints.projects import cascade_delete_project
+
+    uid = str(user_id)
+    owned_projects = (await db.scalars(select(Project).where(Project.created_by == uid))).all()
+    for project in owned_projects:
+        await cascade_delete_project(db, project)
+
+    # 위에서 이미 삭제된 프로젝트 소속 컬렉션은 다시 조회되지 않으므로, 남는
+    # 건 프로젝트 없이 독립적이거나 다른 사람 프로젝트 아래 있던 컬렉션뿐.
+    owned_collections = (
+        await db.scalars(select(Collection).where(Collection.created_by == uid))
+    ).all()
+    for collection in owned_collections:
+        await cascade_delete_collection(db, collection)
+
+    # 이 계정이 "멤버"로 참여 중인 남의 프로젝트/컬렉션 — invited_by는 항상
+    # 초대한 쪽(소유자) 자신이라(invite 엔드포인트가 소유자만 허용) 위에서
+    # 소유 프로젝트/컬렉션을 지울 때 이미 함께 삭제됐다. 남은 건 이 계정이
+    # user_id(멤버 본인)인 행뿐이다.
+    await db.execute(delete(ProjectMember).where(ProjectMember.user_id == uid))
+    await db.execute(delete(CollectionMember).where(CollectionMember.user_id == uid))
+
+    conv_ids_subq = select(ChatConversation.id).where(ChatConversation.user_id == uid)
+    await db.execute(delete(ChatMessage).where(ChatMessage.conversation_id.in_(conv_ids_subq)))
+    await db.execute(delete(ChatConversation).where(ChatConversation.user_id == uid))
+
+    await db.execute(delete(UserApiKey).where(UserApiKey.user_id == uid))
+
+    # nullable — 리비전 이력 자체는 보존하고 작성자만 비운다.
+    await db.execute(
+        update(DocumentTextRevision)
+        .where(DocumentTextRevision.created_by == uid)
+        .values(created_by=None)
+    )
+
     log_audit(db, str(current_user.id), "user.delete", "user", str(user.id))
     await db.delete(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 위 cascade가 다루지 않는 공유 리소스(예: 사전 항목처럼 소유자만
+        # 있고 프로젝트/컬렉션에 속하지 않는 not-null 참조)가 남아있는 경우
+        # — 원인 불명 500 대신 무엇이 막고 있는지 알 수 있게 명확히 실패시킨다.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="이 계정이 소유한 다른 데이터가 남아 있어 삭제할 수 없습니다. "
+            "관리자에게 문의하세요.",
+        )
 
 
 _API_KEY_PROVIDERS = ("openai", "anthropic")

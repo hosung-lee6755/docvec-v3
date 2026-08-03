@@ -1,9 +1,10 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum as SQLEnum, ForeignKey, Integer, Text
+from sqlalchemy import JSON, Boolean, Enum as SQLEnum, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
+from app.db.types import UTCDateTime
 
 from app.db.base import Base
 
@@ -68,7 +69,7 @@ class DocumentNode(Base):
     # reason the editor supplied. Both None until the first correction.
     correction_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     correction_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        UTCDateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )

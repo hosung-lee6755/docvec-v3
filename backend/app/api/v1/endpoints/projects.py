@@ -204,35 +204,29 @@ async def update_project(
     return await _build_project_response(db, project, current_user)
 
 
-@router.delete("/{project_id}")
-async def delete_project(
-    project_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
+async def cascade_delete_project(db: AsyncSession, project: Project) -> None:
+    """Delete a project and everything that FKs into it (no ON DELETE CASCADE
+    exists at the DB level for any of these) — same contract as
+    cascade_delete_collection: caller is responsible for the access check and
+    commit. Extracted so delete_user (users.py) can reuse this instead of
+    duplicating it when cascading a deleted account's own projects."""
     from app.api.v1.endpoints.collections import cascade_delete_collection
 
-    project = await db.scalar(select(Project).where(Project.id == project_id))
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if str(project.created_by) != str(current_user.id):
-        raise HTTPException(status_code=403, detail="Access denied")
-
     collections = (
-        await db.scalars(select(Collection).where(Collection.project_id == project_id))
+        await db.scalars(select(Collection).where(Collection.project_id == project.id))
     ).all()
     for collection in collections:
         await cascade_delete_collection(db, collection)
 
     # Everything below has no ON DELETE CASCADE from projects.id (same gap as
     # cascade_delete_collection above), so it must be cleared manually too.
-    conv_ids_subq = select(ChatConversation.id).where(ChatConversation.project_id == project_id)
+    conv_ids_subq = select(ChatConversation.id).where(ChatConversation.project_id == project.id)
     await db.execute(delete(ChatMessage).where(ChatMessage.conversation_id.in_(conv_ids_subq)))
-    await db.execute(delete(ChatConversation).where(ChatConversation.project_id == project_id))
+    await db.execute(delete(ChatConversation).where(ChatConversation.project_id == project.id))
 
-    await db.execute(delete(ProjectApiKey).where(ProjectApiKey.project_id == project_id))
+    await db.execute(delete(ProjectApiKey).where(ProjectApiKey.project_id == project.id))
 
-    workflow_ids_subq = select(WorkflowDefinition.id).where(WorkflowDefinition.project_id == project_id)
+    workflow_ids_subq = select(WorkflowDefinition.id).where(WorkflowDefinition.project_id == project.id)
     version_ids_subq = select(WorkflowVersion.id).where(WorkflowVersion.workflow_id.in_(workflow_ids_subq))
     run_ids_subq = select(WorkflowRun.id).where(WorkflowRun.version_id.in_(version_ids_subq))
     await db.execute(delete(WorkflowRunStep).where(WorkflowRunStep.run_id.in_(run_ids_subq)))
@@ -240,10 +234,28 @@ async def delete_project(
     await db.execute(delete(WorkflowEdge).where(WorkflowEdge.version_id.in_(version_ids_subq)))
     await db.execute(delete(WorkflowBlockInstance).where(WorkflowBlockInstance.version_id.in_(version_ids_subq)))
     await db.execute(delete(WorkflowVersion).where(WorkflowVersion.workflow_id.in_(workflow_ids_subq)))
-    await db.execute(delete(WorkflowDefinition).where(WorkflowDefinition.project_id == project_id))
+    await db.execute(delete(WorkflowDefinition).where(WorkflowDefinition.project_id == project.id))
 
-    await db.execute(delete(ProjectMember).where(ProjectMember.project_id == project_id))
+    await db.execute(delete(ProjectMember).where(ProjectMember.project_id == project.id))
+    await db.flush()
     await db.delete(project)
+
+
+@router.delete("/{project_id}")
+async def delete_project(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = await db.scalar(select(Project).where(Project.id == project_id))
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    # 관리자는 소유자가 아니어도 삭제 가능 — 계정 정리 시 관리자가 남의
+    # 프로젝트를 대신 정리해야 하는 상황이 실제로 있었다(2026-07-29).
+    if str(project.created_by) != str(current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    await cascade_delete_project(db, project)
     await db.commit()
     return {"message": "Project deleted"}
 

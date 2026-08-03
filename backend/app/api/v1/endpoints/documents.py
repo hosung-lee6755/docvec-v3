@@ -177,7 +177,7 @@ async def _start_preprocess_workflow(
     entry_blocks = [b for b in blocks if b.id not in has_incoming]
 
     for block in entry_blocks:
-        timeout_seconds = (block.config or {}).get("timeoutSeconds", 300)
+        timeout_seconds = (block.config or {}).get("timeoutSeconds", 1800)
         run_workflow_step.apply_async(
             args=[str(run.id), str(block.id)], time_limit=timeout_seconds,
             queue=step_queue_for_block(block),
@@ -416,7 +416,11 @@ async def list_documents(
     if collection_id is not None:
         filters.append(Document.collection_id == collection_id)
     if status is not None:
-        filters.append(Document.status == status)
+        # 대시보드의 "처리중인 작업" 위젯이 11개 processing 상태를 한 번의
+        # 쿼리로 가져오기 위해 콤마 구분 목록을 지원한다(2026-07-30) — 단일
+        # 상태 호출은 split 결과가 1개짜리 리스트가 되어 동일하게 동작한다.
+        statuses = [s for s in status.split(",") if s]
+        filters.append(Document.status.in_(statuses))
     if filename:
         filters.append(Document.original_filename.ilike(f"%{filename}%"))
 

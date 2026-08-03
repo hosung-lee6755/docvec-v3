@@ -9,7 +9,12 @@ from uuid import uuid4
 
 from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
-from app.pipeline.tasks.workflow import _advance, _evaluate_condition, _localize_error_message
+from app.pipeline.tasks.workflow import (
+    _advance,
+    _evaluate_condition,
+    _localize_error_message,
+    run_workflow_step,
+)
 
 
 def test_evaluate_condition_none_is_always_true():
@@ -51,12 +56,16 @@ def test_linear_unconditional_edge_enqueues_next_block(mock_task):
     source = MagicMock(id=uuid4())
     target_id = uuid4()
     edge = MagicMock(from_block_id=source.id, to_block_id=target_id, condition=None)
-    target = MagicMock(id=target_id, block_type="postprocess")
+    target = MagicMock(id=target_id, block_type="postprocess", config={})
 
     db = _mock_db(edges=[edge], get_map={WorkflowBlockInstance: target})
     _advance(db, run_id, source, {"text": "hello"})
 
-    mock_task.delay.assert_called_once_with(run_id, str(target_id))
+    # _advance dispatches via apply_async(time_limit=...) (per-block timeout,
+    # not the old .delay()) — 1800 is the block-config-less default.
+    mock_task.apply_async.assert_called_once_with(
+        args=[run_id, str(target_id)], time_limit=1800, queue="normal",
+    )
 
 
 @patch("app.pipeline.tasks.workflow.run_workflow_step")
@@ -72,12 +81,14 @@ def test_branch_only_true_edge_fires(mock_task):
         from_block_id=source.id, to_block_id=false_target_id,
         condition={"output_field": "is_valid", "equals": False},
     )
-    true_target = MagicMock(id=true_target_id, block_type="postprocess")
+    true_target = MagicMock(id=true_target_id, block_type="postprocess", config={})
 
     db = _mock_db(edges=[true_edge, false_edge], get_map={WorkflowBlockInstance: true_target})
     _advance(db, run_id, source, {"is_valid": True})
 
-    mock_task.delay.assert_called_once_with(run_id, str(true_target_id))
+    mock_task.apply_async.assert_called_once_with(
+        args=[run_id, str(true_target_id)], time_limit=1800, queue="normal",
+    )
 
 
 @patch("app.pipeline.tasks.workflow.run_workflow_step")
@@ -86,7 +97,7 @@ def test_merge_waits_until_all_incoming_edges_complete(mock_task):
     source = MagicMock(id=uuid4())
     merge_id = uuid4()
     edge = MagicMock(from_block_id=source.id, to_block_id=merge_id, condition=None)
-    merge_block = MagicMock(id=merge_id, block_type="merge")
+    merge_block = MagicMock(id=merge_id, block_type="merge", config={})
 
     # merge has 2 incoming edges total; only 1 has completed so far (this one).
     existing_step = MagicMock(completed_incoming_edges=0)
@@ -97,7 +108,7 @@ def test_merge_waits_until_all_incoming_edges_complete(mock_task):
     _advance(db, run_id, source, {})
 
     assert existing_step.completed_incoming_edges == 1
-    mock_task.delay.assert_not_called()
+    mock_task.apply_async.assert_not_called()
 
 
 @patch("app.pipeline.tasks.workflow.run_workflow_step")
@@ -106,7 +117,7 @@ def test_merge_fires_once_last_incoming_edge_completes(mock_task):
     source = MagicMock(id=uuid4())
     merge_id = uuid4()
     edge = MagicMock(from_block_id=source.id, to_block_id=merge_id, condition=None)
-    merge_block = MagicMock(id=merge_id, block_type="merge")
+    merge_block = MagicMock(id=merge_id, block_type="merge", config={})
 
     # merge has 2 incoming edges total; 1 already completed before this call.
     existing_step = MagicMock(completed_incoming_edges=1)
@@ -117,7 +128,9 @@ def test_merge_fires_once_last_incoming_edge_completes(mock_task):
     _advance(db, run_id, source, {})
 
     assert existing_step.completed_incoming_edges == 2
-    mock_task.delay.assert_called_once_with(run_id, str(merge_id))
+    mock_task.apply_async.assert_called_once_with(
+        args=[run_id, str(merge_id)], time_limit=1800, queue="normal",
+    )
 
 
 @patch("app.pipeline.tasks.workflow.run_workflow_step")
@@ -181,10 +194,14 @@ def test_localize_error_message_passes_through_existing_korean_message():
 
 
 def test_localize_error_message_falls_back_for_unrecognized_english_exception():
+    # 알려진 패턴에도 없고 한글도 없는 예외는 사용자 안내 문구를 앞에 두되,
+    # 워커 로그 유실 시에도 진단 가능하도록 예외 타입/원문을 덧붙여야 한다
+    # (2026-07-29 classify 블록 실패 건 — 원본 예외가 로그에도 DB에도 전혀
+    # 남지 않아 원인 파악이 불가능했던 회귀).
     exc = Exception("division by zero")
     result = _localize_error_message(exc)
-    assert "division by zero" not in result
     assert "오류" in result
+    assert "Exception: division by zero" in result
 
 
 def test_terminal_block_completes_run_when_nothing_else_pending():
@@ -208,3 +225,127 @@ def test_terminal_block_does_not_complete_run_when_others_still_pending():
     _advance(db, run_id, source, {})
 
     assert run.status == "RUNNING"
+
+
+@patch("app.db.session.get_sync_db")
+def test_run_workflow_step_completes_run_on_duplicate_dispatch_dedup_path(mock_get_sync_db):
+    # A block with 2+ incoming edges that isn't type "merge" gets dispatched
+    # once per completed upstream edge — two concurrent executions of the
+    # same block instance. Whichever finishes LAST is the only one that could
+    # see every other step as done, but it may itself resolve to an
+    # already-COMPLETED downstream step here (the dedup early-return) instead
+    # of reaching _advance()'s own completion check. This regresses the
+    # 2026-08-03 bug where every step was COMPLETED yet the run stayed
+    # RUNNING forever — the dedup path must also confirm run completion.
+    run_id = str(uuid4())
+    block_id = uuid4()
+    run = MagicMock(id=run_id, status="RUNNING", document_id=None)
+    block = MagicMock(id=block_id, block_type="postprocess")
+    already_completed_step = MagicMock(status="COMPLETED", output=None)
+
+    db = MagicMock()
+
+    def query_side_effect(model):
+        q = MagicMock()
+        if model is WorkflowRunStep:
+            q.filter.return_value.first.return_value = already_completed_step
+            q.filter.return_value.count.return_value = 0
+        return q
+
+    db.query.side_effect = query_side_effect
+    db.get.side_effect = lambda model, _id: (
+        run if model is WorkflowRun else block if model is WorkflowBlockInstance else None
+    )
+    mock_get_sync_db.return_value = db
+
+    result = run_workflow_step(run_id, str(block_id))
+
+    assert result == {"status": "COMPLETED", "output": {}}
+    assert run.status == "COMPLETED"
+
+
+def test_maybe_trigger_analysis_points_active_run_id_at_the_new_analysis_run():
+    # Before this fix, _maybe_trigger_analysis set Document.status="ANALYZING"
+    # but never updated Document.active_run_id — it kept pointing at the just-
+    # completed PREPROCESS run. Any later lookup keyed off active_run_id (stuck-
+    # run detection, reprocess, "which run is this document actually on")
+    # inspected the wrong, already-finished run instead of the live analysis
+    # run, silently going stale forever if that analysis run ever failed or
+    # hung (실측: 2026-08-03, documents 17c08458.../92f34f36.../3bf3c8d4...).
+    from app.db.models.collection import Collection
+    from app.db.models.document import Document
+    from app.db.models.workflow import (
+        WorkflowBlockInstance,
+        WorkflowDefinition,
+        WorkflowEdge,
+        WorkflowVersion,
+    )
+    from app.pipeline.tasks.workflow import _maybe_trigger_analysis
+
+    stale_run_id = uuid4()
+    parent_run = MagicMock(document_id=uuid4(), version_id=uuid4(), dictionary_version=1)
+    version = MagicMock(workflow_id=uuid4())
+    workflow_def = MagicMock(kind="PREPROCESS")
+    document = MagicMock(
+        id=parent_run.document_id, collection_id=uuid4(), active_run_id=stale_run_id,
+    )
+    collection = MagicMock(
+        id=document.collection_id,
+        default_analysis_workflow_id=uuid4(),
+        default_analysis_workflow_version=None,
+    )
+    analysis_version = MagicMock(id=uuid4())
+
+    db = MagicMock()
+
+    def get_side_effect(model, _id):
+        return {
+            WorkflowVersion: version,
+            WorkflowDefinition: workflow_def,
+            Document: document,
+            Collection: collection,
+        }.get(model)
+
+    db.get.side_effect = get_side_effect
+
+    def query_side_effect(model):
+        q = MagicMock()
+        if model is WorkflowVersion:
+            q.filter.return_value.filter.return_value.order_by.return_value.first.return_value = (
+                analysis_version
+            )
+        elif model in (WorkflowBlockInstance, WorkflowEdge):
+            q.filter.return_value.all.return_value = []
+        return q
+
+    db.query.side_effect = query_side_effect
+
+    _maybe_trigger_analysis(db, parent_run)
+
+    assert document.status == "ANALYZING"
+    added_run = db.add.call_args[0][0]
+    assert document.active_run_id == added_run.id
+    assert document.active_run_id != stale_run_id
+
+
+def test_fail_document_repoints_active_run_id_at_the_failed_run():
+    # Same stale-active_run_id class of bug as _maybe_trigger_analysis above,
+    # but on the failure path: if a document's active_run_id was ever left
+    # pointing at an older, already-finished run, a later run failing on this
+    # document must still repoint active_run_id at itself so reprocess/stuck-
+    # detection look at the run that actually failed, not a stale one.
+    from app.db.models.document import Document
+    from app.pipeline.tasks.workflow import _fail_document
+
+    stale_run_id = uuid4()
+    run = MagicMock(id=uuid4(), document_id=uuid4())
+    document = MagicMock(active_run_id=stale_run_id)
+
+    db = MagicMock()
+    db.get.side_effect = lambda model, _id: document if model is Document else None
+
+    _fail_document(db, run, "처리 중 오류가 발생했습니다.")
+
+    assert document.status == "FAILED"
+    assert document.active_run_id == run.id
+    assert document.active_run_id != stale_run_id

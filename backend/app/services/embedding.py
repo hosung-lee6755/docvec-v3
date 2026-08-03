@@ -129,6 +129,18 @@ EMBEDDING_MODEL_REGISTRY: dict[str, EmbeddingModelSpec] = {
         "backend": "sentence_transformers",
         "label": "KR-SBERT (한국어 특화, 768차원)",
     },
+    # 0.6B(가장 작은 변형)를 선택 — MTEB 다국어 벤치마크에서 BGE-M3 대비 우수하나,
+    # _provider_cache가 프로세스 생애주기 동안 로드된 provider를 절대 비우지 않으므로
+    # (아래 전역 캐시), 같은 워커 프로세스에서 BGE-M3와 이 모델을 모두 요청하면 두
+    # 모델이 동시에 GPU에 상주한다 — worker-embed GPU는 BGE-M3 단독으로도 VRAM 12GB
+    # 중 대부분을 이미 사용하므로, 컬렉션마다 임베딩 모델을 다르게 섞어 쓰면 OOM
+    # 위험이 크다. 운영 시 워커 프로세스당 사실상 한 모델만 쓰도록 배치를 나누는 것을 권장.
+    "qwen3-embedding-0.6b": {
+        "repo_id": "Qwen/Qwen3-Embedding-0.6B",
+        "dimension": 1024,
+        "backend": "sentence_transformers",
+        "label": "Qwen3 Embedding 0.6B (다국어, 1024차원)",
+    },
     "openai": {
         "repo_id": "text-embedding-3-small",
         "dimension": 1536,

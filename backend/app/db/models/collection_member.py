@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum as SQLEnum, ForeignKey
+from sqlalchemy import Enum as SQLEnum, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
+from app.db.types import UTCDateTime
 
 from app.db.base import Base
 
@@ -21,4 +22,4 @@ class CollectionMember(Base):
         default="viewer",
     )
     invited_by: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)

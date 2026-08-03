@@ -203,6 +203,30 @@ services:
         condition: service_healthy
     command: poetry run celery -A app.pipeline.celery_app flower --port=5555
 
+  # sweep_stuck_workflow_runs를 30초마다 실행해, 문서 상세 페이지를 아무도
+  # 열어보지 않아도 timeout+grace를 넘긴 run을 스스로 FAILED로 정리한다
+  # (app/pipeline/celery_app.py의 beat_schedule 참고). DB/Celery 브로커에만
+  # 접근하면 되므로 worker와 달리 GPU/Qdrant/MinIO 자격증명은 필요 없다.
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-docvec}:${POSTGRES_PASSWORD:-docvec_secret}@postgres:5432/${POSTGRES_DB:-docvec}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - ENVIRONMENT=production
+    volumes:
+      - ./backend:/app
+      - backend_venv:/app/.venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: poetry run celery -A app.pipeline.celery_app beat --loglevel=info
+
   frontend:
     build:
       context: ./frontend

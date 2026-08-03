@@ -307,12 +307,73 @@ class ChunkSplitBlock(BaseBlock):
             db.close()
 
 
+# 문서당 LLM 문맥 요약을 만들 청크 수 상한 — 청크 1개당 1회 호출(아래
+# _llm_chunk_contexts)이 배치 열거형 프롬프트보다 훨씬 신뢰성이 높지만(실측:
+# 여러 청크를 한 번에 나열해 달라고 하면 로컬 3B 모델이 형식을 못 지키고
+# 첫 항목만 길게 답함 — 이 코드베이스의 classify/summarize와 동일하게 "한
+# 항목만" 요청하는 패턴으로 전환), 청크가 수백~수천 개인 문서(예: 32MB PDF
+# 재처리 시 1293개)에서 전부 호출하면 처리시간이 감당 안 되므로 상한을 둔다.
+# 상한을 넘는 뒤쪽 청크는 구조적 문맥만 사용(폴백, 실패 아님).
+_CONTEXT_LLM_MAX_CHUNKS = 40
+# 문서 전체가 아니라 앞부분 발췌만 앵커로 준다 — 로컬 모델 컨텍스트 예산을
+# 아끼면서도 "이 문서가 무엇에 관한 것인지" 판단엔 충분하다.
+_CONTEXT_DOC_EXCERPT_CHARS = 3000
+
+
+def _structural_context(doc_title: str | None, section_path: list | None) -> str:
+    """무료(LLM 호출 없음) 구조적 문맥 — 문서 제목과 조상 헤딩 경로를
+    " > "로 이어붙인다. 둘 다 없으면 빈 문자열(그 청크는 문맥 없이 원문
+    그대로 임베딩됨 — 기존 동작과 동일)."""
+    parts = [p for p in ([doc_title] if doc_title else []) + list(section_path or []) if p]
+    return " > ".join(parts)
+
+
+def _llm_chunk_contexts(doc_title: str | None, doc_excerpt: str, chunks: list) -> dict:
+    """청크 id -> 로컬 LLM이 생성한 1문장 문맥 요약. 문서당 처음
+    _CONTEXT_LLM_MAX_CHUNKS개까지만, 청크 1개당 1회 호출한다. 개별 호출이
+    실패하거나 빈 응답이면 그 청크만 조용히 건너뛴다 — 나머지 청크는 구조적
+    문맥만으로 폴백, 파이프라인 자체는 절대 실패시키지 않는다(리랭커의
+    fail-open과 동일한 원칙)."""
+    import re
+
+    from app.pipeline.blocks.content_blocks import _MAX_HAN_RATIO, _generate, _han_ratio
+
+    results: dict = {}
+    system_prompt = (
+        "다음은 한 문서의 발췌와 그 안에서 추출한 청크 하나입니다. 이 청크가 "
+        "문서 전체 맥락에서 어떤 역할을 하는지 15단어 이내의 짧은 한국어 한 "
+        "문장으로만 답하세요. 다른 설명 없이 문장 하나만 출력하세요."
+    )
+    for chunk in chunks[:_CONTEXT_LLM_MAX_CHUNKS]:
+        user_content = (
+            f"문서 제목: {doc_title or '(제목 없음)'}\n문서 발췌:\n{doc_excerpt}\n\n"
+            f"청크: {chunk.chunk_text[:500]}"
+        )
+        try:
+            raw = _generate(system_prompt, user_content)
+        except Exception:
+            continue
+        # Qwen2.5-Instruct is tool-call-trained and occasionally emits a stray
+        # <tool_call> tag even with no tools defined — strip any tag-shaped
+        # artifact before taking the first real line.
+        cleaned_raw = re.sub(r"</?tool_call>", "", raw)
+        first_line = next((line.strip() for line in cleaned_raw.splitlines() if line.strip()), "")
+        if first_line and _han_ratio(first_line) <= _MAX_HAN_RATIO:
+            results[str(chunk.id)] = first_line
+    return results
+
+
 class RagStoreConfig(BaseModel):
     embedding_model: str | None = None  # None = 컬렉션 기본값 상속
     # true면 DocumentChunk.excluded_pii=True인 청크는 임베딩·업서트에서 제외
     # (pii_detect의 action=exclude_from_embedding이 표시한 구간, run() 아래 참고).
     exclude_pii: bool = True
     store_masked_text: bool = False
+    # Contextual Retrieval(Anthropic, 2024) — 구조적 문맥(문서 제목 + section_path)은
+    # 항상 무료로 붙는다. 이 플래그를 켜면 그 위에 로컬 LLM이 만든 1문장 요약을 추가로
+    # 붙인다(_llm_chunk_contexts, 청크 1개당이 아니라 _CONTEXT_BATCH_SIZE개씩 묶어
+    # 호출 — 그래도 문서당 LLM 호출이 늘어나 처리시간이 증가하므로 기본은 off).
+    enable_llm_context: bool = False
 
 
 class RagStoreBlock(BaseBlock):
@@ -330,7 +391,12 @@ class RagStoreBlock(BaseBlock):
         # 1.2.0: DocumentChunk.version(임베딩 차원수 문자열)도 이제 스탬프한다 —
         # 캐시된 pre-1.2.0 결과는 이 컬럼이 항상 비어 있다(메타 정보 생성.txt
         # 3절, 2026-07-24).
-        return "1.2.0"
+        #
+        # 1.3.0: Contextual Retrieval — 임베딩 대상 텍스트가 이제 chunk_text
+        # 원문이 아니라 구조적 문맥(+옵션 LLM 문맥)을 앞에 붙인 문자열이다.
+        # DocumentChunk.context_header도 새로 채운다 — 캐시된 pre-1.3.0 결과는
+        # 원문만으로 임베딩됐으므로 재사용하면 안 된다.
+        return "1.3.0"
 
     @property
     def category(self) -> str:
@@ -394,7 +460,24 @@ class RagStoreBlock(BaseBlock):
                 )
 
             qdrant_service.init_collection(settings.qdrant_collection_name, provider.dimension)
-            vectors = provider.embed([c.chunk_text for c in chunks])
+
+            # Contextual Retrieval — 구조적 문맥(무료)은 항상 계산하고, 설정으로
+            # 켰을 때만 로컬 LLM 문맥 요약을 배치로 추가 조회한다.
+            llm_contexts: dict = {}
+            if cfg.enable_llm_context:
+                doc_excerpt = (doc.parsed_text or "")[:_CONTEXT_DOC_EXCERPT_CHARS]
+                llm_contexts = _llm_chunk_contexts(doc.title, doc_excerpt, chunks)
+
+            context_headers: dict = {}
+            indexed_texts: list[str] = []
+            for chunk in chunks:
+                structural = _structural_context(doc.title, chunk.section_path)
+                llm_part = llm_contexts.get(str(chunk.id))
+                header = " — ".join(p for p in (structural, llm_part) if p)
+                context_headers[str(chunk.id)] = header or None
+                indexed_texts.append(f"{header}\n\n{chunk.chunk_text}" if header else chunk.chunk_text)
+
+            vectors = provider.embed(indexed_texts)
 
             points = [
                 {
@@ -405,6 +488,9 @@ class RagStoreBlock(BaseBlock):
                         "collection_id": str(doc.collection_id) if doc.collection_id else None,
                         "chunk_index": chunk.chunk_order,
                         "text": chunk.chunk_text,
+                        # 문맥이 덧붙은 색인용 텍스트(Contextual BM25) — 인용/표시는
+                        # 항상 위 "text"(원문)를 쓴다. 문맥이 없으면 원문과 동일.
+                        "index_text": indexed_text,
                         "filename": doc.original_filename,
                         "page_number": chunk.page_start,
                         "tags": doc.tags or [],
@@ -412,7 +498,7 @@ class RagStoreBlock(BaseBlock):
                         "workflow_run_id": context.run_id,
                     },
                 }
-                for chunk, vec in zip(chunks, vectors, strict=True)
+                for chunk, vec, indexed_text in zip(chunks, vectors, indexed_texts, strict=True)
             ]
             qdrant_service.upsert_points(settings.qdrant_collection_name, points)
 
@@ -425,6 +511,7 @@ class RagStoreBlock(BaseBlock):
                 # 대용으로 스탬프한다. 모델이 바뀌어 차원수가 달라지면 값도
                 # 함께 바뀐다.
                 chunk.version = str(provider.dimension)
+                chunk.context_header = context_headers.get(str(chunk.id))
             doc.status = "INDEXED"
             doc.updated_at = datetime.utcnow()
             db.commit()

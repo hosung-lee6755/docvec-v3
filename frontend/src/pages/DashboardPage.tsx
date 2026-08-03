@@ -47,11 +47,18 @@ export default function DashboardPage() {
   const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
   const { data, isLoading } = useQuery({ queryKey: ['stats'], queryFn: fetchStats, refetchInterval: 10000 })
+  // limit=10으로 최근 문서 10건만 가져와 클라이언트에서 필터링하면, 처리중인
+  // 문서가 10건보다 많거나 최근 10건 밖에 있을 때 위젯에서 누락됐다(2026-07-30,
+  // "처리중인 작업 10건이라고 표기됨"). 서버에서 11개 processing 상태를 직접
+  // 필터링해 전수 조회한다.
+  const { data: processingData } = useDocuments({
+    status: PROCESSING_STATUSES.join(','), limit: 200, sortBy: 'created_at', order: 'desc',
+  })
   const { data: recentDocs } = useDocuments({ page: 1, limit: 10, sortBy: 'created_at', order: 'desc' })
   const { data: recentSearches } = useSearchHistory(5)
   const { data: projectsData } = useProjects()
 
-  const processingDocs = (recentDocs?.items ?? []).filter((d) => PROCESSING_STATUSES.includes(d.status))
+  const processingDocs = processingData?.items ?? []
   const greeting = greetingForHour(new Date().getHours())
   const today = new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' })
 
@@ -159,7 +166,7 @@ export default function DashboardPage() {
             <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
             처리 중인 작업 {processingDocs.length}건
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 320, overflowY: 'auto' }}>
             {processingDocs.map((doc) => (
               <div
                 key={doc.id}

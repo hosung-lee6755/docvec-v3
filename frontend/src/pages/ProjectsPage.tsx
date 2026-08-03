@@ -8,6 +8,7 @@ import {
   useDeleteProject,
   type Project,
 } from '../hooks/useProjects'
+import { useAuthStore } from '../store/authStore'
 
 export default function ProjectsPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -33,6 +34,7 @@ function ProjectSidebar({
   const { data } = useProjects()
   const updateProject = useUpdateProject()
   const deleteProject = useDeleteProject()
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -116,16 +118,16 @@ function ProjectSidebar({
                 </span>
                 <span style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>{p.collection_count}</span>
                 {p.is_owner && (
-                  <>
-                    <button type="button" onClick={(e) => { e.stopPropagation(); startEdit(p) }}
-                      className="krds-btn text xsmall icon-btn" title="이름 변경">
-                      <Pencil size={13} />
-                    </button>
-                    <button type="button" onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(p.id) }}
-                      className="krds-btn text xsmall icon-btn" title="삭제">
-                      <Trash2 size={13} />
-                    </button>
-                  </>
+                  <button type="button" onClick={(e) => { e.stopPropagation(); startEdit(p) }}
+                    className="krds-btn text xsmall icon-btn" title="이름 변경">
+                    <Pencil size={13} />
+                  </button>
+                )}
+                {(p.is_owner || isAdmin) && (
+                  <button type="button" onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(p.id) }}
+                    className="krds-btn text xsmall icon-btn" title="삭제">
+                    <Trash2 size={13} />
+                  </button>
                 )}
               </>
             )}

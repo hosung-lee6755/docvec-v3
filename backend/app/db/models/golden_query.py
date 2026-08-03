@@ -1,9 +1,10 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, JSON, Text
+from sqlalchemy import ForeignKey, JSON, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
+from app.db.types import UTCDateTime
 
 from app.db.base import Base
 
@@ -23,4 +24,4 @@ class GoldenQuery(Base):
     # list[str] of Document UUIDs the user considers relevant for this query.
     expected_document_ids: Mapped[list] = mapped_column(JSON)
     created_by: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)

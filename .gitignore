@@ -31,3 +31,6 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+
+# Celery beat runtime state (local DBM file, not source)
+backend/celerybeat-schedule

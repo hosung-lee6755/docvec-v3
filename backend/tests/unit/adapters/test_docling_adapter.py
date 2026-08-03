@@ -244,3 +244,89 @@ def test_picture_item_image_bytes_none_when_get_image_returns_none(fake_docling_
     parsed = DoclingAdapter().extract(pdf_path, {})
 
     assert parsed.pages[0].image_regions[0].image_bytes is None
+
+
+class _FakePixmap:
+    def tobytes(self, fmt):
+        return b"FAKE_PAGE_PNG"
+
+
+class _FakeFitzPage:
+    def get_pixmap(self, dpi=300):
+        return _FakePixmap()
+
+
+class _FakeFitzDoc:
+    def __getitem__(self, idx):
+        return _FakeFitzPage()
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def fake_fitz_module(monkeypatch):
+    """docling_adapter._escalate_low_coverage_pages는 함수 내부에서 지연
+    import로 fitz(pymupdf)를 불러온다 — pdf_adapter.py의 기존 VLM OCR 폴백과
+    동일하게 페이지를 PNG로 렌더링하는 용도라 실제 PDF 렌더링 없이 최소
+    fake로 검증한다."""
+    fitz_mod = types.ModuleType("fitz")
+    fitz_mod.open = lambda path: _FakeFitzDoc()
+    monkeypatch.setitem(sys.modules, "fitz", fitz_mod)
+    return fitz_mod
+
+
+# 서울시 도시 범죄 취약지 분석 PDF 실증(2026-07-29)에서 확인된 케이스와
+# 동일하게, 그림이 페이지 전체를 덮어 텍스트가 거의 없는 페이지를 재현한다.
+_NEAR_FULL_PAGE_PICTURE_BBOX = (0, 0, 100, 95)
+
+
+def test_low_coverage_page_escalates_to_vlm_when_key_registered(
+    fake_docling_module, fake_fitz_module, tmp_path, monkeypatch,
+):
+    from app.pipeline.adapters.docling_adapter import DoclingAdapter
+
+    items = [(_FakePictureItem(page_no=1, bbox=_NEAR_FULL_PAGE_PICTURE_BBOX, image=None), 0)]
+    fake_docling_module["fake_document"] = _FakeDoclingDocument(items)
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4")
+
+    monkeypatch.setattr(
+        "app.pipeline.adapters.pdf_adapter._cloud_vlm_ocr",
+        lambda image_bytes, backend, key: "인포그래픽 본문을 옮겨 적은 텍스트입니다.",
+    )
+
+    parsed = DoclingAdapter().extract(
+        pdf_path, {"vision_backend": "openai", "vision_api_key": "test-key"},
+    )
+
+    vlm_blocks = [b for b in parsed.pages[0].text_blocks if b.block_type == "vlm_ocr"]
+    assert len(vlm_blocks) == 1
+    assert vlm_blocks[0].text == "인포그래픽 본문을 옮겨 적은 텍스트입니다."
+
+    vlm_elements = [el for el in parsed.metadata["elements"] if el["type"] == "vlm_ocr"]
+    assert len(vlm_elements) == 1
+    assert vlm_elements[0]["metadata"]["detected_as"] == "cloud_vlm_ocr"
+    assert parsed.metadata["ocr_used"] is True
+
+
+def test_no_escalation_without_registered_vision_key(fake_docling_module, tmp_path, monkeypatch):
+    """BYOK 키가 없으면(_resolve_vision_credentials가 {} 반환, process.py)
+    options에 vision_backend/vision_api_key가 아예 없다 — 기존 EasyOCR-only
+    동작과 완전히 동일해야 하고, fitz/클라우드 호출이 시도조차 되면 안 된다."""
+    from app.pipeline.adapters.docling_adapter import DoclingAdapter
+
+    items = [(_FakePictureItem(page_no=1, bbox=_NEAR_FULL_PAGE_PICTURE_BBOX, image=None), 0)]
+    fake_docling_module["fake_document"] = _FakeDoclingDocument(items)
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("vision credentials가 없으면 _cloud_vlm_ocr가 호출되면 안 된다")
+
+    monkeypatch.setattr("app.pipeline.adapters.pdf_adapter._cloud_vlm_ocr", _boom)
+
+    parsed = DoclingAdapter().extract(pdf_path, {})
+
+    assert [b.block_type for b in parsed.pages[0].text_blocks] == []
+    assert not any(el["type"] == "vlm_ocr" for el in parsed.metadata["elements"])

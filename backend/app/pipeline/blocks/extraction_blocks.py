@@ -427,7 +427,18 @@ class TextExtractBlock(BaseBlock):
         # though 구조/요소 tabs correctly showed picture elements (그림 탭 표출
         # 버그, 2026-07-25). A cached pre-1.14.0 docling result has no images and
         # must be reprocessed to pick this up.
-        return "1.14.0"
+        #
+        # 1.15.0: docling_adapter now escalates low-text-coverage pages to the
+        # same BYOK cloud-VLM-OCR path pdf_adapter.py already had (only when a
+        # project/user has a registered OpenAI/Anthropic key — otherwise a
+        # no-op, same as before). Docling's own VLM pipeline preset
+        # (granite-docling-258M) was evaluated directly against a real
+        # infographic-heavy Korean PDF and rejected — it produced repetition-
+        # loop garbage and its model card doesn't support Korean at all
+        # (Docling VLM 통합 조사, 2026-07-29). A cached pre-1.15.0 docling
+        # result never attempted this escalation even when a key is now
+        # registered, so it must be reprocessed to pick this up.
+        return "1.15.0"
 
     @property
     def category(self) -> str:

@@ -1,7 +1,8 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String
+from sqlalchemy import JSON, Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
+from app.db.types import UTCDateTime
 
 from app.db.base import Base
 
@@ -20,8 +21,8 @@ class BlockExecutionCache(Base):
     cache_key: Mapped[str] = mapped_column(String(128), primary_key=True)
     artifact_key: Mapped[str] = mapped_column(String(512))
     output_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    last_hit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)
+    last_hit_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     hit_count: Mapped[int] = mapped_column(Integer, default=0)
     # 캐시로 재생되는 실행도 원본 실행이 검토를 요구했다면 똑같이 WAITING_REVIEW로
     # 멈춰야 한다 — 캐시 적중 시 이 값을 확인하지 않으면 검토 게이트를 우회하게 된다.

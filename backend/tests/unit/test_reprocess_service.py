@@ -224,3 +224,63 @@ async def test_start_partial_reprocess_carries_over_parent_skip_review():
 
     new_run = db.add.call_args[0][0]
     assert new_run.skip_review is True
+
+
+@pytest.mark.asyncio
+async def test_start_partial_reprocess_sets_analyzing_status_for_unmapped_block_type():
+    # run_workflow_step's _update_document_status only moves doc.status for
+    # block types listed in _STATUS_FOR_BLOCK_TYPE — analysis-tier blocks
+    # (classify/extract_entities/extract_keywords/summarize) aren't in that
+    # map, so without this, doc.status would stay on whatever terminal value
+    # (FAILED/INDEXED) it had before the reprocess for the block's entire
+    # run, hiding it from any "처리중" count keyed off status (동일 부류의
+    # 버그를 대시보드 처리중 집계에서 이미 한 번 발견함, 2026-08-03 실측 —
+    # classify로 재시작한 문서가 처리 중에도 FAILED로 보임).
+    run = _run(status="FAILED")
+    doc = _doc(active_run_id=run.id)
+    doc.status = "FAILED"
+    start_block = _block("classify")
+    start_block.id = uuid4()
+
+    impact = ReprocessImpact(
+        parent_run=run, upstream_blocks=[], parent_steps_by_block={}, impact={},
+    )
+    db = AsyncMock()
+    db.add = MagicMock()
+
+    with patch(
+        "app.services.reprocess_service.compute_reprocess_impact",
+        AsyncMock(return_value=impact),
+    ), patch(
+        "app.services.reprocess_service.current_dictionary_version",
+        AsyncMock(return_value=1),
+    ):
+        await start_partial_reprocess(db, doc, start_block, reason=None)
+
+    assert doc.status == "ANALYZING"
+
+
+@pytest.mark.asyncio
+async def test_start_partial_reprocess_uses_mapped_status_for_preprocess_block_type():
+    run = _run(status="FAILED")
+    doc = _doc(active_run_id=run.id)
+    doc.status = "FAILED"
+    start_block = _block("text_extract")
+    start_block.id = uuid4()
+
+    impact = ReprocessImpact(
+        parent_run=run, upstream_blocks=[], parent_steps_by_block={}, impact={},
+    )
+    db = AsyncMock()
+    db.add = MagicMock()
+
+    with patch(
+        "app.services.reprocess_service.compute_reprocess_impact",
+        AsyncMock(return_value=impact),
+    ), patch(
+        "app.services.reprocess_service.current_dictionary_version",
+        AsyncMock(return_value=1),
+    ):
+        await start_partial_reprocess(db, doc, start_block, reason=None)
+
+    assert doc.status == "PARSING"

@@ -461,7 +461,9 @@ async def delete_collection(
     )
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
-    if str(collection.created_by) != str(current_user.id):
+    # 관리자는 소유자가 아니어도 삭제 가능 — delete_project와 동일한 이유
+    # (2026-07-29).
+    if str(collection.created_by) != str(current_user.id) and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Access denied")
 
     await cascade_delete_collection(db, collection)

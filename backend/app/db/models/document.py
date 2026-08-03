@@ -6,13 +6,13 @@ from sqlalchemy import (
     String,
     Integer,
     Boolean,
-    DateTime,
     Enum as SQLEnum,
     ForeignKey,
     Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
+from app.db.types import UTCDateTime
 
 from app.db.base import Base
 
@@ -64,9 +64,9 @@ class Document(Base):
         UUID(as_uuid=True), ForeignKey("collections.id"), nullable=True
     )
     created_by: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        UTCDateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     parsed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -164,4 +164,4 @@ class Document(Base):
     # 추출). 위 created_at은 DB row 생성/업로드 시각(ingestion_time 개념)이라
     # 별개다. docx/pdf는 extraction_blocks.py가 자동 채우고, hwp/hwpx는 자동
     # 불가해 PATCH /documents/{id}/metadata로 사용자가 직접 입력해야 한다.
-    document_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    document_created_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

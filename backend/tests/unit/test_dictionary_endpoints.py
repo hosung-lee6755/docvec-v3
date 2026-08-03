@@ -102,13 +102,21 @@ async def test_delete_rejects_non_admin():
 async def test_create_admin_persists_synonym_with_variants():
     db = AsyncMock()
     db.add = MagicMock()
-
-    async def _fake_refresh(entry, attribute_names=None):
-        entry.id = entry.id or uuid4()
+    # create_dictionary_entry re-fetches the just-created row via db.scalar()
+    # after commit (selectinload avoids a lazy-load on entry.variants under
+    # expire_on_commit — dictionary.py's own comment explains why). Return the
+    # same DictionaryEntry object db.add() was first called with; bump_revision's
+    # db.add(DictionaryRevision(...)) call happens after, so call_args_list[0]
+    # is always the entry itself. created_at/updated_at are server_default-only
+    # columns never populated on an object that's never actually flushed here,
+    # so DictionaryEntryResponse would otherwise reject them as None.
+    def _fake_scalar(*args, **kwargs):
+        entry = db.add.call_args_list[0][0][0]
         entry.created_at = entry.created_at or datetime.now(timezone.utc)
         entry.updated_at = entry.updated_at or entry.created_at
+        return entry
 
-    db.refresh = AsyncMock(side_effect=_fake_refresh)
+    db.scalar = AsyncMock(side_effect=_fake_scalar)
     admin = MagicMock(role="admin", id=uuid4())
     data = DictionaryEntryCreate(entry_type="synonym", term="인공지능", variants=["AI", "인공 지능"])
 
@@ -117,7 +125,9 @@ async def test_create_admin_persists_synonym_with_variants():
     ) as mock_refresh:
         result = await create_dictionary_entry(data, db=db, current_user=admin)
 
-    db.add.assert_called_once()
+    # db.add fires twice: once for the entry, once for bump_revision's CREATE
+    # DictionaryRevision audit row.
+    assert db.add.call_count == 2
     db.commit.assert_awaited_once()
     mock_refresh.assert_awaited_once_with(db)
     assert result.entry_type == "synonym"
@@ -339,7 +349,10 @@ async def test_import_stopword_creates_updates_and_skips_blank_term():
     assert result.skipped_rows == [5]
     assert existing_entry.match_type == "CONTAINS"
     assert existing_entry.description == "갱신됨"
-    db.add.assert_called_once()
+    # One db.add() for the newly created "그리고" entry, one more for
+    # bump_revision's IMPORT DictionaryRevision (fires whenever created or
+    # updated is truthy — both are here).
+    assert db.add.call_count == 2
     db.commit.assert_awaited_once()
     mock_refresh.assert_awaited_once_with(db)
 
@@ -392,7 +405,9 @@ async def test_import_custom_word_parses_all_columns():
         )
 
     assert result.created == 1
-    created_entry = db.add.call_args[0][0]
+    # call_args (the LAST call) would be bump_revision's IMPORT
+    # DictionaryRevision — the entry itself is always the first db.add() call.
+    created_entry = db.add.call_args_list[0][0][0]
     assert created_entry.term == "LangGraph"
     assert [v.variant_term for v in created_entry.variants] == ["랭그래프", "Lang Graph"]
     assert created_entry.term_type == "PRODUCT"

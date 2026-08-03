@@ -87,6 +87,11 @@ async def perform_search(
                 "document_id", "00000000-0000-0000-0000-000000000000"
             ),
             "content": h["payload"].get("text", ""),
+            # Contextual BM25 — index_text carries the context-prefixed text when
+            # available; falls back to the plain content for points indexed before
+            # this field existed. "content" above (returned to the caller) always
+            # stays the pure original chunk text.
+            "bm25_text": h["payload"].get("index_text") or h["payload"].get("text", ""),
             "metadata": {
                 k: v for k, v in h["payload"].items() if k not in ("text", "document_id")
             },
@@ -96,7 +101,7 @@ async def perform_search(
     ]
 
     if request.mode == "hybrid" and candidates:
-        candidates = bm25_rerank(expanded_query, candidates, text_field="content")
+        candidates = bm25_rerank(expanded_query, candidates, text_field="bm25_text")
 
     if request.diversify and candidates:
         relevance_field = "final_score" if request.mode == "hybrid" else "score"

@@ -9,15 +9,19 @@ _load_failed = False
 
 
 def _get_reranker():
-    """Lazy singleton. Loading can fail (download error, GPU OOM next to the
-    resident LLM + embedder) — in that case we permanently fall back to the
-    hybrid ordering for this process instead of retrying every request."""
+    """Lazy singleton. Loading can fail (download error, OOM) — in that case
+    we permanently fall back to the hybrid ordering for this process instead
+    of retrying every request. Runs in the `worker` container (queue=high),
+    which has no GPU — only `worker-embed` does — so fp16 must stay off here:
+    measured at ~8.7s per (query, doc) pair with use_fp16=True on CPU vs.
+    sub-100ms with fp16 off, since CPU kernels don't accelerate fp16 the way
+    a GPU tensor core does."""
     global _reranker, _load_failed
     if _reranker is None and not _load_failed:
         try:
             from FlagEmbedding import FlagReranker
 
-            _reranker = FlagReranker(_MODEL_NAME, use_fp16=True)
+            _reranker = FlagReranker(_MODEL_NAME, use_fp16=False)
             logger.info("cross-encoder reranker loaded", extra={"model": _MODEL_NAME})
         except Exception:
             logger.exception("reranker load failed; hybrid ordering will be used as-is")

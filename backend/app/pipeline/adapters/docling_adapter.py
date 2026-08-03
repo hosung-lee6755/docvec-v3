@@ -79,6 +79,93 @@ def _table_rows(table_item) -> list[list[str]]:
     return rows
 
 
+def _page_native_text(page: RawPage) -> str:
+    return "\n".join(block.text for block in page.text_blocks)
+
+
+def _page_image_area_ratio(page: RawPage) -> float:
+    page_area = page.width * page.height
+    if page_area <= 0:
+        return 0.0
+    image_area = sum(
+        max(0.0, region.bbox[2] - region.bbox[0]) * max(0.0, region.bbox[3] - region.bbox[1])
+        for region in page.image_regions
+        if region.bbox
+    )
+    return min(1.0, image_area / page_area)
+
+
+def _escalate_low_coverage_pages(
+    file_path: Path,
+    pages_by_no: dict[int, RawPage],
+    elements: list[dict],
+    vision_backend: str,
+    vision_api_key: str,
+    warnings: list[str],
+) -> bool:
+    """pdf_adapter.py의 클라우드 VLM OCR 폴백(BYOK 키 등록 시에만 동작, 등록 안
+    되어 있으면 이 함수 자체가 호출되지 않음)과 동일한 임계값으로 Docling
+    경로도 페이지별 저-커버리지를 escalate한다 — Docling 기본 OCR(EasyOCR)이
+    인포그래픽처럼 텍스트/그래픽이 뒤섞인 페이지에서 요소를 거의 못 뽑아내는
+    경우가 실제로 있다(서울시 도시 범죄 취약지 분석 PDF로 실증). Docling
+    자체 VLM 파이프라인(granite-docling-258M)은 별도로 이 문서에 직접 검증한
+    결과 한국어 텍스트 페이지에서 반복 루프/환각으로 못 쓴다고 판단해
+    기각했다(Docling VLM 통합 조사, 2026-07-29) — 대신 이미 검증된
+    pdf_adapter.py의 상용 vision LLM(OpenAI/Anthropic) 경로를 재사용한다.
+    저-커버리지 페이지라도 Docling이 이미 뽑아낸 요소는 그대로 두고 VLM
+    텍스트를 별도 블록으로 보강만 한다 — 페이지 전체를 대체하면 Docling이
+    맞게 인식한 일부 구조(예: 표)까지 지워질 수 있다."""
+    from app.pipeline.adapters.pdf_adapter import PDFAdapter, _cloud_vlm_ocr, _text_coverage
+
+    escalated = False
+    fitz_doc = None
+    try:
+        for page_no, page in pages_by_no.items():
+            native_text = _page_native_text(page)
+            trusted_native_text = len(native_text.strip()) >= PDFAdapter._MIN_TRUSTED_NATIVE_CHARS
+            coverage = _text_coverage(native_text, page.width, page.height)
+            image_ratio = _page_image_area_ratio(page)
+            needs_escalation = image_ratio > PDFAdapter._OCR_IMAGE_AREA_THRESHOLD or (
+                coverage < PDFAdapter._OCR_COVERAGE_THRESHOLD and not trusted_native_text
+            )
+            if not needs_escalation:
+                continue
+            if fitz_doc is None:
+                import fitz  # pymupdf
+
+                fitz_doc = fitz.open(str(file_path))
+            try:
+                pixmap = fitz_doc[page_no - 1].get_pixmap(dpi=300)
+                page_image_bytes = pixmap.tobytes("png")
+            except Exception as render_exc:
+                warnings.append(f"page {page_no} vlm render failed: {render_exc}")
+                continue
+            vlm_text = _cloud_vlm_ocr(page_image_bytes, vision_backend, vision_api_key)
+            if not vlm_text or not vlm_text.strip():
+                continue
+            element_id = str(uuid4())
+            page.text_blocks.append(
+                RawTextBlock(
+                    text=vlm_text, page_number=page_no, bbox=None,
+                    block_type="vlm_ocr", element_id=element_id,
+                )
+            )
+            elements.append({
+                "id": element_id, "page": page_no, "type": "vlm_ocr", "bbox": None,
+                "content": {"text": vlm_text, "markdown": vlm_text},
+                "metadata": {
+                    "section_path": [], "is_header": False, "is_footer": False,
+                    "confidence": None, "detected_as": "cloud_vlm_ocr",
+                    "order": len(elements), "is_caption": False, "style": None,
+                },
+            })
+            escalated = True
+    finally:
+        if fitz_doc is not None:
+            fitz_doc.close()
+    return escalated
+
+
 class DoclingAdapter(BaseAdapter):
     @property
     def format_id(self) -> str:
@@ -248,6 +335,18 @@ class DoclingAdapter(BaseAdapter):
                 "metadata": metadata,
             })
 
+        # pdf_adapter.py의 클라우드 VLM OCR 폴백과 동일하게, 등록된 BYOK 키가
+        # 있을 때만 저-커버리지 페이지를 escalate한다(_resolve_vision_credentials,
+        # process.py) — 키가 없으면 vision_backend/vision_api_key가 빈 값이라
+        # 이 블록 자체가 스킵되고 기존 EasyOCR-only 동작과 동일하다.
+        vision_backend = options.get("vision_backend")
+        vision_api_key = options.get("vision_api_key")
+        vlm_escalated = False
+        if vision_backend and vision_api_key:
+            vlm_escalated = _escalate_low_coverage_pages(
+                file_path, pages_by_no, elements, vision_backend, vision_api_key, warnings,
+            )
+
         line_layout = [
             {
                 "page_number": el["page"], "text": el["content"]["text"],
@@ -259,7 +358,9 @@ class DoclingAdapter(BaseAdapter):
         ]
 
         pages = [pages_by_no[no] for no in sorted(pages_by_no)]
-        ocr_used = any(getattr(item, "confidence", None) is not None for item, _ in doc.iterate_items())
+        ocr_used = vlm_escalated or any(
+            getattr(item, "confidence", None) is not None for item, _ in doc.iterate_items()
+        )
 
         return RawParsedDocument(
             format_id="pdf",

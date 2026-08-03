@@ -2,7 +2,13 @@ import pytest
 from pydantic import ValidationError
 from app.core.config import Settings
 
-def test_default_settings_load():
+def test_default_settings_load(monkeypatch):
+    # api/worker containers run with ENVIRONMENT=production set at the OS env
+    # level (docker-compose.yml) so the production secret-key guard is
+    # exercised even in this dev stack — Settings() picks that up like any
+    # other env var, which breaks this test's "true default" assumption
+    # unless it's removed first (실측 확인, 2026-08-03).
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
     s = Settings()
     assert s.app_name == "DocVec Platform"
     assert s.environment == "development"

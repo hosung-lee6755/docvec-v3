@@ -235,14 +235,24 @@ def _retrieve_chunks(
         from app.services.reranker import cross_encoder_rerank
 
         candidates = [
-            {"id": h["id"], "text": h["payload"].get("text", ""), "score": h["score"], "payload": h["payload"]}
+            {
+                "id": h["id"],
+                "text": h["payload"].get("text", ""),
+                # Contextual BM25 — falls back to plain text for points indexed
+                # before this field existed (see rag_store's storage_blocks.py).
+                "bm25_text": h["payload"].get("index_text") or h["payload"].get("text", ""),
+                "score": h["score"],
+                "payload": h["payload"],
+            }
             for h in hits
         ]
         # Stage 1 (recall): vector + BM25 hybrid fusion narrows to 2×limit.
         # Stage 2 (precision): cross-encoder reads each (query, chunk) pair
         # jointly and picks the final top-limit — falls back to the hybrid
-        # ordering if the reranker is unavailable.
-        fused = bm25_rerank(query, candidates, text_field="text")[: limit * 2]
+        # ordering if the reranker is unavailable. Reranking scores the plain
+        # "text" (not bm25_text) — a cross-encoder judges the actual passage
+        # against the query, not a context-prefixed variant meant for recall.
+        fused = bm25_rerank(query, candidates, text_field="bm25_text")[: limit * 2]
         reranked = cross_encoder_rerank(query, fused, text_field="text", top_k=limit)
         hits = [
             {"id": c["id"], "score": c.get("rerank_score", c["final_score"]), "payload": c["payload"]}

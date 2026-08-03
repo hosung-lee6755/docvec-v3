@@ -18,12 +18,16 @@ from app.db.session import get_db
 router = APIRouter()
 
 # Must reflect all processing states from the document_status DB enum
-# (app/db/models/document.py), including VALIDATING, MASKING, STRUCTURING, and
-# NORMALIZING from the DAG workflow engine. Omitting any state causes dashboard
-# stats to undercount vs. the document list.
+# (app/db/models/document.py), including VALIDATING, MASKING, STRUCTURING,
+# NORMALIZING, and ANALYZING (컬렉션 기본 분석 워크플로우 자동 실행, 2026-07-29
+# 도입). Omitting any state causes this stat tile to undercount vs.
+# frontend/src/lib/documentStatus.ts's PROCESSING_STATUSES — ANALYZING was
+# missing here, so the dashboard's "처리 중" stat tile and the "처리 중인
+# 작업" widget (which queries /documents with the frontend list) diverged
+# whenever any document was ANALYZING (실측 확인, 2026-07-30).
 _PROCESSING_STATUSES = {
     "QUEUED", "INGESTING", "PARSING", "STRUCTURING", "NORMALIZING",
-    "CHUNKING", "EMBEDDING", "UPLOADING", "VALIDATING", "MASKING",
+    "CHUNKING", "EMBEDDING", "UPLOADING", "VALIDATING", "MASKING", "ANALYZING",
 }
 _PROCESSING_STATS_WINDOW = timedelta(hours=24)
 
@@ -150,8 +154,21 @@ async def get_processing_stats(
                 WorkflowBlockInstance.block_type,
                 func.count(WorkflowRunStep.id).label("execution_count"),
                 func.sum(case((WorkflowRunStep.status == "FAILED", 1), else_=0)).label("failure_count"),
+                # 브로커 재전송으로 이미 끝난 step에 중복 실행이 들어오면
+                # started_at이 completed_at보다 뒤로 밀려 음수 처리시간이
+                # 나올 수 있다(처리현황 블록별 평균시간에서 확인, 2026-07-30;
+                # 근본 원인은 run_workflow_step의 재진입 가드로 막았지만,
+                # 이 평균 계산 자체도 그런 이상치를 침묵 반영하지 않도록
+                # 방어한다). 이상치는 평균에서 제외(NULL)한다 — AVG는 NULL을
+                # 무시하므로 execution_count/failure_count 집계는 영향 없다.
                 func.avg(
-                    func.extract("epoch", WorkflowRunStep.completed_at - WorkflowRunStep.started_at)
+                    case(
+                        (
+                            WorkflowRunStep.completed_at >= WorkflowRunStep.started_at,
+                            func.extract("epoch", WorkflowRunStep.completed_at - WorkflowRunStep.started_at),
+                        ),
+                        else_=None,
+                    )
                 ).label("avg_duration_seconds"),
             )
             .select_from(WorkflowRunStep)

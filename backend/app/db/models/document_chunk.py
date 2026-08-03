@@ -1,9 +1,10 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
+from app.db.types import UTCDateTime
 
 from app.db.base import Base
 
@@ -74,7 +75,12 @@ class DocumentChunk(Base):
         UUID(as_uuid=True), ForeignKey("document_chunks.id", ondelete="SET NULL"), nullable=True
     )
     chunk_tier: Mapped[str] = mapped_column(String(10), default="child", server_default="child")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Contextual Retrieval(Anthropic, 2024) — 임베딩/BM25 색인 전에 청크에 덧붙이는
+    # 짧은 문맥 설명. 항상 붙는 구조적 부분(문서 제목 + section_path)과, 설정으로
+    # 켰을 때만 붙는 LLM 생성 1문장 요약을 이어붙인 최종 문자열 — RagStoreBlock만
+    # 채운다. chunk_text(원문, 인용/표시용)는 이 필드와 무관하게 그대로 유지된다.
+    context_header: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        UTCDateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )

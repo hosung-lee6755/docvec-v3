@@ -784,7 +784,7 @@ async def run_workflow(
 
     for run in runs:
         for block in entry_blocks:
-            timeout_seconds = (block.config or {}).get("timeoutSeconds", 300)
+            timeout_seconds = (block.config or {}).get("timeoutSeconds", 1800)
             run_workflow_step.apply_async(
                 args=[str(run.id), str(block.id)], time_limit=timeout_seconds,
                 queue=step_queue_for_block(block),
