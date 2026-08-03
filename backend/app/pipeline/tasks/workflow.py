@@ -593,8 +593,21 @@ def _maybe_complete_run(db, run_id: str) -> None:
         # unconditional terminal-status write on the failure side, so a run
         # that genuinely finishes always leaves the document in a consistent
         # terminal state regardless of which blocks were cache hits.
+        #
+        # The guard here must be "is this still the document's active run",
+        # NOT "doc.status != FAILED" — a reprocess kicked off on a FAILED
+        # document (batch-reprocess, partial reprocess) leaves doc.status
+        # literally "FAILED" for the whole run if nothing else updates it in
+        # the meantime (e.g. an analysis-tier start block with no
+        # _STATUS_FOR_BLOCK_TYPE mapping). The old check treated that as "some
+        # other path already marked this FAILED, don't overwrite it" and
+        # refused to flip a genuinely successful reprocess back to INDEXED —
+        # the document stayed stuck showing FAILED forever despite every step
+        # completing (실측: 2026-08-03, documents 3bf3c8d4.../16e00066...).
+        # Checking active_run_id instead only skips the flip for a truly
+        # stale/superseded run finishing late after a newer one took over.
         doc = db.get(Document, run.document_id)
-        if doc is not None and doc.status != "FAILED":
+        if doc is not None and str(doc.active_run_id) == str(run.id):
             doc.status = "INDEXED"
             doc.updated_at = datetime.utcnow()
     db.commit()

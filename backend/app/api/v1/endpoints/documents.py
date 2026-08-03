@@ -64,6 +64,21 @@ class BatchDeleteRequest(BaseModel):
     ids: list[UUID]
 
 
+class BatchReprocessRequest(BaseModel):
+    ids: list[UUID]
+
+
+class BatchReprocessItemResult(BaseModel):
+    id: UUID
+    status: Literal["queued", "skipped", "failed"]
+    run_id: UUID | None = None
+    detail: str | None = None
+
+
+class BatchReprocessResponse(BaseModel):
+    results: list[BatchReprocessItemResult]
+
+
 class BulkUploadItemResult(BaseModel):
     filename: str
     status: Literal["queued", "duplicate", "skipped", "failed"]
@@ -571,6 +586,74 @@ async def batch_delete_documents(
         for record in images:
             storage_service.delete_file(settings.minio_bucket_artifacts, record["storage_key"])
     return {"deleted": len(docs), "message": f"{len(docs)} documents deleted"}
+
+
+@router.post("/batch-reprocess", response_model=BatchReprocessResponse)
+async def batch_reprocess_documents(
+    body: BatchReprocessRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """실패 목록에서 여러 문서를 선택해 한 번에 재처리한다. 문서마다 실제로
+    실패한 블록 타입이 다를 수 있어(text_extract, classify, rag_store 등)
+    /{document_id}/reprocess처럼 호출자가 start_block_type을 지정하게 하면
+    선택한 문서 수만큼 사용자가 매번 알아내서 넣어야 한다 — 대신 각 문서의
+    active_run_id에서 실제로 FAILED로 끝난 WorkflowRunStep을 찾아 그 블록부터
+    자동으로 부분 재처리를 시작한다(2026-08-03, 실패 문서 일괄 재처리 시
+    수동으로 했던 것과 동일한 방식)."""
+    from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
+    from app.services.reprocess_service import ReprocessError, resolve_start_block, start_partial_reprocess
+
+    results: list[BatchReprocessItemResult] = []
+    for doc_id in body.ids:
+        doc = await db.scalar(select(Document).where(Document.id == doc_id))
+        if doc is None:
+            results.append(BatchReprocessItemResult(id=doc_id, status="failed", detail="문서를 찾을 수 없습니다."))
+            continue
+        try:
+            await check_document_access(db, doc, current_user, min_role="editor")
+        except HTTPException as exc:
+            results.append(BatchReprocessItemResult(id=doc_id, status="failed", detail=str(exc.detail)))
+            continue
+
+        if doc.status != "FAILED" or not doc.active_run_id:
+            results.append(BatchReprocessItemResult(
+                id=doc_id, status="skipped",
+                detail=f"실패 상태의 문서만 재처리할 수 있습니다(현재 상태: {doc.status}).",
+            ))
+            continue
+
+        parent_run = await db.get(WorkflowRun, doc.active_run_id)
+        if parent_run is None:
+            results.append(BatchReprocessItemResult(
+                id=doc_id, status="failed", detail="원본 실행 기록을 찾을 수 없습니다.",
+            ))
+            continue
+
+        failed_step = await db.scalar(
+            select(WorkflowRunStep)
+            .where(WorkflowRunStep.run_id == parent_run.id, WorkflowRunStep.status == "FAILED")
+            .order_by(WorkflowRunStep.completed_at.desc())
+        )
+        if failed_step is None:
+            results.append(BatchReprocessItemResult(
+                id=doc_id, status="failed",
+                detail="실패한 블록을 찾을 수 없어 자동으로 재처리를 시작할 수 없습니다. 문서 상세 페이지에서 직접 재처리해 주세요.",
+            ))
+            continue
+
+        try:
+            start_block = await resolve_start_block(
+                db, parent_run.version_id, None, failed_step.block_instance_id,
+            )
+            new_run = await start_partial_reprocess(
+                db, doc, start_block, reason="실패 목록 일괄 재처리",
+            )
+            results.append(BatchReprocessItemResult(id=doc_id, status="queued", run_id=new_run.id))
+        except ReprocessError as exc:
+            results.append(BatchReprocessItemResult(id=doc_id, status="failed", detail=str(exc)))
+
+    return BatchReprocessResponse(results=results)
 
 
 @router.delete("/{document_id}")

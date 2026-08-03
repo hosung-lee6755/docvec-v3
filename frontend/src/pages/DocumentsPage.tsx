@@ -1,7 +1,7 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Upload, Trash2, Loader2, ArrowUp, ArrowDown, X } from 'lucide-react'
-import { useDocuments, useUploadDocument, useUploadZip, useDeleteDocument, useBatchDeleteDocuments, type DocumentSortBy, type SortOrder, type BulkUploadResponse } from '../hooks/useDocuments'
+import { Upload, Trash2, Loader2, ArrowUp, ArrowDown, X, RefreshCw } from 'lucide-react'
+import { useDocuments, useUploadDocument, useUploadZip, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, type DocumentSortBy, type SortOrder, type BulkUploadResponse } from '../hooks/useDocuments'
 import { useCollections } from '../hooks/useCollections'
 import { useWorkflowVersions, useWorkflows } from '../hooks/useWorkflows'
 import { STATUS_BADGE_CLASSES, STATUS_LABELS } from '../lib/documentStatus'
@@ -82,9 +82,11 @@ export default function DocumentsPage() {
   const uploadZip = useUploadZip()
   const deleteDoc = useDeleteDocument()
   const batchDelete = useBatchDeleteDocuments()
+  const batchReprocess = useBatchReprocessDocuments()
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
+  const [reprocessSummary, setReprocessSummary] = useState<string | null>(null)
   const { data: collectionsData } = useCollections(projectId)
   const selectedUploadCollection = collectionsData?.items.find((c) => c.id === uploadCollectionId)
   const { data: uploadProjectWorkflows } = useWorkflows(selectedUploadCollection?.project_id ?? null, 'PREPROCESS')
@@ -315,6 +317,29 @@ export default function DocumentsPage() {
           ) : (
             <>
               <button
+                disabled={batchReprocess.isPending}
+                onClick={() => {
+                  const ids = [...selectedIds]
+                  batchReprocess.mutate(ids, {
+                    onSuccess: (data) => {
+                      const queued = data.results.filter((r) => r.status === 'queued').length
+                      const skipped = data.results.filter((r) => r.status === 'skipped').length
+                      const failed = data.results.filter((r) => r.status === 'failed').length
+                      setReprocessSummary(
+                        `재처리 시작 ${queued}건` +
+                        (skipped ? `, 건너뜀 ${skipped}건(실패 상태 아님)` : '') +
+                        (failed ? `, 실패 ${failed}건` : ''),
+                      )
+                      setSelectedIds(new Set())
+                    },
+                  })
+                }}
+                className="krds-btn small tertiary"
+                style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
+              >
+                <RefreshCw size={14} /> {batchReprocess.isPending ? '재처리 요청 중...' : '선택 재처리'}
+              </button>
+              <button
                 onClick={() => setConfirmBulkDelete(true)}
                 className="krds-btn small tertiary"
                 style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', color: '#dc2626' }}
@@ -329,6 +354,25 @@ export default function DocumentsPage() {
               </button>
             </>
           )}
+        </div>
+      )}
+
+      {reprocessSummary && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          marginBottom: 'var(--space-3)', padding: 'var(--space-2) var(--space-4)',
+          background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 'var(--radius-md)',
+          fontSize: 14,
+        }}>
+          <span>{reprocessSummary}</span>
+          <button
+            onClick={() => setReprocessSummary(null)}
+            className="krds-btn xsmall tertiary"
+            style={{ display: 'flex', alignItems: 'center' }}
+            aria-label="닫기"
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
 

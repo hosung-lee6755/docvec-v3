@@ -611,3 +611,25 @@ export function useBatchDeleteDocuments() {
     },
   })
 }
+
+export interface BatchReprocessItemResult {
+  id: string
+  status: 'queued' | 'skipped' | 'failed'
+  run_id: string | null
+  detail: string | null
+}
+
+export function useBatchReprocessDocuments() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      const { data } = await apiClient.post<{ results: BatchReprocessItemResult[] }>(
+        '/documents/batch-reprocess', { ids },
+      )
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+    },
+  })
+}

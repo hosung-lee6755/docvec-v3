@@ -216,6 +216,46 @@ def test_terminal_block_completes_run_when_nothing_else_pending():
     assert run.completed_at is not None
 
 
+def test_terminal_block_flips_failed_document_back_to_indexed_when_run_is_still_active():
+    # A reprocess started on a FAILED document leaves doc.status literally
+    # "FAILED" for the whole run if nothing else updates it in the meantime
+    # (e.g. an analysis-tier start block with no _STATUS_FOR_BLOCK_TYPE
+    # mapping). The completion guard must key off "is this still the
+    # document's active run", not "doc.status != FAILED" — otherwise a
+    # genuinely successful reprocess never flips the document back to
+    # INDEXED (실측: 2026-08-03, documents 3bf3c8d4.../16e00066...).
+    from app.db.models.document import Document
+
+    run_id = str(uuid4())
+    source = MagicMock(id=uuid4())
+    run = MagicMock(id=run_id, status="RUNNING", document_id=uuid4())
+    doc = MagicMock(status="FAILED", active_run_id=run_id)
+
+    db = _mock_db(edges=[], run_step_count=0, get_map={WorkflowRun: run, Document: doc})
+    _advance(db, run_id, source, {})
+
+    assert run.status == "COMPLETED"
+    assert doc.status == "INDEXED"
+
+
+def test_terminal_block_does_not_flip_document_superseded_by_a_newer_run():
+    # A stale run finishing late after a newer reprocess has already taken
+    # over (active_run_id points elsewhere) must not resurrect a document
+    # that the newer run may have already failed again.
+    from app.db.models.document import Document
+
+    run_id = str(uuid4())
+    source = MagicMock(id=uuid4())
+    run = MagicMock(id=run_id, status="RUNNING", document_id=uuid4())
+    doc = MagicMock(status="FAILED", active_run_id=str(uuid4()))
+
+    db = _mock_db(edges=[], run_step_count=0, get_map={WorkflowRun: run, Document: doc})
+    _advance(db, run_id, source, {})
+
+    assert run.status == "COMPLETED"
+    assert doc.status == "FAILED"
+
+
 def test_terminal_block_does_not_complete_run_when_others_still_pending():
     run_id = str(uuid4())
     source = MagicMock(id=uuid4())

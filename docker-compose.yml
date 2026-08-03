@@ -236,6 +236,24 @@ services:
     depends_on:
       - api
 
+  # 외부 노출용 단일 진입점 — 공유기 포트포워딩은 443(그리고 http->https
+  # 리다이렉트용 80) 하나만 열면 된다. 도메인이 없어 Caddyfile은 자체 서명
+  # 인증서("tls internal")를 쓴다 — 방문자 브라우저에 "안전하지 않음" 경고가
+  # 뜨는 게 정상이며, 접속 자체는 암호화된다. postgres/redis/qdrant/minio/
+  # flower의 호스트 포트 매핑은 그대로 두되(로컬/LAN 개발 편의), 공유기에서는
+  # 이 서비스의 443/80 외 어떤 포트도 포워딩하면 안 된다.
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
 volumes:
   postgres_data:
   redis_data:
@@ -243,6 +261,8 @@ volumes:
   minio_data:
   backend_venv:
   model_cache:
+  caddy_data:
+  caddy_config:
 
 networks:
   default:
