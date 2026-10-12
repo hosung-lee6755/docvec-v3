@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate, useParams, useBlocker } from 'react-router-dom'
 import {
   AlertTriangle, History, Info, Loader2, Play, Save, Trash2, UploadCloud,
 } from 'lucide-react'
@@ -38,24 +38,50 @@ export default function WorkflowEditorPage() {
     versionsData?.items[0]
   const versionId = editableVersion?.id ?? null
 
-  const { data: graph } = useWorkflowGraph(workflowId ?? null, versionId)
+  const { data: graph, isLoading: graphLoading, error: graphError } = useWorkflowGraph(workflowId ?? null, versionId)
   const saveGraph = useSaveWorkflowGraph()
   const createDraftVersion = useCreateDraftVersion()
   const deleteVersion = useDeleteVersion()
   const publishVersion = usePublishVersion()
   const [confirmDeleteVersion, setConfirmDeleteVersion] = useState(false)
   const [showRunModal, setShowRunModal] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const [blocks, setBlocks] = useState<WorkflowBlock[]>([])
   const [edges, setEdges] = useState<WorkflowEdgeType[]>([])
+  const [isDirty, setIsDirty] = useState(false)
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [validationErrors, setValidationErrors] = useState<GraphValidationError[]>([])
+  const deleteConfirmRef = useRef<HTMLDivElement>(null)
 
+  // Load graph only if not dirty; never overwrite unsaved edits
   useEffect(() => {
-    setBlocks(graph?.blocks ?? [])
-    setEdges(graph?.edges ?? [])
-  }, [graph])
+    if (!isDirty) {
+      setBlocks(graph?.blocks ?? [])
+      setEdges(graph?.edges ?? [])
+    }
+  }, [graph, isDirty])
+
+  // Block navigation when dirty
+  useBlocker(() => {
+    if (isDirty && !window.confirm('저장하지 않은 변경사항이 있습니다. 페이지를 떠나시겠습니까?')) {
+      return true
+    }
+    return false
+  })
+
+  // beforeunload warning
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [isDirty])
 
   // Selections and stale validation errors don't carry over across versions.
   useEffect(() => {
@@ -69,18 +95,24 @@ export default function WorkflowEditorPage() {
 
   const handleAddBlock = (blockType: string) => {
     if (isReadOnly) return
-    const newBlock: WorkflowBlock = {
-      id: `temp-${crypto.randomUUID()}`,
-      block_type: blockType,
-      label: null,
-      position: { x: 80 + blocks.length * 40, y: 80 + blocks.length * 40 },
-      config: {},
-    }
-    setBlocks((prev) => [...prev, newBlock])
+    setBlocks((prev) => {
+      const newBlock: WorkflowBlock = {
+        id: `temp-${crypto.randomUUID()}`,
+        block_type: blockType,
+        label: null,
+        // Use current length from state to avoid stale closure
+        position: { x: 80 + prev.length * 40, y: 80 + prev.length * 40 },
+        config: {},
+      }
+      return [...prev, newBlock]
+    })
+    setIsDirty(true)
   }
 
   const handleMoveBlock = (blockId: string, position: { x: number; y: number }) => {
+    if (isReadOnly) return
     setBlocks((prev) => prev.map((b) => (b.id === blockId ? { ...b, position } : b)))
+    setIsDirty(true)
   }
 
   const handleConnect = (fromBlockId: string, toBlockId: string) => {
@@ -92,6 +124,7 @@ export default function WorkflowEditorPage() {
       condition: null,
     }
     setEdges((prev) => [...prev, newEdge])
+    setIsDirty(true)
   }
 
   const handleDeleteBlock = (blockId: string) => {
@@ -99,12 +132,14 @@ export default function WorkflowEditorPage() {
     setBlocks((prev) => prev.filter((b) => b.id !== blockId))
     setEdges((prev) => prev.filter((e) => e.from_block_id !== blockId && e.to_block_id !== blockId))
     setSelectedBlockId((prev) => (prev === blockId ? null : prev))
+    setIsDirty(true)
   }
 
   const handleDeleteEdge = (edgeId: string) => {
     if (isReadOnly) return
     setEdges((prev) => prev.filter((e) => e.id !== edgeId))
     setSelectedEdgeId((prev) => (prev === edgeId ? null : prev))
+    setIsDirty(true)
   }
 
   const handleSelectBlock = (blockId: string | null) => {
@@ -119,32 +154,69 @@ export default function WorkflowEditorPage() {
 
   const handleBlockChange = (blockId: string, updates: { label?: string; config?: Record<string, unknown> }) => {
     setBlocks((prev) => prev.map((b) => (b.id === blockId ? { ...b, ...updates } : b)))
+    setIsDirty(true)
   }
 
   const handleSave = async () => {
     if (!workflowId || !versionId) return
-    const result = await saveGraph.mutateAsync({ workflowId, versionId, graph: { blocks, edges } })
-    setValidationErrors(result.validation_errors)
+    try {
+      setErrorMessage(null)
+      const result = await saveGraph.mutateAsync({ workflowId, versionId, graph: { blocks, edges } })
+      setValidationErrors(result.validation_errors)
+      if (result.validation_errors.length === 0) {
+        setIsDirty(false)
+      }
+      return result
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '저장에 실패했습니다'
+      setErrorMessage(message)
+      throw err
+    }
   }
 
   const handleNewDraft = async () => {
     if (!workflowId) return
-    const created = await createDraftVersion.mutateAsync(workflowId)
-    setSelectedVersionId(created.id)
+    try {
+      setErrorMessage(null)
+      const created = await createDraftVersion.mutateAsync(workflowId)
+      setSelectedVersionId(created.id)
+      setIsDirty(false)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '버전 생성에 실패했습니다'
+      setErrorMessage(message)
+    }
   }
 
   const handleDeleteVersion = async () => {
     if (!workflowId || !versionId) return
-    await deleteVersion.mutateAsync({ workflowId, versionId })
-    // Fall back to auto-pick (latest draft, else latest version).
-    setSelectedVersionId(null)
-    setConfirmDeleteVersion(false)
+    try {
+      setErrorMessage(null)
+      await deleteVersion.mutateAsync({ workflowId, versionId })
+      // Fall back to auto-pick (latest draft, else latest version).
+      setSelectedVersionId(null)
+      setConfirmDeleteVersion(false)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '버전 삭제에 실패했습니다'
+      setErrorMessage(message)
+    }
   }
 
   const handlePublish = async () => {
     if (!workflowId || !versionId) return
-    await handleSave()
-    await publishVersion.mutateAsync({ workflowId, versionId })
+    try {
+      setErrorMessage(null)
+      const saveResult = await handleSave()
+      // Do not publish if there are validation errors
+      if (saveResult && saveResult.validation_errors.length > 0) {
+        setErrorMessage('검증 오류가 있어 게시할 수 없습니다')
+        return
+      }
+      await publishVersion.mutateAsync({ workflowId, versionId })
+      setIsDirty(false)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '게시에 실패했습니다'
+      setErrorMessage(message)
+    }
   }
 
 
@@ -181,23 +253,41 @@ export default function WorkflowEditorPage() {
           )}
           {editableVersion && (versionsData?.items.length ?? 0) > 1 && (
             confirmDeleteVersion ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+              <div
+                ref={deleteConfirmRef}
+                role="alert"
+                style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+              >
                 <span style={{ fontSize: 12, color: '#dc2626' }}>
                   v{editableVersion.version_number}을(를) 삭제할까요?
                 </span>
                 <button
-                  type="button" onClick={handleDeleteVersion} disabled={deleteVersion.isPending}
+                  type="button"
+                  onClick={handleDeleteVersion}
+                  disabled={deleteVersion.isPending}
                   className="krds-btn xsmall primary"
-                >확인</button>
+                  autoFocus
+                >
+                  확인
+                </button>
                 <button
-                  type="button" onClick={() => setConfirmDeleteVersion(false)}
+                  type="button"
+                  onClick={() => setConfirmDeleteVersion(false)}
                   className="krds-btn xsmall secondary"
-                >취소</button>
+                >
+                  취소
+                </button>
               </div>
             ) : (
               <button
                 type="button"
-                onClick={() => setConfirmDeleteVersion(true)}
+                onClick={() => {
+                  setConfirmDeleteVersion(true)
+                  // Focus will be moved to the confirm dialog after rendering
+                  setTimeout(() => {
+                    deleteConfirmRef.current?.focus()
+                  }, 0)
+                }}
                 title="이 버전 삭제"
                 aria-label="이 버전 삭제"
                 className="krds-btn text xsmall icon-btn danger"
@@ -234,15 +324,21 @@ export default function WorkflowEditorPage() {
           ) : (
             <>
               <button
-                type="button" onClick={handleSave} disabled={saveGraph.isPending}
-                className="krds-btn small secondary" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+                type="button"
+                onClick={handleSave}
+                disabled={saveGraph.isPending || graphLoading || !!graphError}
+                className="krds-btn small secondary"
+                style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
               >
                 {saveGraph.isPending ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={14} />}
                 저장
               </button>
               <button
-                type="button" onClick={handlePublish} disabled={publishVersion.isPending}
-                className="krds-btn small secondary" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+                type="button"
+                onClick={handlePublish}
+                disabled={publishVersion.isPending || graphLoading || !!graphError}
+                className="krds-btn small secondary"
+                style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
               >
                 {publishVersion.isPending ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <UploadCloud size={14} />}
                 게시
@@ -250,9 +346,12 @@ export default function WorkflowEditorPage() {
             </>
           )}
           <button
-            type="button" onClick={() => setShowRunModal(true)} disabled={!isReadOnly}
+            type="button"
+            onClick={() => setShowRunModal(true)}
+            disabled={!isReadOnly}
             title={isReadOnly ? undefined : '게시된 버전만 실행할 수 있습니다'}
-            className="krds-btn small primary" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+            className="krds-btn small primary"
+            style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
           >
             <Play size={14} />
             실행
@@ -260,25 +359,60 @@ export default function WorkflowEditorPage() {
         </div>
       </div>
 
+      {graphError && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+            padding: 'var(--space-2) var(--space-3)', background: '#fef2f2',
+            border: '1px solid #fecaca', color: '#b91c1c',
+            borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
+          }}
+        >
+          <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+          워크플로우를 로드할 수 없습니다. 다시 시도해주세요.
+        </div>
+      )}
+
       {isReadOnly && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-          padding: 'var(--space-2) var(--space-3)', background: '#eff6ff',
-          border: '1px solid #bfdbfe', color: '#1d4ed8',
-          borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
-        }}>
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+            padding: 'var(--space-2) var(--space-3)', background: '#eff6ff',
+            border: '1px solid #bfdbfe', color: '#1d4ed8',
+            borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
+          }}
+        >
           <Info size={14} style={{ flexShrink: 0 }} />
           게시된 버전은 읽기 전용입니다. 블록·연결을 추가하거나 삭제하려면 "새 버전으로 저장"을 눌러 초안을 만드세요.
         </div>
       )}
 
+      {errorMessage && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+            padding: 'var(--space-2) var(--space-3)', background: '#fef2f2',
+            border: '1px solid #fecaca', color: '#b91c1c',
+            borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
+          }}
+        >
+          <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+          {errorMessage}
+        </div>
+      )}
+
       {validationErrors.length > 0 && (
-        <div style={{
-          display: 'flex', flexDirection: 'column', gap: 'var(--space-1)',
-          padding: 'var(--space-2) var(--space-3)', background: '#fef2f2',
-          border: '1px solid #fecaca', color: '#b91c1c',
-          borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
-        }}>
+        <div
+          role="alert"
+          style={{
+            display: 'flex', flexDirection: 'column', gap: 'var(--space-1)',
+            padding: 'var(--space-2) var(--space-3)', background: '#fef2f2',
+            border: '1px solid #fecaca', color: '#b91c1c',
+            borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
+          }}
+        >
           {validationErrors.map((err, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
               <AlertTriangle size={14} style={{ flexShrink: 0 }} /> {err.message}
@@ -287,11 +421,42 @@ export default function WorkflowEditorPage() {
         </div>
       )}
 
+      {graphLoading && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+            padding: 'var(--space-2) var(--space-3)', background: '#f3f4f6',
+            border: '1px solid #d1d5db', color: '#374151',
+            borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
+          }}
+        >
+          <Loader2 size={14} style={{ flexShrink: 0, animation: 'spin 1s linear infinite' }} />
+          워크플로우를 로드 중입니다...
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr 280px', gap: 'var(--space-3)', flex: 1, minHeight: 500 }}>
-        <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'auto', background: 'var(--color-surface)' }}>
+        <div
+          style={{
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius-lg)',
+            overflow: 'auto',
+            background: 'var(--color-surface)',
+            opacity: graphLoading || !!graphError ? 0.5 : 1,
+            pointerEvents: graphLoading || !!graphError ? 'none' : 'auto',
+          }}
+        >
           <BlockPalette onAddBlock={handleAddBlock} workflowKind={workflow?.kind} />
         </div>
-        <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+        <div
+          style={{
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius-lg)',
+            overflow: 'hidden',
+            opacity: graphLoading || !!graphError ? 0.5 : 1,
+            pointerEvents: graphLoading || !!graphError ? 'none' : 'auto',
+          }}
+        >
           <WorkflowCanvas
             blocks={blocks}
             edges={edges}

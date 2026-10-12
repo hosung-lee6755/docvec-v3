@@ -8,6 +8,7 @@ into one static chain up front.
 """
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime
 from uuid import uuid4
@@ -15,6 +16,8 @@ from uuid import uuid4
 from app.pipeline.blocks.base import BlockContext, BlockExecutionError
 from app.pipeline.blocks.registry import BLOCK_REGISTRY
 from app.pipeline.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 # 대용량 산출물은 인라인 대신 MinIO artifacts 버킷에 저장 (통합 설계서 §2.3).
 _ARTIFACT_INLINE_THRESHOLD_BYTES = 16_000
@@ -39,12 +42,20 @@ _STATUS_FOR_BLOCK_TYPE: dict[str, str] = {
 }
 
 
+# GPU 모델을 쓰는 블록: rag_store는 임베딩, 분석 블록 넷은 로컬 LLM(qwen2.5-3b)을 호출하고,
+# output은 요약을 저장한 뒤 요약 인덱스용으로 BGE-M3 임베딩을 호출한다.
+_GPU_BLOCK_TYPES = frozenset({
+    "rag_store", "summarize", "extract_keywords", "classify", "extract_entities", "output",
+})
+
+
 def step_queue_for_block(block) -> str:
-    """어느 블록이 GPU 임베딩 모델을 쓰는지에 따라 실행 큐를 나눈다 — rag_store는
-    항상, chunk_split은 strategy=semantic일 때만 embed()를 호출한다. 이 블록들을
-    별도의 'embed' 큐로 보내면 worker-embed 컨테이너(concurrency=1)가 순차 실행해,
-    GPU 메모리 하나를 여러 워커 슬롯이 동시에 점유해 서로 밀어내는 경합을 막는다."""
-    if block.block_type == "rag_store":
+    """어느 블록이 GPU 모델(임베딩·로컬 LLM)을 쓰는지에 따라 실행 큐를 나눈다 —
+    rag_store, 분석 블록(요약/키워드/분류/개체), output(요약 인덱스)은 항상, chunk_split은
+    strategy=semantic일 때만 모델을 호출한다. 이 블록들을 별도의 'embed' 큐로 보내면 worker-embed
+    컨테이너(concurrency=1)가 순차 실행해, 프로세스마다 모델 사본을 올려 GPU 메모리 하나를
+    여러 워커 슬롯이 동시에 점유하며 서로 밀어내는 경합(CUDA launch failure)을 막는다."""
+    if block.block_type in _GPU_BLOCK_TYPES:
         return "embed"
     if block.block_type == "chunk_split" and (block.config or {}).get("strategy") == "semantic":
         return "embed"
@@ -138,7 +149,11 @@ def _compute_cache_key(
     config: dict,
     dictionary_version: int | None = None,
     skip_review: bool = False,
+    file_hash: str | None = None,
 ) -> str:
+    # file_hash(원본 체크섬)는 같은 document_id의 원본이 교체돼도(재업로드/복원)
+    # 이전 내용의 캐시 출력을 재사용하지 않도록 키에 섞는다 — 엔트리 블록은 상류
+    # 출력이 없어 input_hash만으로는 원본 변경을 감지할 수 없다.
     # document_id is required even though most blocks derive their output from
     # upstream_outputs: an entry block (e.g. file_validate) has NO upstream, so
     # its input_hash is identical ({} serialized) across every document — without
@@ -149,7 +164,7 @@ def _compute_cache_key(
     skip_review_part = skip_review if block_type in _REVIEW_GATED_BLOCK_TYPES else None
     return _hash_bytes(
         f"{document_id}:{input_hash}:{block_type}:{block_version}:{config_hash}:"
-        f"{dict_version_part}:{skip_review_part}".encode()
+        f"{dict_version_part}:{skip_review_part}:{file_hash}".encode()
     )
 
 
@@ -203,32 +218,46 @@ def _localize_error_message(exc: Exception) -> str:
     return f"처리 중 예기치 않은 오류가 발생했습니다. 문제가 반복되면 관리자에게 문의하세요. [{detail}]"
 
 
+_LIVE_RUN_STATUSES = ("QUEUED", "RUNNING", "WAITING_REVIEW")
+
+
 def _fail_document(db, run, error_message: str) -> None:
     """Mirrors the retired fixed pipeline's failure behavior (parse_document/
     continue_processing always set Document.status="FAILED" on error) so the
-    document list/detail UI still surfaces workflow-driven failures."""
+    document list/detail UI still surfaces workflow-driven failures.
+
+    Defect 3: Guard active_run_id 갱신 — 늦게 도착한 이전 run이 최신 run을
+    덮어쓰면 안 됨. _maybe_complete_run과 동일한 guard를 적용."""
     from app.db.models.document import Document
+
+    from app.db.models.workflow_run import WorkflowRun
 
     if not run.document_id:
         return
     doc = db.get(Document, run.document_id)
-    if doc is not None:
-        doc.status = "FAILED"
-        doc.error_message = error_message[:500]
-        # AUTO_ANALYSIS run이 실패했을 때도 active_run_id는 이 run을 가리켜야
-        # 한다 — _maybe_trigger_analysis가 그 run을 만들 때 이미 그렇게
-        # 해두지만(2026-08-03 수정), 그 이전에 생성된 run이거나 다른 경로로
-        # active_run_id가 어긋난 경우까지 실패 확정 시점에 한 번 더 바로잡아
-        # "이 문서의 최신 run"이라는 불변식을 지킨다.
-        doc.active_run_id = run.id
+    if doc is None:
+        return
+    # 문서가 다른 run을 아직 진행 중으로 가리키면(재처리 등) 늦게 실패한 옛 run이
+    # 문서 상태/오류/active_run_id 어느 것도 건드리면 안 된다 (Defect 3).
+    # 가리키는 run이 이미 끝났거나 사라졌다면 stale 포인터이므로 이 run으로 바로잡는다
+    # (AUTO_ANALYSIS run 실패 시에도 active_run_id가 실패한 run을 가리켜야 한다).
+    if doc.active_run_id is not None and str(doc.active_run_id) != str(run.id):
+        other = db.get(WorkflowRun, doc.active_run_id)
+        if other is not None and other.status in _LIVE_RUN_STATUSES:
+            return
+    doc.status = "FAILED"
+    doc.error_message = error_message[:500]
+    doc.active_run_id = run.id
 
 
-def _find_paused_step(db, run_id: str):
+def _find_paused_step(db, run_id: str) -> "WorkflowRunStep | None":
     """Finds the step a WAITING_REVIEW run halted at — the run stops
     _advance() the instant a block requests review, so exactly one COMPLETED
     step exists whose taken outgoing edges point at blocks with no step row
     yet (every other completed step already had _advance() run for it,
-    which always creates a step row for each taken edge's target)."""
+    which always creates a step row for each taken edge's target).
+
+    Defect 14: 타입 힌트 추가."""
     from app.db.models.workflow import WorkflowEdge
     from app.db.models.workflow_run import WorkflowRunStep
 
@@ -261,6 +290,11 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
         block = db.get(WorkflowBlockInstance, block_instance_id)
         if run is None or block is None:
             return {"status": "NOT_FOUND"}
+
+        # 이미 FAILED/CANCELLED인 run은 더 이상 step을 실행하지 않는다
+        # (Defect 4: 단말 상태 확인).
+        if run.status in ("FAILED", "CANCELLED"):
+            return {"status": "SKIPPED"}
 
         if run.status == "QUEUED":
             run.status = "RUNNING"
@@ -311,11 +345,13 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
 
         block_cls = BLOCK_REGISTRY[block.block_type]
         block_instance = block_cls()
+        cache_document = db.get(Document, run.document_id) if run.document_id else None
         cache_key = _compute_cache_key(
             str(run.document_id) if run.document_id else None,
             step.input_hash, block.block_type, block_instance.block_version, block.config or {},
             dictionary_version=run.dictionary_version,
             skip_review=bool(run.skip_review),
+            file_hash=cache_document.file_hash if cache_document is not None else None,
         )
         cache_entry = (
             db.get(BlockExecutionCache, cache_key)
@@ -383,6 +419,8 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
         return {"status": "COMPLETED", "output": resolved_output}
 
     except BlockExecutionError as exc:
+        # Defect 2: PendingRollbackError 방지를 위해 먼저 rollback 수행
+        db.rollback()
         step = db.query(WorkflowRunStep).filter(
             WorkflowRunStep.run_id == run_id,
             WorkflowRunStep.block_instance_id == block_instance_id,
@@ -390,7 +428,9 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
         retry_count = int((block.config or {}).get("retryCount", 2)) if block is not None else 2
         if step is not None:
             step.error_code = exc.error_code
-            step.completed_at = datetime.utcnow()
+            # Defect 7: retry 중에는 completed_at을 설정하지 않음 — status가 여전히 RUNNING이어야 함
+            if exc.permanent or self.request.retries >= retry_count:
+                step.completed_at = datetime.utcnow()
         if not exc.permanent and self.request.retries < retry_count:
             db.commit()
             raise self.retry(exc=exc, max_retries=retry_count)
@@ -407,6 +447,8 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
         raise
 
     except Exception as exc:
+        # Defect 2: PendingRollbackError 방지를 위해 먼저 rollback 수행
+        db.rollback()
         step = db.query(WorkflowRunStep).filter(
             WorkflowRunStep.run_id == run_id,
             WorkflowRunStep.block_instance_id == block_instance_id,
@@ -423,6 +465,10 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
             _fail_document(db, run, _localize_error_message(exc))
         db.commit()
         raise
+
+    finally:
+        # Defect 1: 연결 풀 누수 방지 — 모든 경로에서 db 세션 반환
+        db.close()
 
 
 def _maybe_trigger_analysis(db, run) -> None:
@@ -471,6 +517,11 @@ def _maybe_trigger_analysis(db, run) -> None:
         status="QUEUED", trigger="AUTO_ANALYSIS", dictionary_version=run.dictionary_version,
     )
     db.add(analysis_run)
+    # documents.active_run_id ↔ workflow_runs.document_id 는 외래키가 순환이라, run을
+    # 먼저 DB에 내보내지 않으면 작업 단위가 documents UPDATE를 workflow_runs INSERT보다
+    # 앞세워 fk_documents_active_run_id 위반이 난다(컬렉션에 기본 분석 워크플로우를
+    # 지정한 업로드 15건 중 12건이 이 경로로 FAILED). reprocess_service와 같은 순서.
+    db.flush()
     # Analysis block types (classify/extract_entities/.../summarize) aren't in
     # _STATUS_FOR_BLOCK_TYPE, so nothing else would move the document off its
     # stale "INDEXED" label for the run's whole duration. The run's
@@ -506,39 +557,80 @@ def _maybe_trigger_analysis(db, run) -> None:
         )
 
 
-def _advance(db, run_id: str, block, output: dict) -> None:
+def _advance(
+    db, run_id: str, block: "WorkflowBlockInstance | None", output: dict,
+    only_targets: "set | None" = None,
+) -> None:
     """Resolve `block`'s outgoing edges and enqueue whatever should run next,
-    or complete the run if `block` was terminal."""
+    or complete the run if `block` was terminal.
+
+    `only_targets`: 주어지면 그 대상 블록으로 가는 엣지만 처리한다. sweeper 의 재디스패치가
+    유실된 가지만 다시 낼 때 쓴다 — 이미 처리된 엣지까지 다시 훑으면 merge 카운터가 중복
+    증가해 merge 가 업스트림이 끝나기 전에 실행된다.
+
+    Defect 14: 타입 힌트 추가."""
     from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
     from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 
+    if block is None:
+        return
+
     run = db.get(WorkflowRun, run_id)
+
+    # Defect 4: 단말 상태인 run은 더 진행하지 않음
+    if run is not None and run.status in ("FAILED", "CANCELLED"):
+        return
+
     timeout_overrides = (run.timeout_overrides or {}) if run else {}
 
     outgoing = db.query(WorkflowEdge).filter(WorkflowEdge.from_block_id == block.id).all()
-    taken_edges = [e for e in outgoing if _evaluate_condition(e.condition, output)]
+    taken_edges = [
+        e for e in outgoing
+        if _evaluate_condition(e.condition, output)
+        and (only_targets is None or e.to_block_id in only_targets)
+    ]
 
     for edge in taken_edges:
         target = db.get(WorkflowBlockInstance, edge.to_block_id)
+        # Defect 4: target이 None이 아닌지 확인 (타입 힌트로도 보강 필요)
+        if target is None:
+            continue
         timeout_seconds = timeout_overrides.get(target.block_type) or (target.config or {}).get("timeoutSeconds", 1800)
         if target.block_type == "merge":
             incoming_to_target = db.query(WorkflowEdge).filter(
                 WorkflowEdge.to_block_id == target.id
             ).count()
-            target_step = db.query(WorkflowRunStep).filter(
-                WorkflowRunStep.run_id == run_id,
-                WorkflowRunStep.block_instance_id == target.id,
-            ).first()
-            if target_step is None:
-                target_step = WorkflowRunStep(
-                    run_id=run_id, block_instance_id=target.id, status="PENDING"
+            # Defect 5: 두 업스트림이 동시에 도착해도 step 행은 (run_id,
+            # block_instance_id) 유니크 제약 + ON CONFLICT DO NOTHING으로 한 번만
+            # 만들어지고, 카운터는 원자적 UPDATE ... RETURNING으로 정확히 한 번씩
+            # 증가한다. 마지막 업스트림만 incoming_to_target에 도달해 dispatch한다.
+            from sqlalchemy import update
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+            db.execute(
+                pg_insert(WorkflowRunStep)
+                .values(
+                    id=uuid4(), run_id=run_id, block_instance_id=target.id,
+                    status="PENDING", completed_incoming_edges=0,
+                    created_at=datetime.utcnow(),
                 )
-                db.add(target_step)
-            # `or 0`: the column default only lands on flush, so a freshly
-            # constructed step still has None here.
-            target_step.completed_incoming_edges = (target_step.completed_incoming_edges or 0) + 1
+                .on_conflict_do_nothing(
+                    constraint="uq_workflow_run_steps_run_id_block_instance_id"
+                )
+            )
+            updated_count = db.execute(
+                update(WorkflowRunStep)
+                .where(
+                    WorkflowRunStep.run_id == run_id,
+                    WorkflowRunStep.block_instance_id == target.id,
+                )
+                .values(completed_incoming_edges=WorkflowRunStep.completed_incoming_edges + 1)
+                .returning(WorkflowRunStep.completed_incoming_edges)
+            ).scalar()
             db.commit()
-            if target_step.completed_incoming_edges >= incoming_to_target:
+
+            # 업데이트된 값을 확인해서 dispatch 결정
+            if updated_count is not None and updated_count >= incoming_to_target:
                 run_workflow_step.apply_async(
                     args=[run_id, str(target.id)], time_limit=timeout_seconds,
                     queue=step_queue_for_block(target),
@@ -583,8 +675,23 @@ def _maybe_complete_run(db, run_id: str) -> None:
     if run is None or run.status != "RUNNING":
         return
 
+    # 조건부 UPDATE: 중복 디스패치된 스텝을 처리한 두 워커가 모두 RUNNING 으로 읽어도 상태 전이는
+    # 한 번만 성공한다. 단순 대입이면 둘 다 _maybe_trigger_analysis 를 불러 AUTO_ANALYSIS run 이
+    # 둘 생기고 나중 것이 active_run_id 를 덮어쓴다.
+    from sqlalchemy import update
+
+    completed_at = datetime.utcnow()
+    claimed = db.execute(
+        update(WorkflowRun)
+        .where(WorkflowRun.id == run_id, WorkflowRun.status == "RUNNING")
+        .values(status="COMPLETED", completed_at=completed_at)
+    )
+    if claimed.rowcount == 0:
+        db.rollback()
+        return
+    # 선점한 행과 메모리 객체를 같은 값으로 맞춘다(아래 문서 갱신·분석 트리거가 이 객체를 쓴다).
     run.status = "COMPLETED"
-    run.completed_at = datetime.utcnow()
+    run.completed_at = completed_at
     if run.document_id:
         # rag_store normally sets Document.status="INDEXED" itself, but that
         # side effect is skipped whenever rag_store is served from
@@ -609,6 +716,8 @@ def _maybe_complete_run(db, run_id: str) -> None:
         doc = db.get(Document, run.document_id)
         if doc is not None and str(doc.active_run_id) == str(run.id):
             doc.status = "INDEXED"
+            # 실패 후 재처리가 성공한 경우 이전 실패 사유가 INDEXED 문서에 남지 않게 지운다.
+            doc.error_message = None
             doc.updated_at = datetime.utcnow()
     db.commit()
     _maybe_trigger_analysis(db, run)
@@ -641,6 +750,111 @@ def resume_workflow_run(self, run_id: str) -> dict:
         db.close()
 
 
+# 마지막 스텝 활동 이후 이 시간이 지나도 진행 중인 스텝이 없으면 다음 스텝 메시지가
+# 유실된 것으로 본다. embed 큐는 concurrency=1이라 대기열이 수 분 쌓일 수 있어, 정상적인
+# 대기를 유실로 오판하지 않도록 넉넉히 잡는다.
+_ORPHAN_RUN_GRACE_SECONDS = 600
+
+
+def _redispatch_orphaned_run(db, run) -> bool:
+    """워커가 재시작/크래시하면 방금 끝난 스텝의 다음 스텝 메시지가 브로커에서 유실될 수
+    있다(실측: worker-embed 재시작 후 요약만 끝난 분석 run 4건과 임베딩 중이던 문서가
+    RUNNING에 영구히 멈춤). 이 경우 RUNNING 스텝이 없어 타임아웃 판정에 걸리지 않으므로,
+    진행 중인 스텝이 없고 마지막 활동이 오래된 run은 완료된 스텝에서 다음 스텝을 다시 낸다.
+
+    다음 스텝의 PENDING 행을 먼저 만들어 두므로(생성 시각이 곧 마지막 디스패치 시각이다) 같은
+    run이 매 sweep마다 다시 디스패치되지 않는다. 재디스패치한 메시지까지 유실돼 PENDING만
+    남은 경우(merge가 아닌 스텝)에도 그 시각이 유예시간을 넘기면 같은 스텝을 다시 낸다.
+    RUNNING 스텝이 있으면 타임아웃 판정이 맡으므로 이 함수는 건너뛴다."""
+    from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
+    from app.db.models.workflow_run import WorkflowRunStep
+    from app.services.reprocess_service import _seconds_since
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    steps = db.query(WorkflowRunStep).filter(WorkflowRunStep.run_id == run.id).all()
+    if not steps or any(s.status == "RUNNING" for s in steps):
+        return False
+    idle_seconds = min(
+        _seconds_since(moment)
+        for s in steps
+        for moment in (s.completed_at, s.started_at, s.created_at)
+        if moment is not None
+    )
+    if idle_seconds <= _ORPHAN_RUN_GRACE_SECONDS:
+        return False
+
+    stale_pending = []
+    for step in steps:
+        if step.status != "PENDING":
+            continue
+        block = db.get(WorkflowBlockInstance, step.block_instance_id)
+        # merge의 PENDING은 다른 업스트림을 기다리는 정상 상태라 단독으로 다시 내지 않는다.
+        if block is not None and block.block_type != "merge":
+            stale_pending.append((step, block))
+
+    existing_block_ids = {s.block_instance_id for s in steps}
+    to_advance = []
+    for step in steps:
+        if step.status != "COMPLETED":
+            continue
+        block = db.get(WorkflowBlockInstance, step.block_instance_id)
+        if block is None:
+            continue
+        output = _resolve_output(step.output)
+        edges = db.query(WorkflowEdge).filter(WorkflowEdge.from_block_id == block.id).all()
+        missing_targets = [
+            e.to_block_id for e in edges
+            if _evaluate_condition(e.condition, output) and e.to_block_id not in existing_block_ids
+        ]
+        if missing_targets:
+            to_advance.append((block, output, missing_targets))
+    if not to_advance and not stale_pending:
+        # 이을 다음 스텝도, 다시 낼 스텝도 없다. 모든 스텝이 끝났는데 마지막 스텝 직후 워커가 죽어
+        # 완료 처리(_maybe_complete_run)만 유실된 경우라면 run 을 완료로 닫는다. 진행 중인 스텝이
+        # 남아 있으면 _maybe_complete_run 이 아무것도 하지 않는다.
+        _maybe_complete_run(db, str(run.id))
+        db.refresh(run)
+        return run.status == "COMPLETED"
+
+    for _block, _output, missing_targets in to_advance:
+        for target_id in missing_targets:
+            db.execute(
+                pg_insert(WorkflowRunStep)
+                .values(
+                    id=uuid4(), run_id=run.id, block_instance_id=target_id,
+                    status="PENDING", completed_incoming_edges=0, created_at=datetime.utcnow(),
+                )
+                .on_conflict_do_nothing(constraint="uq_workflow_run_steps_run_id_block_instance_id")
+            )
+    # PENDING 행의 created_at이 곧 마지막 디스패치 시각이다 — 다시 내기 전에 갱신해 두어야
+    # 다음 sweep이 같은 스텝을 또 내지 않는다.
+    for step, _block in stale_pending:
+        step.created_at = datetime.utcnow()
+    db.commit()
+
+    for block, output, missing_targets in to_advance:
+        _advance(db, str(run.id), block, output, only_targets=set(missing_targets))
+    timeout_overrides = run.timeout_overrides or {}
+    for _step, block in stale_pending:
+        timeout_seconds = timeout_overrides.get(block.block_type) or (block.config or {}).get("timeoutSeconds", 1800)
+        run_workflow_step.apply_async(
+            args=[str(run.id), str(block.id)], time_limit=timeout_seconds,
+            queue=step_queue_for_block(block),
+        )
+    return True
+
+
+def _try_redispatch(db, run) -> bool:
+    """run 하나의 재디스패치 실패(artifact 읽기 실패, 브로커 장애 등)가 같은 sweep 의 나머지 run
+    정리를 막지 않도록 격리한다. 실패한 run 은 롤백하고 기록만 남겨, 다음 sweep 에서 다시 시도한다."""
+    try:
+        return _redispatch_orphaned_run(db, run)
+    except Exception:  # noqa: BLE001 — 한 run 의 실패가 전체 sweep 을 중단시키면 안 된다
+        db.rollback()
+        logger.exception("고아 run 재디스패치 실패: run_id=%s", run.id)
+        return False
+
+
 @celery_app.task(name="tasks.sweep_stuck_workflow_runs", queue="normal")
 def sweep_stuck_workflow_runs() -> dict:
     """Celery beat이 주기적으로 호출해, 아무도 문서 상세 페이지를 열어보지
@@ -659,9 +873,11 @@ def sweep_stuck_workflow_runs() -> dict:
     from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
     from app.db.session import get_sync_db
     from app.services.reprocess_service import _TIMEOUT_GRACE_SECONDS, _seconds_since
+    from sqlalchemy import update
 
     db = get_sync_db()
     swept_run_ids = []
+    redispatched_run_ids = []
     try:
         running_runs = db.query(WorkflowRun).filter(WorkflowRun.status == "RUNNING").all()
         for run in running_runs:
@@ -671,6 +887,8 @@ def sweep_stuck_workflow_runs() -> dict:
                 WorkflowRunStep.started_at.isnot(None),
             ).first()
             if stuck_step is None:
+                if _try_redispatch(db, run):
+                    redispatched_run_ids.append(str(run.id))
                 continue
 
             block = db.get(WorkflowBlockInstance, stuck_step.block_instance_id)
@@ -686,16 +904,39 @@ def sweep_stuck_workflow_runs() -> dict:
                 f"'{block_type or stuck_step.block_instance_id}' 처리 시간 제한({timeout_seconds}초)을 "
                 "초과하여 작업이 중단되었습니다. 필요 시 시간 제한을 늘려 재처리할 수 있습니다."
             )
-            stuck_step.status = "FAILED"
-            stuck_step.error_code = "TIMEOUT_EXCEEDED"
-            stuck_step.error_message = message
-            stuck_step.completed_at = datetime.utcnow()
-            run.status = "FAILED"
-            run.error_message = message
-            run.completed_at = datetime.utcnow()
-            _fail_document(db, run, message)
-            db.commit()
-            swept_run_ids.append(str(run.id))
-        return {"swept_run_ids": swept_run_ids}
+
+            # Defect 6: 조건부 UPDATE 사용 — 동시에 진행 중인 step을 덮어쓰지 않음.
+            # 스텝이 이미 완료되거나 RUNNING을 벗어났다면 sweeper가 상태를 변경하지 않음.
+            result = db.execute(
+                update(WorkflowRunStep)
+                .where(
+                    WorkflowRunStep.id == stuck_step.id,
+                    WorkflowRunStep.status == "RUNNING",  # Only update if still RUNNING
+                )
+                .values(
+                    status="FAILED",
+                    error_code="TIMEOUT_EXCEEDED",
+                    error_message=message,
+                    completed_at=datetime.utcnow(),
+                )
+            )
+
+            # Step 업데이트가 실제로 일어났는지 확인
+            if result.rowcount > 0:
+                # Run도 조건부로 업데이트
+                db.execute(
+                    update(WorkflowRun)
+                    .where(WorkflowRun.id == run.id, WorkflowRun.status == "RUNNING")
+                    .values(
+                        status="FAILED",
+                        error_message=message,
+                        completed_at=datetime.utcnow(),
+                    )
+                )
+                # Document 상태 갱신
+                _fail_document(db, run, message)
+                db.commit()
+                swept_run_ids.append(str(run.id))
+        return {"swept_run_ids": swept_run_ids, "redispatched_run_ids": redispatched_run_ids}
     finally:
         db.close()

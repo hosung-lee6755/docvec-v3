@@ -284,6 +284,8 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
                 image = Image.open(io.BytesIO(data))
                 width, height = image.size
             except Exception:
+                logger.debug("이미지 디코드 실패 — 그림 후보에서 제외", exc_info=True,
+                             extra={"document_id": document_id})
                 continue
             if width < _FIGURE_MIN_DIMENSION or height < _FIGURE_MIN_DIMENSION:
                 continue
@@ -301,6 +303,8 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
                     image = image.convert("RGB")
                 image.save(buf, format="PNG")
             except Exception:
+                logger.debug("이미지 PNG 변환 실패 — 그림 후보에서 제외", exc_info=True,
+                             extra={"document_id": document_id})
                 continue
             candidates.append((page, buf.getvalue()))
 
@@ -482,7 +486,7 @@ def _repaginate_hwp_like(document_id: str, doc, parsed) -> None:
     parsed.page_count = len(parsed.pages)
 
 
-@celery_app.task(name="tasks.continue_processing", queue="high", bind=True, max_retries=3)
+@celery_app.task(name="tasks.continue_processing", queue="embed", bind=True, max_retries=3)
 def continue_processing(self, document_id: str, edited_text: str | None = None) -> dict:
     from app.db.models.document import Document
     from app.db.session import get_sync_db
@@ -510,12 +514,6 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
             _resolve_collection_settings(db, doc)
         )
         full_text = doc.parsed_text or ""
-
-        # Clear any vectors from a prior run before regenerating — without this,
-        # re-running this task (e.g. collection-settings reprocessing) upserts a
-        # second set of points under new UUIDs instead of replacing the old ones,
-        # leaving stale duplicate chunks searchable alongside the fresh ones.
-        qdrant_service.delete_by_document(settings.qdrant_collection_name, document_id)
 
         current_job = start_job(db, document_id, "CHUNK")
         doc.status = "CHUNKING"
@@ -608,6 +606,10 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
         doc.updated_at = datetime.utcnow()
         db.commit()
 
+        # 이전 실행의 벡터는 새 벡터가 준비된 이 시점에야 지운다. 청킹/임베딩 단계에서
+        # 실패해도 기존 인덱스가 그대로 남도록 하고, 지우지 않으면 새 UUID로
+        # upsert되어 오래된 중복 청크가 함께 검색된다(컬렉션 설정 변경 재처리 등).
+        qdrant_service.delete_by_document(settings.qdrant_collection_name, document_id)
         qdrant_service.upsert_points(settings.qdrant_collection_name, points)
         complete_job(db, current_job, f"Qdrant 업로드 완료 ({len(points)}개 포인트)")
 

@@ -1,0 +1,156 @@
+import { ArrowDown, ArrowUp, Trash2 } from 'lucide-react'
+import { type Document, type DocumentSortBy, type SortOrder } from '../../hooks/useDocuments'
+import { STATUS_BADGE_CLASSES, STATUS_LABELS } from '../../lib/documentStatus'
+
+interface DocumentsTableProps {
+  documents: Document[] | undefined
+  sortBy: DocumentSortBy
+  order: SortOrder
+  selectedIds: Set<string>
+  confirmDeleteId: string | null
+  collectionsMap: Record<string, string>
+  onToggleSort: (column: DocumentSortBy) => void
+  onToggleSelect: (id: string) => void
+  onToggleAll: () => void
+  onConfirmDelete: (id: string) => void
+  onCancelDelete: () => void
+  onDeleteClick: (id: string) => void
+  onDocumentClick: (id: string) => void
+  isDeleting: boolean
+}
+
+export function DocumentsTable({
+  documents,
+  sortBy,
+  order,
+  selectedIds,
+  confirmDeleteId,
+  collectionsMap,
+  onToggleSort,
+  onToggleSelect,
+  onToggleAll,
+  onConfirmDelete,
+  onCancelDelete,
+  onDeleteClick,
+  onDocumentClick,
+  isDeleting,
+}: DocumentsTableProps) {
+  return (
+    <div className="krds-table-wrap">
+      <table className="tbl col data" style={{ width: '100%' }}>
+        <caption>문서 목록</caption>
+        <thead>
+          <tr>
+            <th scope="col" style={{ width: '5%' }}>
+              <div className="krds-form-check">
+                <input
+                  type="checkbox"
+                  className="chk"
+                  id="doc_chk_all"
+                  checked={selectedIds.size > 0 && selectedIds.size === documents?.length}
+                  onChange={onToggleAll}
+                />
+                <label htmlFor="doc_chk_all"></label>
+              </div>
+            </th>
+            {([
+              ['파일명', 'filename'],
+              ['컬렉션', null],
+              ['크기', 'file_size'],
+              ['상태', 'status'],
+              ['생성일', 'created_at'],
+              ['', null],
+            ] as [string, DocumentSortBy | null][]).map(([label, column]) => (
+              <th
+                key={label}
+                scope="col"
+                onClick={column ? () => onToggleSort(column) : undefined}
+                style={{ cursor: column ? 'pointer' : 'default', userSelect: 'none' }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  {label}
+                  {column && sortBy === column && (
+                    order === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />
+                  )}
+                </span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {documents?.map((doc) => (
+            <tr key={doc.id} style={{ background: selectedIds.has(doc.id) ? 'rgba(99,102,241,0.04)' : undefined }}>
+              <th scope="row">
+                <div className="krds-form-check">
+                  <input
+                    type="checkbox"
+                    className="chk"
+                    id={`doc_chk_${doc.id}`}
+                    checked={selectedIds.has(doc.id)}
+                    onChange={() => onToggleSelect(doc.id)}
+                  />
+                  <label htmlFor={`doc_chk_${doc.id}`}></label>
+                </div>
+              </th>
+              <td style={{ cursor: 'pointer', color: 'var(--color-accent)' }} onClick={() => onDocumentClick(doc.id)}>
+                {doc.original_filename}
+              </td>
+              <td style={{ color: 'var(--color-text-muted)' }}>
+                {doc.collection_id
+                  ? (collectionsMap[doc.collection_id] ?? doc.collection_id.slice(0, 8))
+                  : '-'}
+              </td>
+              <td style={{ color: 'var(--color-text-muted)' }}>
+                {(doc.file_size / 1024).toFixed(1)} KB
+              </td>
+              <td>
+                <span className={`krds-badge ${STATUS_BADGE_CLASSES[doc.status] ?? 'bg-gray'}`}>
+                  {STATUS_LABELS[doc.status] ?? doc.status}
+                </span>
+                {doc.ocr_used && (
+                  <span
+                    className="krds-badge xsmall bg-information"
+                    style={{ marginLeft: 'var(--space-2)' }}
+                    title="스캔 이미지 페이지를 OCR로 인식한 문서입니다."
+                  >
+                    OCR
+                  </span>
+                )}
+                {doc.status === 'FAILED' && doc.error_message && (
+                  <span style={{ marginLeft: 'var(--space-2)', fontSize: 11, color: 'var(--color-danger)' }} title={doc.error_message}>⚠</span>
+                )}
+              </td>
+              <td style={{ color: 'var(--color-text-muted)' }}>
+                {new Date(doc.created_at).toLocaleDateString('ko-KR')}
+              </td>
+              <td>
+                {confirmDeleteId === doc.id ? (
+                  <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+                    <span style={{ fontSize: 12, color: '#dc2626' }}>삭제하시겠습니까?</span>
+                    <button
+                      onClick={() => onConfirmDelete(doc.id)}
+                      disabled={isDeleting}
+                      className="krds-btn xsmall primary"
+                    >
+                      확인
+                    </button>
+                    <button onClick={() => onCancelDelete()} className="krds-btn xsmall secondary">
+                      취소
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => onDeleteClick(doc.id)}
+                    className="krds-btn text xsmall icon-btn danger"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}

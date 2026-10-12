@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minio_secret"
     minio_secure: bool = False
+    # presigned URL(브라우저가 직접 접근)을 https로 만들지 여부 — 내부 접속(minio_secure)과 별개.
+    # Caddy(https) 뒤에서 MinIO를 같은 출처로 중계할 때 true.
+    minio_public_secure: bool = False
     minio_bucket_originals: str = "originals"
     minio_bucket_artifacts: str = "artifacts"
 
@@ -53,12 +56,15 @@ class Settings(BaseSettings):
     default_embedding_model: str = "bge-m3"
     default_embedding_dimension: int = 1024
 
+    # Upload limits
+    max_upload_size_bytes: int = 200 * 1024 * 1024  # 200MB
+
     # OpenAI (optional)
     openai_api_key: str = ""
 
-    # Encryption key for per-user API keys (Fernet). Falls back to secret_key when
+    # Encryption key for per-user API keys (Fernet, via PBKDF2). Falls back to secret_key when
     # unset — set a dedicated value in production so rotating secret_key doesn't
-    # also invalidate every stored API key.
+    # also invalidate every stored API key. REQUIRED in production (not a fallback).
     encryption_key: str = ""
 
     # Invite code required at /auth/register to grant role="admin" instead of
@@ -92,11 +98,25 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _enforce_production_secret_key(self) -> "Settings":
-        if self.is_production and self.secret_key in self._INSECURE_SECRET_KEYS:
-            raise ValueError(
-                "SECRET_KEY must be set to a strong random value in production "
-                '(e.g. `python -c "import secrets; print(secrets.token_hex(32))"`).'
-            )
+        if self.is_production:
+            # SECRET_KEY: must be strong and random
+            if self.secret_key in self._INSECURE_SECRET_KEYS:
+                raise ValueError(
+                    "SECRET_KEY must be set to a strong random value in production "
+                    '(e.g. `python -c "import secrets; print(secrets.token_hex(32))"`).'
+                )
+            # SECRET_KEY: must be at least 32 chars (256 bits)
+            if len(self.secret_key) < 32:
+                raise ValueError(
+                    "SECRET_KEY must be at least 32 characters (256 bits) in production."
+                )
+            # ENCRYPTION_KEY: BYOK Fernet key is required (do not fall back to SECRET_KEY)
+            if not self.encryption_key:
+                raise ValueError(
+                    "ENCRYPTION_KEY must be set in production (do not rely on SECRET_KEY fallback). "
+                    'Generate with: `python -c "import secrets; print(secrets.token_hex(32))"` '
+                    "and pass as Fernet key."
+                )
         return self
 
 

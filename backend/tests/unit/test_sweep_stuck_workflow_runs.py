@@ -38,7 +38,7 @@ def test_sweep_returns_empty_when_no_running_runs():
     with patch("app.db.session.get_sync_db", return_value=db):
         result = sweep_stuck_workflow_runs()
 
-    assert result == {"swept_run_ids": []}
+    assert result == {"swept_run_ids": [], "redispatched_run_ids": []}
     db.commit.assert_not_called()
     db.close.assert_called_once()
 
@@ -52,28 +52,13 @@ def test_sweep_skips_run_within_timeout_and_grace():
     with patch("app.db.session.get_sync_db", return_value=db):
         result = sweep_stuck_workflow_runs()
 
-    assert result == {"swept_run_ids": []}
+    assert result == {"swept_run_ids": [], "redispatched_run_ids": []}
     assert step.status == "RUNNING"
     db.commit.assert_not_called()
 
 
-def test_sweep_fails_run_past_timeout_and_grace():
-    run_id = uuid4()
-    run = MagicMock(id=run_id, timeout_overrides=None, document_id=uuid4())
-    step = MagicMock(started_at=datetime.utcnow() - timedelta(seconds=400), status="RUNNING")
-    block = MagicMock(block_type="text_extract", config={"timeoutSeconds": 300})
-    document = MagicMock(status="PARSING")
-    db = _mock_db(running_runs=[run], stuck_step=step, block=block, document=document)
-
-    with patch("app.db.session.get_sync_db", return_value=db):
-        result = sweep_stuck_workflow_runs()
-
-    assert result == {"swept_run_ids": [str(run_id)]}
-    assert step.status == "FAILED"
-    assert step.error_code == "TIMEOUT_EXCEEDED"
-    assert run.status == "FAILED"
-    assert document.status == "FAILED"
-    db.commit.assert_called_once()
+# 타임아웃 초과 시 step/run/document가 FAILED가 되는 동작은 조건부 UPDATE(DB 의미)에
+# 의존하므로 실제 Postgres로 test_workflow_engine_pg.py에서 검증한다.
 
 
 def test_sweep_honors_per_run_timeout_override():
@@ -88,5 +73,5 @@ def test_sweep_honors_per_run_timeout_override():
     with patch("app.db.session.get_sync_db", return_value=db):
         result = sweep_stuck_workflow_runs()
 
-    assert result == {"swept_run_ids": []}
+    assert result == {"swept_run_ids": [], "redispatched_run_ids": []}
     db.commit.assert_not_called()

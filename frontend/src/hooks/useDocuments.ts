@@ -285,6 +285,10 @@ export function useUpdateChunk() {
       queryClient.invalidateQueries({ queryKey: ['documents', docId, 'chunks'] })
       queryClient.invalidateQueries({ queryKey: ['documents', docId, 'content'] })
     },
+    onError: (_err, { docId }) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', docId, 'chunks'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', docId, 'content'] })
+    },
   })
 }
 
@@ -295,6 +299,10 @@ export function useDeleteChunk() {
       await apiClient.delete(`/documents/${docId}/chunks/${chunkId}`)
     },
     onSuccess: (_data, { docId }) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', docId, 'chunks'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', docId, 'content'] })
+    },
+    onError: (_err, { docId }) => {
       queryClient.invalidateQueries({ queryKey: ['documents', docId, 'chunks'] })
       queryClient.invalidateQueries({ queryKey: ['documents', docId, 'content'] })
     },
@@ -338,6 +346,8 @@ export function useRestoreRevision() {
         old ? { ...old, status: 'CHUNKING' } : old
       )
       queryClient.invalidateQueries({ queryKey: ['documents', docId, 'revisions'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', docId, 'chunks'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', docId, 'content'] })
     },
   })
 }
@@ -352,6 +362,9 @@ export function useRetryDocument() {
     onSuccess: (_data, id) => {
       queryClient.invalidateQueries({ queryKey: ['documents', id] })
       queryClient.invalidateQueries({ queryKey: ['documents'] })
+    },
+    onError: (_err, id) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', id] })
     },
   })
 }
@@ -380,6 +393,9 @@ export function useUpdateDocumentTags() {
         old ? { ...old, tags: data.tags } : old
       )
     },
+    onError: (_err, { docId }) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', docId] })
+    },
   })
 }
 
@@ -395,6 +411,9 @@ export function useAcceptTagSuggestion() {
         old ? { ...old, tags: data.tags, suggested_tags: data.suggested_tags } : old
       )
     },
+    onError: (_err, { docId }) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', docId] })
+    },
   })
 }
 
@@ -409,6 +428,9 @@ export function useDismissTagSuggestion() {
       queryClient.setQueryData<Document>(['documents', docId], (old) =>
         old ? { ...old, suggested_tags: data.suggested_tags } : old
       )
+    },
+    onError: (_err, { docId }) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', docId] })
     },
   })
 }
@@ -581,6 +603,7 @@ export function useReprocessDocument() {
       )
       queryClient.invalidateQueries({ queryKey: ['documents', id, 'jobs'] })
       queryClient.invalidateQueries({ queryKey: ['documents', id, 'content'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', id, 'chunks'] })
     },
     onError: (_err, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['documents', id] })

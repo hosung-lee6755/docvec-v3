@@ -79,6 +79,26 @@ def _carry(context: BlockContext) -> dict:
     return dict(next(iter(context.upstream_outputs.values()), {}))
 
 
+_ANSWER_NOISE = " \t\r\n'\"`.,。·「」『』()[]"
+
+
+def _pick_category(raw: str, categories: list[str]) -> str:
+    """Resolve the model's answer to one of `categories`.
+
+    The prompt asks for the bare category name, but the model sometimes answers
+    with a sentence or lists several candidates. An answer that IS a candidate
+    wins; otherwise the candidate mentioned first wins (a longer one on a tie,
+    so "진단보고서" beats "보고서"), never the one that merely sits first in the
+    configured list. No match falls back to the last category (기타-style)."""
+    answer = raw.strip(_ANSWER_NOISE)
+    if answer in categories:
+        return answer
+    mentioned = [(raw.find(c), -len(c), c) for c in categories if c in raw]
+    if mentioned:
+        return min(mentioned)[2]
+    return categories[-1]
+
+
 def _parse_lines(raw: str, max_items: int) -> list[str]:
     """Line-per-item LLM output -> cleaned, deduped list (same approach as
     tasks/metadata.py's keyword parsing)."""
@@ -188,15 +208,15 @@ class ClassifyBlock(BaseBlock):
 
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
-        categories = context.config.get("categories") or _DEFAULT_CATEGORIES
+        # UI 설정에 섞인 빈 항목은 `"" in 응답` 이 항상 참이라 선택과 폴백을 망친다.
+        categories = [c for c in (context.config.get("categories") or []) if c and c.strip()]
+        categories = categories or _DEFAULT_CATEGORIES
         raw = _generate(
             "당신은 문서를 분류하는 어시스턴트입니다. 주어진 카테고리 중 문서에 가장 잘 맞는 "
             "하나만 골라 그 카테고리 이름만 답하세요. 설명이나 다른 문장은 쓰지 마세요.",
             f"카테고리: {', '.join(categories)}\n\n문서:\n{text[:_MAX_LLM_INPUT_CHARS]}",
         ).strip()
-        # The model may echo punctuation or a sentence — take the first
-        # category that appears in its answer, else the last (기타-style) one.
-        category = next((c for c in categories if c in raw), categories[-1])
+        category = _pick_category(raw, categories)
         return BlockResult(output={**_carry(context), "category": category, "text": text})
 
 

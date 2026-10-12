@@ -67,9 +67,9 @@ def _hwpx_to_html(raw: bytes) -> str:
     """Document-order render of HWPX paragraphs/tables — layout is simplified,
     but reading order and table structure match the original."""
     import html as html_mod
-    import xml.etree.ElementTree as ET
     import zipfile
 
+    from app.core.safe_xml import parse_xml
     from app.pipeline.adapters.hwp_adapter import (
         _collect_nested_hwpx_tables,
         _hwpx_collect_text,
@@ -110,7 +110,7 @@ def _hwpx_to_html(raw: bytes) -> str:
         for name in sorted(z.namelist()):
             if name.startswith("Contents/") and name.endswith(".xml"):
                 with z.open(name) as f:
-                    walk(ET.parse(f).getroot())
+                    walk(parse_xml(f))
 
     return _HTML_WRAP.format(body="".join(parts))
 

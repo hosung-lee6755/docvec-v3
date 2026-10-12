@@ -34,3 +34,6 @@ Thumbs.db
 
 # Celery beat runtime state (local DBM file, not source)
 backend/celerybeat-schedule
+
+# Stray/root-level node_modules and tool caches
+node_modules/

@@ -64,8 +64,10 @@ def get_document_content(document_id: UUID) -> dict:
     }
 
 
-def get_download_url(minio_key: str, expires_seconds: int = 86400) -> str:
-    """Return a presigned MinIO URL for the original file (24h expiry)."""
+def get_download_url(minio_key: str, expires_seconds: int = 3600) -> str:
+    """Return a presigned MinIO URL for the original file (1h expiry). The URL stays valid
+    after access is revoked or the document is deleted, so it is minted per request and
+    kept short instead of the previous 24h."""
     storage = _get_storage()
     url = storage.get_presigned_url(
         settings.minio_bucket_originals,

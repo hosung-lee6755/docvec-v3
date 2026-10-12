@@ -155,8 +155,13 @@ class FormatDetectBlock(BaseBlock):
 
             raw_bytes = storage_service.download_file(settings.minio_bucket_originals, doc.minio_key)
             with tempfile.NamedTemporaryFile(suffix=Path(doc.filename).suffix, delete=False) as tmp:
-                tmp.write(raw_bytes)
                 tmp_path = Path(tmp.name)
+                try:
+                    tmp.write(raw_bytes)
+                except BaseException:
+                    # 디스크 부족 등으로 쓰기가 실패해도 delete=False 임시파일이 남지 않게 한다.
+                    tmp_path.unlink(missing_ok=True)
+                    raise
             try:
                 try:
                     adapter = get_adapter(tmp_path, doc.mime_type or "")
@@ -480,8 +485,13 @@ class TextExtractBlock(BaseBlock):
 
             raw_bytes = storage_service.download_file(settings.minio_bucket_originals, doc.minio_key)
             with tempfile.NamedTemporaryFile(suffix=Path(doc.filename).suffix, delete=False) as tmp:
-                tmp.write(raw_bytes)
                 tmp_path = Path(tmp.name)
+                try:
+                    tmp.write(raw_bytes)
+                except BaseException:
+                    # 디스크 부족 등으로 쓰기가 실패해도 delete=False 임시파일이 남지 않게 한다.
+                    tmp_path.unlink(missing_ok=True)
+                    raise
             try:
                 try:
                     adapter = get_adapter(tmp_path, doc.mime_type or "", engine=cfg.engine)
@@ -503,7 +513,11 @@ class TextExtractBlock(BaseBlock):
                 try:
                     _repaginate_hwp_like(str(doc.id), doc, parsed)
                 except Exception:
-                    pass  # degrade to page_number=1, matching parse_document's behavior
+                    # degrade to page_number=1, matching parse_document's behavior
+                    logger.warning(
+                        "HWP 재페이지네이션 실패 — page_number=1로 대체", exc_info=True,
+                        extra={"document_id": str(doc.id)},
+                    )
 
             image_records = []
             if cfg.recognize_figures:
@@ -593,9 +607,13 @@ class TextExtractBlock(BaseBlock):
                 metrics={"chars": len(full_text), "tables": table_count, "images": len(image_records)},
             )
         except BlockExecutionError as exc:
+            # 실패 시점의 세션은 PendingRollback 상태일 수 있다 — 롤백하지 않으면
+            # fail_job이 다른 예외를 내며 원래 오류를 가린다.
+            db.rollback()
             fail_job(db, current_job, str(exc))
             raise
         except Exception as exc:
+            db.rollback()
             fail_job(db, current_job, str(exc))
             raise BlockExecutionError(str(exc), error_code="TEXT_EXTRACTION_FAILED") from exc
         finally:

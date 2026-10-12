@@ -234,10 +234,10 @@ async def create_dictionary_entry(
         raise HTTPException(
             status_code=409, detail="해당 유형/용어의 사전 항목이 이미 존재합니다"
         )
-    # db.refresh() doesn't reload relationships by default — expire_on_commit
-    # invalidates `variants` on commit, and a bare refresh() leaves it expired,
-    # so _serialize()'s access below would trigger an async-unsafe lazy load
-    # (MissingGreenlet). Re-fetch with selectinload instead, same idiom as
+    # With expire_on_commit=False, objects remain cached after commit, but
+    # relationships are still not refreshed by db.refresh(). To ensure
+    # `variants` is populated for _serialize() without async-unsafe lazy load,
+    # re-fetch with selectinload instead, same idiom as
     # list_dictionary_entries/update_dictionary_entry's initial query.
     entry = await db.scalar(
         select(DictionaryEntry)

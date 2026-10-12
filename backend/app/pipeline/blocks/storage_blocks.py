@@ -6,6 +6,7 @@ process.py) is deliberately untouched — it still serves the existing
 /proceed, /reprocess, and collection-reprocess endpoints for already-parsed
 documents, a separate legacy path kept as-is per 통합 설계서 §13 Task 3.
 """
+import logging
 import uuid
 from datetime import datetime
 
@@ -183,9 +184,10 @@ class ChunkSplitBlock(BaseBlock):
 
             # Previous run's chunks for this document are stale once this run
             # re-chunks it — clear them (DB analogue of continue_processing's
-            # qdrant_service.delete_by_document pre-clear).
+            # qdrant_service.delete_by_document pre-clear). 삭제와 새 청크 INSERT를
+            # 같은 트랜잭션(아래 마지막 commit)에 묶는다: 중간에 실패하면 삭제도
+            # 롤백되어 문서가 청크 0개로 남지 않는다(Qdrant에는 이전 벡터가 그대로).
             db.query(DocumentChunk).filter(DocumentChunk.document_id == doc.id).delete()
-            db.commit()
 
             # 메타 정보 생성 설계서(2026-07-23) Phase 4 — 이 run이 실제로 사용한
             # workflow version 번호/dictionary 리비전은 run 레벨에 이미 있는
@@ -352,6 +354,10 @@ def _llm_chunk_contexts(doc_title: str | None, doc_excerpt: str, chunks: list) -
         try:
             raw = _generate(system_prompt, user_content)
         except Exception:
+            # fail-open: 이 청크는 구조적 문맥만 쓰되, 원인은 로그로 남긴다.
+            logging.getLogger(__name__).warning(
+                "청크 문맥 LLM 생성 실패 — 구조적 문맥으로 대체", exc_info=True
+            )
             continue
         # Qwen2.5-Instruct is tool-call-trained and occasionally emits a stray
         # <tool_call> tag even with no tools defined — strip any tag-shaped

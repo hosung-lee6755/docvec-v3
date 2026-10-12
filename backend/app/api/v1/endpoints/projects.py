@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,13 +28,13 @@ _API_KEY_PROVIDERS = ("openai", "anthropic")
 
 
 class ProjectCreate(BaseModel):
-    name: str
-    description: str | None = None
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
 
 
 class ProjectUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
 
 
 class ProjectMemberInvite(BaseModel):
@@ -59,11 +59,11 @@ class ProjectResponse(BaseModel):
 
 
 class ProjectSystemPromptUpdate(BaseModel):
-    system_prompt: str | None = None
+    system_prompt: str | None = Field(None, max_length=5000)
 
 
 class ProjectApiKeyUpdate(BaseModel):
-    api_key: str
+    api_key: str = Field(..., min_length=1, max_length=2000)
 
 
 async def _build_project_response(db: AsyncSession, project: Project, current_user: User) -> dict:
@@ -198,7 +198,7 @@ async def update_project(
         project.name = data.name
     if data.description is not None:
         project.description = data.description
-    project.updated_at = datetime.utcnow()
+    project.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     await db.refresh(project)
     return await _build_project_response(db, project, current_user)
@@ -346,7 +346,7 @@ async def set_project_system_prompt(
     if str(project.created_by) != str(current_user.id):
         raise HTTPException(status_code=403, detail="Access denied")
     project.system_prompt = (data.system_prompt or "").strip() or None
-    project.updated_at = datetime.utcnow()
+    project.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     await db.refresh(project)
     return await _build_project_response(db, project, current_user)
@@ -396,6 +396,9 @@ async def set_project_api_key(
     if str(project.created_by) != str(current_user.id):
         raise HTTPException(status_code=403, detail="Access denied")
 
+    from app.core.rate_limit import enforce_user_rate_limit
+
+    enforce_user_rate_limit(str(current_user.id), "api_key_write", limit=10, window_seconds=60)
     api_key = data.api_key.strip()
     if not api_key:
         raise HTTPException(status_code=422, detail="api_key is required")
@@ -409,7 +412,7 @@ async def set_project_api_key(
     )
     if existing:
         existing.encrypted_key = encrypted
-        existing.updated_at = datetime.utcnow()
+        existing.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     else:
         db.add(
             ProjectApiKey(

@@ -30,7 +30,7 @@ async def test_batch_reprocess_skips_non_failed_document():
     db = AsyncMock()
     db.scalar = AsyncMock(return_value=doc)
 
-    with patch("app.api.v1.endpoints.documents.check_document_access", AsyncMock()):
+    with patch("app.api.v1.endpoints.documents.listing.check_document_access", AsyncMock()):
         result = await batch_reprocess_documents(
             BatchReprocessRequest(ids=[doc.id]), db=db, current_user=MagicMock()
         )
@@ -61,7 +61,7 @@ async def test_batch_reprocess_reports_failed_on_access_denied():
     db.scalar = AsyncMock(return_value=doc)
 
     with patch(
-        "app.api.v1.endpoints.documents.check_document_access",
+        "app.api.v1.endpoints.documents.listing.check_document_access",
         AsyncMock(side_effect=HTTPException(status_code=403, detail="Access denied")),
     ):
         result = await batch_reprocess_documents(
@@ -81,7 +81,7 @@ async def test_batch_reprocess_reports_failed_when_no_failed_step_found():
     db.scalar = AsyncMock(side_effect=[doc, None])  # doc lookup, then failed-step lookup
     db.get = AsyncMock(return_value=run)
 
-    with patch("app.api.v1.endpoints.documents.check_document_access", AsyncMock()):
+    with patch("app.api.v1.endpoints.documents.listing.check_document_access", AsyncMock()):
         result = await batch_reprocess_documents(
             BatchReprocessRequest(ids=[doc.id]), db=db, current_user=MagicMock()
         )
@@ -104,7 +104,7 @@ async def test_batch_reprocess_auto_resolves_failed_block_and_queues_run():
     new_run = MagicMock(id=uuid4())
 
     with (
-        patch("app.api.v1.endpoints.documents.check_document_access", AsyncMock()),
+        patch("app.api.v1.endpoints.documents.listing.check_document_access", AsyncMock()),
         patch(
             "app.services.reprocess_service.resolve_start_block",
             AsyncMock(return_value=start_block),
@@ -141,7 +141,7 @@ async def test_batch_reprocess_processes_multiple_documents_independently():
     new_run = MagicMock(id=uuid4())
 
     with (
-        patch("app.api.v1.endpoints.documents.check_document_access", AsyncMock()),
+        patch("app.api.v1.endpoints.documents.listing.check_document_access", AsyncMock()),
         patch(
             "app.services.reprocess_service.resolve_start_block",
             AsyncMock(return_value=start_block),

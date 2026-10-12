@@ -24,6 +24,8 @@ from app.db.models.project_member import ProjectMember
 from app.db.models.user import User
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 from app.db.session import get_db
+from app.services.document_state import claim_document_status
+from app.services.document_storage import release_original
 from app.services.embedding import EMBEDDING_MODEL_REGISTRY
 
 router = APIRouter()
@@ -433,7 +435,11 @@ async def cascade_delete_collection(db: AsyncSession, collection: Collection) ->
 
     for doc in docs:
         qdrant_service.delete_by_document(settings.qdrant_collection_name, str(doc.id))
-        storage_service.delete_file(settings.minio_bucket_originals, doc.minio_key)
+        # 같은 원본 키를 다른 컬렉션의 문서가 참조하면 객체를 남긴다(이 컬렉션 문서는 제외).
+        await release_original(
+            db, storage_service, settings.minio_bucket_originals, doc.minio_key,
+            exclude_document_ids=doc_ids,
+        )
         await db.delete(doc)
 
     # golden_queries.collection_id and golden_eval_runs.collection_id — same gap.
@@ -479,13 +485,8 @@ async def reprocess_collection(
 ):
     from app.pipeline.tasks.process import continue_processing
 
-    collection = await db.scalar(
-        select(Collection).where(Collection.id == collection_id)
-    )
-    if not collection:
-        raise HTTPException(status_code=404, detail="Collection not found")
-    if str(collection.created_by) != str(current_user.id):
-        raise HTTPException(status_code=403, detail="Access denied")
+    # 소유자뿐 아니라 편집 권한이 있는 멤버(프로젝트/컬렉션 editor)도 재처리할 수 있다.
+    await check_collection_access(db, collection_id, current_user, min_role="editor")
 
     docs = (
         await db.scalars(
@@ -502,15 +503,18 @@ async def reprocess_collection(
     reprocessable = [doc for doc in docs if doc.parsed_text]
     skipped = len(docs) - len(reprocessable)
 
+    # 문서별로 원자적으로 선점한 것만 디스패치한다 — 같은 시점에 개별 재처리/다른 일괄
+    # 재처리가 이미 잡은 문서는 건너뛰어 중복 실행을 막는다.
+    claimed_ids: list[str] = []
     for doc in reprocessable:
-        doc.status = "CHUNKING"
-        doc.updated_at = datetime.utcnow()
+        if await claim_document_status(db, doc.id, ("INDEXED", "FAILED"), "CHUNKING"):
+            claimed_ids.append(str(doc.id))
     await db.commit()
 
-    for doc in reprocessable:
-        continue_processing.delay(str(doc.id))
+    for doc_id in claimed_ids:
+        continue_processing.delay(doc_id)
 
-    return {"queued": len(reprocessable), "skipped": skipped}
+    return {"queued": len(claimed_ids), "skipped": skipped + len(reprocessable) - len(claimed_ids)}
 
 
 @router.get("/{collection_id}/export")

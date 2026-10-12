@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { diffWords } from './CleaningChangesTab'
+import { diffWords } from './diffWords'
 
 describe('diffWords', () => {
   it('returns a single equal segment when texts are identical', () => {

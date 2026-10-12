@@ -11,7 +11,7 @@ interface User {
 interface AuthState {
   user: User | null
   accessToken: string | null
-  isAuthenticated: boolean
+  isAuthenticated: boolean // Derived from accessToken
   setAuth: (user: User, token: string) => void
   updateUser: (patch: Partial<User>) => void
   clearAuth: () => void
@@ -22,14 +22,38 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       user: null,
       accessToken: null,
-      isAuthenticated: false,
-      setAuth: (user, accessToken) => set({ user, accessToken, isAuthenticated: true }),
-      updateUser: (patch) => set((state) => (state.user ? { user: { ...state.user, ...patch } } : state)),
-      clearAuth: () => set({ user: null, accessToken: null, isAuthenticated: false }),
+      isAuthenticated: false, // Will be derived below
+
+      setAuth: (user, accessToken) =>
+        set({
+          user,
+          accessToken,
+          isAuthenticated: !!accessToken,
+        }),
+
+      updateUser: (patch) =>
+        set((state) => (state.user ? { user: { ...state.user, ...patch } } : state)),
+
+      clearAuth: () =>
+        set({
+          user: null,
+          accessToken: null,
+          isAuthenticated: false,
+        }),
     }),
     {
       name: 'docvec-auth',
-      partialize: (state) => ({ user: state.user, accessToken: state.accessToken, isAuthenticated: state.isAuthenticated }),
+      // Only persist user and token; derive isAuthenticated from token
+      partialize: (state) => ({
+        user: state.user,
+        accessToken: state.accessToken,
+      }),
+      // Rehydrate: restore user/token and derive isAuthenticated
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.isAuthenticated = !!state.accessToken
+        }
+      },
     },
   ),
 )

@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user
 from app.api.v1.permissions import check_collection_access, check_project_access
+from app.core.rate_limit import enforce_user_rate_limit
 from app.db.models.user import User
 from app.db.session import get_db
 from app.schemas.search import SearchHistoryResponse, SearchRequest, SearchResponse
@@ -17,6 +18,7 @@ async def search(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    enforce_user_rate_limit(str(current_user.id), "search", limit=60, window_seconds=60)
     if request.project_id:
         await check_project_access(db, request.project_id, current_user, min_role="viewer")
     if request.collection_id:

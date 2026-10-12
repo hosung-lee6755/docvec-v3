@@ -564,7 +564,8 @@ class PDFAdapter(BaseAdapter):
                     for table in found_tables:
                         try:
                             rows = table.extract()
-                        except Exception:
+                        except Exception as table_exc:
+                            warnings.append(f"page {page_num} table extract failed: {table_exc}")
                             continue
                         cleaned_rows = [
                             [(cell or "").strip() for cell in row]

@@ -77,6 +77,10 @@ class SentenceTransformerEmbeddingProvider(EmbeddingProvider):
 
 class BgeM3EmbeddingProvider(EmbeddingProvider):
     _DIM = 1024
+    # FlagEmbedding 기본값(batch_size=256)은 청크가 1,000개 넘는 문서에서 fp32 활성화가
+    # 12GB GPU의 남은 VRAM을 넘긴다. 로컬 LLM이 같은 프로세스에 상주하면 VRAM이 넘쳐
+    # 작업이 수 분간 100% 사용률로 멈춘다. 값은 같고 메모리만 제한된다(정밀도는 fp32 유지).
+    _BATCH_SIZE = 16
 
     def __init__(self, repo_id: str) -> None:
         from FlagEmbedding import BGEM3FlagModel
@@ -89,7 +93,11 @@ class BgeM3EmbeddingProvider(EmbeddingProvider):
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         output = self._model.encode(
-            texts, return_dense=True, return_sparse=False, return_colbert_vecs=False
+            texts,
+            batch_size=self._BATCH_SIZE,
+            return_dense=True,
+            return_sparse=False,
+            return_colbert_vecs=False,
         )
         return [vec.tolist() for vec in output["dense_vecs"]]
 

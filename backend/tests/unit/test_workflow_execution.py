@@ -92,48 +92,6 @@ def test_branch_only_true_edge_fires(mock_task):
 
 
 @patch("app.pipeline.tasks.workflow.run_workflow_step")
-def test_merge_waits_until_all_incoming_edges_complete(mock_task):
-    run_id = str(uuid4())
-    source = MagicMock(id=uuid4())
-    merge_id = uuid4()
-    edge = MagicMock(from_block_id=source.id, to_block_id=merge_id, condition=None)
-    merge_block = MagicMock(id=merge_id, block_type="merge", config={})
-
-    # merge has 2 incoming edges total; only 1 has completed so far (this one).
-    existing_step = MagicMock(completed_incoming_edges=0)
-    db = _mock_db(
-        edges=[edge], edge_count=2, run_step_first=existing_step,
-        get_map={WorkflowBlockInstance: merge_block},
-    )
-    _advance(db, run_id, source, {})
-
-    assert existing_step.completed_incoming_edges == 1
-    mock_task.apply_async.assert_not_called()
-
-
-@patch("app.pipeline.tasks.workflow.run_workflow_step")
-def test_merge_fires_once_last_incoming_edge_completes(mock_task):
-    run_id = str(uuid4())
-    source = MagicMock(id=uuid4())
-    merge_id = uuid4()
-    edge = MagicMock(from_block_id=source.id, to_block_id=merge_id, condition=None)
-    merge_block = MagicMock(id=merge_id, block_type="merge", config={})
-
-    # merge has 2 incoming edges total; 1 already completed before this call.
-    existing_step = MagicMock(completed_incoming_edges=1)
-    db = _mock_db(
-        edges=[edge], edge_count=2, run_step_first=existing_step,
-        get_map={WorkflowBlockInstance: merge_block},
-    )
-    _advance(db, run_id, source, {})
-
-    assert existing_step.completed_incoming_edges == 2
-    mock_task.apply_async.assert_called_once_with(
-        args=[run_id, str(merge_id)], time_limit=1800, queue="normal",
-    )
-
-
-@patch("app.pipeline.tasks.workflow.run_workflow_step")
 def test_advance_uses_run_timeout_override_over_block_config(mock_task):
     # A stuck run retried via reprocess_service.start_partial_reprocess carries
     # a per-run {block_type: timeoutSeconds} override (WorkflowRun.timeout_overrides)

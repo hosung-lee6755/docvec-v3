@@ -20,7 +20,7 @@
 # (2026-08-03 실측 — curl schannel과 Chrome 둘 다 SSL_PROTOCOL_ERROR). 주소를
 # 명시하면 Caddy가 그 IP를 SAN으로 넣어 발급하고 SNI 유무와 무관하게 기본
 # 인증서로 서빙하며, http(80)->https(443) 리다이렉트도 자동으로 설정된다.
-192.168.0.90 {
+192.168.0.3, 192.168.0.90, 49.168.97.107 {
 	# 최근 Caddy/Go는 TLS1.3 키교환 그룹으로 포스트퀀텀 하이브리드
 	# (X25519MLKEM768)을 최우선으로 협상하는데, Windows 기본 TLS 스택
 	# (schannel — curl.exe, .NET SslStream)이 이를 아직 지원하지 않아
@@ -33,7 +33,33 @@
 
 	encode gzip
 
+	# Security headers
+	header X-Content-Type-Options nosniff
+	header Referrer-Policy strict-origin-when-cross-origin
+	header X-Frame-Options DENY
+	header Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+	# 원본 문서/아티팩트 다운로드(presigned URL)를 같은 출처(443)로 중계한다. 브라우저가 MinIO
+	# 포트(9002)에 직접 붙지 않아도 되므로 외부에는 443/80만 열면 된다. 서명은 Host 헤더를
+	# 포함해 검증되므로 Host를 바꾸지 말 것(reverse_proxy 기본값이 원본 Host 유지).
+	# 버킷은 비공개라 서명 없는 요청은 MinIO가 거부한다. 읽기 전용 메서드만 허용한다.
+	@minio {
+		path /originals/* /artifacts/*
+		method GET HEAD
+	}
+	handle @minio {
+		# 변환 미리보기(HTML)는 iframe 으로 띄우므로 같은 출처 프레임만 허용한다(전역 DENY 덮어쓰기).
+		# 이제 MinIO 가 앱과 같은 출처라, 문서에서 변환된 HTML 이 앱 권한으로 스크립트를 실행하지 못하게
+		# CSP sandbox(고유 출처)와 script/연결 차단을 건다. 원본 파일 내용은 신뢰하지 않는다.
+		header X-Frame-Options SAMEORIGIN
+		header Content-Security-Policy "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:"
+		reverse_proxy minio:9000
+	}
+
 	# frontend 컨테이너의 nginx가 /api/를 api:8000으로 다시 프록시하므로,
 	# 여기서는 frontend 하나에만 전달하면 된다(apiClient.ts가 상대경로만 씀).
-	reverse_proxy frontend:80
+	handle {
+		reverse_proxy frontend:80
+	}
 }

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -46,7 +47,37 @@ const QUICK_LINKS = [
 export default function DashboardPage() {
   const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
-  const { data, isLoading } = useQuery({ queryKey: ['stats'], queryFn: fetchStats, refetchInterval: 10000 })
+  const [isPageVisible, setIsPageVisible] = useState(!document.hidden)
+  const [errorCount, setErrorCount] = useState(0)
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsPageVisible(!document.hidden)
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
+
+  // Calculate refetch interval: pause when tab hidden, back off on errors
+  const baseInterval = 10000
+  const refetchInterval = isPageVisible
+    ? errorCount > 2 ? false : errorCount > 0 ? 30000 : baseInterval
+    : false // Pause when tab is hidden
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['stats'],
+    queryFn: fetchStats,
+    refetchInterval,
+  })
+
+  // Track error count for backoff
+  useEffect(() => {
+    if (isError) {
+      setErrorCount((prev) => Math.min(prev + 1, 3))
+    } else if (!isLoading) {
+      setErrorCount(0)
+    }
+  }, [isError, isLoading])
   // limit=10으로 최근 문서 10건만 가져와 클라이언트에서 필터링하면, 처리중인
   // 문서가 10건보다 많거나 최근 10건 밖에 있을 때 위젯에서 누락됐다(2026-07-30,
   // "처리중인 작업 10건이라고 표기됨"). 서버에서 11개 processing 상태를 직접

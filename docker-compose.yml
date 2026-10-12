@@ -3,12 +3,12 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-docvec}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docvec_secret}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?set POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-docvec}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"  # 로컬 전용 — 외부 접속 불가(DBeaver는 SSH 터널)
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docvec}"]
       interval: 10s
@@ -21,7 +21,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"  # Bind to localhost only (internal use)
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -29,12 +29,12 @@ services:
       retries: 5
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.18.2  # 기존 스토리지가 만들어진 버전으로 고정 (was: latest)
     volumes:
       - qdrant_data:/qdrant/storage
     ports:
-      - "6335:6333"
-      - "6336:6334"
+      - "127.0.0.1:6335:6333"  # Bind to localhost only (internal use)
+      - "127.0.0.1:6336:6334"  # Bind to localhost only (internal use)
     environment:
       QDRANT__SERVICE__GRPC_PORT: 6334
     healthcheck:
@@ -44,16 +44,16 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z  # 기존 스토리지가 만들어진 버전으로 고정 (was: latest)
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_secret}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD?set MINIO_ROOT_PASSWORD}
     volumes:
       - minio_data:/data
     ports:
-      - "9002:9000"
-      - "9003:9001"
+      - "127.0.0.1:9002:9000"  # 로컬 전용 — 외부는 Caddy가 /originals·/artifacts 로 중계
+      - "127.0.0.1:9003:9001"  # 로컬 전용
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -65,7 +65,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-docvec}:${POSTGRES_PASSWORD:-docvec_secret}@postgres:5432/${POSTGRES_DB:-docvec}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER?set POSTGRES_USER}:${POSTGRES_PASSWORD?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB?set POSTGRES_DB}
       - REDIS_URL=redis://redis:6379
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
@@ -75,20 +75,22 @@ services:
       # Browser-facing presigned URLs must use the HOST-mapped port (9002 in
       # this project's remapped port set), not the internal service port.
       - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-localhost:9002}
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minio_secret}
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - MINIO_PUBLIC_SECURE=${MINIO_PUBLIC_SECURE:-false}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER?set MINIO_ROOT_USER}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD?set MINIO_ROOT_PASSWORD}
+      - SECRET_KEY=${SECRET_KEY?set SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY?set ENCRYPTION_KEY}
       - ADMIN_SIGNUP_CODE=${ADMIN_SIGNUP_CODE:-}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
       - ENVIRONMENT=production
       - HF_HOME=/model_cache
     volumes:
+      # Bind mount for dev workflow (hot reload, file inspection)
       - ./backend:/app
       - backend_venv:/app/.venv
       - model_cache:/model_cache
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"  # 로컬 전용(외부는 Caddy→frontend→/api)
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,30 +102,30 @@ services:
         condition: service_healthy
     command: >
       bash -c "poetry run alembic upgrade head &&
-               poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+               poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1,172.16.0.0/12"
 
   worker:
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-docvec}:${POSTGRES_PASSWORD:-docvec_secret}@postgres:5432/${POSTGRES_DB:-docvec}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER?set POSTGRES_USER}:${POSTGRES_PASSWORD?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB?set POSTGRES_DB}
       - REDIS_URL=redis://redis:6379
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minio_secret}
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER?set MINIO_ROOT_USER}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD?set MINIO_ROOT_PASSWORD}
+      - SECRET_KEY=${SECRET_KEY?set SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY?set ENCRYPTION_KEY}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
       - ENVIRONMENT=production
       - HF_HOME=/model_cache
     volumes:
       - ./backend:/app
-      - backend_venv:/app/.venv
+      - worker_venv:/app/.venv
       - model_cache:/model_cache
     deploy:
       resources:
@@ -153,23 +155,23 @@ services:
       context: ./backend
       dockerfile: Dockerfile.worker
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-docvec}:${POSTGRES_PASSWORD:-docvec_secret}@postgres:5432/${POSTGRES_DB:-docvec}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER?set POSTGRES_USER}:${POSTGRES_PASSWORD?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB?set POSTGRES_DB}
       - REDIS_URL=redis://redis:6379
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minio_secret}
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER?set MINIO_ROOT_USER}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD?set MINIO_ROOT_PASSWORD}
+      - SECRET_KEY=${SECRET_KEY?set SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY?set ENCRYPTION_KEY}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
       - ENVIRONMENT=production
       - HF_HOME=/model_cache
     volumes:
       - ./backend:/app
-      - backend_venv:/app/.venv
+      - worker_venv:/app/.venv
       - model_cache:/model_cache
     deploy:
       resources:
@@ -196,12 +198,14 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # Basic auth (username:password) — must be set in .env
+      - FLOWER_BASIC_AUTH=${FLOWER_BASIC_AUTH?set FLOWER_BASIC_AUTH}
     ports:
-      - "5556:5555"
+      - "127.0.0.1:5556:5555"  # 로컬 전용
     depends_on:
       redis:
         condition: service_healthy
-    command: poetry run celery -A app.pipeline.celery_app flower --port=5555
+    command: poetry run celery -A app.pipeline.celery_app flower --port=5555 --basic_auth=${FLOWER_BASIC_AUTH?set FLOWER_BASIC_AUTH}
 
   # sweep_stuck_workflow_runs를 30초마다 실행해, 문서 상세 페이지를 아무도
   # 열어보지 않아도 timeout+grace를 넘긴 run을 스스로 FAILED로 정리한다
@@ -212,14 +216,15 @@ services:
       context: ./backend
       dockerfile: Dockerfile.worker
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-docvec}:${POSTGRES_PASSWORD:-docvec_secret}@postgres:5432/${POSTGRES_DB:-docvec}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER?set POSTGRES_USER}:${POSTGRES_PASSWORD?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB?set POSTGRES_DB}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - SECRET_KEY=${SECRET_KEY?set SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY?set ENCRYPTION_KEY}
       - ENVIRONMENT=production
     volumes:
       - ./backend:/app
-      - backend_venv:/app/.venv
+      - worker_venv:/app/.venv
     depends_on:
       postgres:
         condition: service_healthy
@@ -231,8 +236,6 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    ports:
-      - "3001:80"
     depends_on:
       - api
 
@@ -240,12 +243,14 @@ services:
   # 리다이렉트용 80) 하나만 열면 된다. 도메인이 없어 Caddyfile은 자체 서명
   # 인증서("tls internal")를 쓴다 — 방문자 브라우저에 "안전하지 않음" 경고가
   # 뜨는 게 정상이며, 접속 자체는 암호화된다. postgres/redis/qdrant/minio/
-  # flower의 호스트 포트 매핑은 그대로 두되(로컬/LAN 개발 편의), 공유기에서는
+  # flower·api의 호스트 포트는 127.0.0.1에만 바인딩돼 있다(2026-10-12). 공유기에서는
   # 이 서비스의 443/80 외 어떤 포트도 포워딩하면 안 된다.
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.8.4-alpine  # Pin to exact version (was: 2-alpine)
     ports:
       - "443:443"
+      - "4443:443"  # 공유기 내부 포트를 4443으로 쓰는 구성용(Caddy 443과 동일)
+      - "3001:443"  # 공유기 내부 포트를 3001로 쓰는 구성용 — 예전 3001 포워딩이 그대로 HTTPS로 동작(frontend 평문 3001은 제거됨)
       - "80:80"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
@@ -253,6 +258,7 @@ services:
       - caddy_config:/config
     depends_on:
       - frontend
+      - minio
 
 volumes:
   postgres_data:
@@ -260,6 +266,7 @@ volumes:
   qdrant_data:
   minio_data:
   backend_venv:
+  worker_venv:
   model_cache:
   caddy_data:
   caddy_config:

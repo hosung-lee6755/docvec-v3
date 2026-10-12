@@ -33,7 +33,7 @@ async def test_update_graph_rejects_published_version():
     db.get = AsyncMock(side_effect=[workflow, published_version])
 
     with patch(
-        "app.api.v1.endpoints.workflows.check_project_access",
+        "app.api.v1.endpoints.workflows.access.check_project_access",
         new=AsyncMock(return_value=workflow),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -55,7 +55,7 @@ async def test_publish_version_rejects_already_published():
     db.get = AsyncMock(side_effect=[workflow, published_version])
 
     with patch(
-        "app.api.v1.endpoints.workflows.check_project_access",
+        "app.api.v1.endpoints.workflows.access.check_project_access",
         new=AsyncMock(return_value=workflow),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -75,11 +75,11 @@ async def test_publish_version_rejects_when_graph_invalid():
 
     with (
         patch(
-            "app.api.v1.endpoints.workflows.check_project_access",
+            "app.api.v1.endpoints.workflows.access.check_project_access",
             new=AsyncMock(return_value=workflow),
         ),
         patch(
-            "app.api.v1.endpoints.workflows.validate_graph",
+            "app.api.v1.endpoints.workflows.versions.validate_graph",
             new=AsyncMock(return_value=[{"message": "워크플로우에 블록이 하나도 없습니다", "block_id": None}]),
         ),
     ):

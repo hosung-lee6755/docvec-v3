@@ -6,7 +6,7 @@ from app.pipeline.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="tasks.reembed_collection", queue="low", bind=True)
+@celery_app.task(name="tasks.reembed_collection", queue="embed", bind=True)
 def reembed_collection(self, collection_id: str, embedding_model: str) -> dict:
     """Re-embeds every chunk of every indexed document in a collection with a
     new embedding model, upserting each point under its existing id so payload

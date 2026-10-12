@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, Enum as SQLEnum, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Enum as SQLEnum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from app.db.types import UTCDateTime
@@ -80,6 +80,10 @@ class WorkflowRun(Base):
 
 class WorkflowRunStep(Base):
     __tablename__ = "workflow_run_steps"
+    __table_args__ = (
+        # Defect 5: UNIQUE constraint to prevent duplicate (run_id, block_instance_id) pairs
+        UniqueConstraint("run_id", "block_instance_id", name="uq_workflow_run_steps_run_id_block_instance_id"),
+    )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     run_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("workflow_runs.id"), index=True)

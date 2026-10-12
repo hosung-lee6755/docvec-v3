@@ -113,7 +113,8 @@ async def readiness():
         checks["database"] = "ok"
     except Exception as exc:
         logger.exception("readiness check failed", extra={"dependency": "database"})
-        checks["database"] = f"error: {exc}"
+        # Return only "error" unauthenticated; log details server-side
+        checks["database"] = "error"
 
     try:
         redis_client = aioredis.from_url(settings.redis_url)
@@ -124,14 +125,14 @@ async def readiness():
         checks["redis"] = "ok"
     except Exception as exc:
         logger.exception("readiness check failed", extra={"dependency": "redis"})
-        checks["redis"] = f"error: {exc}"
+        checks["redis"] = "error"
 
     try:
         await run_in_threadpool(qdrant_service._client.get_collections)
         checks["qdrant"] = "ok"
     except Exception as exc:
         logger.exception("readiness check failed", extra={"dependency": "qdrant"})
-        checks["qdrant"] = f"error: {exc}"
+        checks["qdrant"] = "error"
 
     try:
         await run_in_threadpool(
@@ -140,7 +141,7 @@ async def readiness():
         checks["minio"] = "ok"
     except Exception as exc:
         logger.exception("readiness check failed", extra={"dependency": "minio"})
-        checks["minio"] = f"error: {exc}"
+        checks["minio"] = "error"
 
     healthy = all(v == "ok" for v in checks.values())
     return JSONResponse(

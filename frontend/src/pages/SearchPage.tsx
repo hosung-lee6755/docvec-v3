@@ -224,17 +224,17 @@ export default function SearchPage() {
         </div>
       )}
 
-      {!search.isPending && (search.data?.items.length ?? 0) > 0 && (
+      {!search.isPending && search.data && (search.data.items.length ?? 0) > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: 0 }}>
-            {search.data!.items.length}개 결과
-            {!!search.data!.added_terms.length && (
+            {search.data.items.length}개 결과
+            {!!search.data.added_terms.length && (
               <span style={{ marginLeft: 'var(--space-2)', color: 'var(--color-text-muted)' }}>
-                · 사전에 등록된 동의어로 확장됨: {search.data!.added_terms.join(', ')}
+                · 사전에 등록된 동의어로 확장됨: {search.data.added_terms.join(', ')}
               </span>
             )}
           </p>
-          {search.data!.items.map((result) => (
+          {search.data.items.map((result) => (
             <div key={result.chunk_id} style={{
               background: '#fff', border: '1px solid #e2e8f0',
               borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',

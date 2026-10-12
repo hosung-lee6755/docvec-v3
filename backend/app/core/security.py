@@ -15,7 +15,9 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
         expire = datetime.utcnow() + timedelta(
             minutes=settings.access_token_expire_minutes
         )
-    to_encode.update({"exp": expire})
+    # Mark this as an access token (not a refresh token).
+    # Helps prevent misuse of refresh tokens as bearer auth.
+    to_encode.update({"exp": expire, "type": "access"})
     encoded_jwt = jwt.encode(
         to_encode, settings.secret_key, algorithm=settings.algorithm
     )

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -252,7 +252,7 @@ class DocumentRevisionsResponse(BaseModel):
 
 
 class DocumentTagsUpdateRequest(BaseModel):
-    tags: list[str] = Field(..., max_length=20)
+    tags: list[Annotated[str, Field(max_length=100)]] = Field(..., max_length=20)
 
 
 class DocumentTagSuggestionRequest(BaseModel):

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -253,6 +253,9 @@ async def set_my_api_key(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.core.rate_limit import enforce_user_rate_limit
+
+    enforce_user_rate_limit(str(current_user.id), "api_key_write", limit=10, window_seconds=60)
     api_key = data.api_key.strip()
     if not api_key:
         raise HTTPException(status_code=422, detail="api_key is required")
@@ -266,7 +269,7 @@ async def set_my_api_key(
     )
     if existing:
         existing.encrypted_key = encrypted
-        existing.updated_at = datetime.utcnow()
+        existing.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     else:
         db.add(
             UserApiKey(

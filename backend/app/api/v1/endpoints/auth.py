@@ -1,3 +1,4 @@
+import hmac
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -41,7 +42,9 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
 async def register(
     request: UserCreate, response: Response, http_request: Request, db: AsyncSession = Depends(get_db)
 ):
-    enforce_rate_limit(http_request, "register", limit=5, window_seconds=60)
+    # Rate limit by IP and by email (per-account throttle prevents lockout when
+    # one attacker floods from behind a shared proxy IP).
+    enforce_rate_limit(http_request, "register", limit=5, window_seconds=60, email=request.email)
 
     result = await db.execute(select(User).where(User.email == request.email))
     if result.scalar_one_or_none():
@@ -49,11 +52,16 @@ async def register(
         # an attacker enumerate every registered email address.
         raise HTTPException(status_code=409, detail="Registration failed")
 
-    granted_admin = (
-        bool(settings.admin_signup_code)
-        and request.admin_code is not None
-        and request.admin_code == settings.admin_signup_code
-    )
+    # Use constant-time comparison for admin_code to prevent timing attacks.
+    # Also rate-limit attempts that supply an admin_code more strictly.
+    granted_admin = False
+    if bool(settings.admin_signup_code) and request.admin_code is not None:
+        # Stricter rate limit on admin code attempts (prevent brute-force)
+        enforce_rate_limit(http_request, "register:admin_code", limit=3, window_seconds=300, email=request.email)
+        granted_admin = hmac.compare_digest(
+            request.admin_code,
+            settings.admin_signup_code,
+        )
     user = User(
         id=uuid4(),
         email=request.email,
@@ -82,7 +90,9 @@ async def register(
 async def login(
     request: LoginRequest, response: Response, http_request: Request, db: AsyncSession = Depends(get_db)
 ):
-    enforce_rate_limit(http_request, "login", limit=5, window_seconds=60)
+    # Rate limit by IP and by email (per-account throttle prevents lockout when
+    # one attacker floods from behind a shared proxy IP).
+    enforce_rate_limit(http_request, "login", limit=5, window_seconds=60, email=request.email)
 
     result = await db.execute(select(User).where(User.email == request.email))
     user = result.scalar_one_or_none()
@@ -149,6 +159,10 @@ async def get_current_user(
 ):
     payload = verify_token(credentials.credentials)
     if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    # Reject refresh tokens used as bearer auth. Accept tokens without type
+    # (legacy) for backward compatibility with already-issued tokens.
+    if payload.get("type") == "refresh":
         raise HTTPException(status_code=401, detail="Invalid token")
 
     result = await db.execute(select(User).where(User.id == payload.get("sub")))

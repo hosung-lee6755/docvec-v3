@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -315,13 +315,16 @@ async def create_message(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.core.rate_limit import enforce_user_rate_limit
     from app.pipeline.tasks.chat import generate_answer
 
+    # 질문 1건마다 LLM 생성 태스크가 하나 돈다 — 계정당 분당 상한으로 큐 폭주를 막는다.
+    enforce_user_rate_limit(str(current_user.id), "chat_message", limit=30, window_seconds=60)
     conversation = await _get_owned_conversation(db, conversation_id, current_user)
 
     msg = ChatMessage(conversation_id=conversation.id, query=data.query, status="PENDING")
     db.add(msg)
-    conversation.updated_at = datetime.utcnow()
+    conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     await db.refresh(msg)
 

@@ -20,7 +20,13 @@ def test_invalid_environment_raises():
         Settings(environment="invalid_env")
 
 def test_is_production_flag():
-    s = Settings(environment="production", secret_key="x", database_url="postgresql+asyncpg://x:x@x/x")
+    # 프로덕션은 32자 이상 SECRET_KEY와 ENCRYPTION_KEY가 필수다(core/config.py 검증).
+    s = Settings(
+        environment="production",
+        secret_key="k" * 32,
+        encryption_key="e" * 32,
+        database_url="postgresql+asyncpg://x:x@x/x",
+    )
     assert s.is_production is True
 
 def test_qdrant_url_property():

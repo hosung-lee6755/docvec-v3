@@ -36,7 +36,7 @@ _MAX_SUMMARY_INPUT_CHARS = 12_000
 _SUMMARY_MODEL_KEY = "qwen2.5-3b"
 
 
-@celery_app.task(name="tasks.generate_summary", queue="low")
+@celery_app.task(name="tasks.generate_summary", queue="embed")
 def generate_summary(document_id: str) -> dict:
     from app.db.models.document import Document
     from app.db.session import get_sync_db

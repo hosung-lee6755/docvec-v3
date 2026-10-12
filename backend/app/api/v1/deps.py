@@ -17,6 +17,10 @@ async def get_current_user(
     payload = verify_token(credentials.credentials)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
+    # Reject refresh tokens used as bearer auth. Accept tokens without type
+    # (legacy) for backward compatibility with already-issued tokens.
+    if payload.get("type") == "refresh":
+        raise HTTPException(status_code=401, detail="Invalid token")
     result = await db.execute(select(User).where(User.id == payload.get("sub")))
     user = result.scalar_one_or_none()
     if not user:

@@ -39,7 +39,7 @@ async def test_upload_zip_flattens_path_traversal_entries():
         # replaced by _start_preprocess_workflow (see its docstring) — patch
         # that instead so this test doesn't try to actually enqueue a Celery task.
         patch(
-            "app.api.v1.endpoints.documents._start_preprocess_workflow", new=AsyncMock()
+            "app.api.v1.endpoints.documents.upload._start_preprocess_workflow", new=AsyncMock()
         ) as mock_start_workflow,
     ):
         response = await upload_documents_zip(

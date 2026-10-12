@@ -1,9 +1,12 @@
+import logging
 from io import BytesIO
 
 from minio import Minio
 from minio.error import S3Error
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class StorageService:
@@ -20,7 +23,7 @@ class StorageService:
             settings.minio_public_endpoint,
             access_key=settings.minio_access_key,
             secret_key=settings.minio_secret_key,
-            secure=settings.minio_secure,
+            secure=settings.minio_public_secure,
             # Skip auto region lookup: it connects to the endpoint host, which for the
             # public client is only reachable from outside the Docker network.
             region="us-east-1",
@@ -62,7 +65,8 @@ class StorageService:
         try:
             self._client.remove_object(bucket, key)
         except S3Error:
-            pass
+            # 삭제는 best-effort(없는 객체 포함)지만 실제 스토리지 장애를 숨기지 않도록 기록한다.
+            logger.warning("객체 삭제 실패: %s/%s", bucket, key, exc_info=True)
 
 
 storage_service = StorageService()

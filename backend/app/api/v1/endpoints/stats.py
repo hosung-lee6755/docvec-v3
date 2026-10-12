@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -104,7 +104,7 @@ async def get_processing_stats(
     """최근 24시간 처리 현황 — 와이어프레임 §9 위젯. 관리자 전용이 아니라 /stats와
     동일하게 current_user 소유 문서로 스코프한다(§0: '문서 처리' 그룹, 관리 그룹 아님)."""
     user_id = str(current_user.id)
-    since = datetime.utcnow() - _PROCESSING_STATS_WINDOW
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - _PROCESSING_STATS_WINDOW
 
     runs_in_window = (
         select(WorkflowRun)

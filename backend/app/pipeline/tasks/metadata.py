@@ -61,7 +61,7 @@ def _parse_keywords(raw: str, exclude: set[str]) -> list[str]:
     return result
 
 
-@celery_app.task(name="tasks.extract_metadata", queue="low")
+@celery_app.task(name="tasks.extract_metadata", queue="embed")
 def extract_metadata(document_id: str) -> dict:
     from app.db.models.document import Document
     from app.db.session import get_sync_db

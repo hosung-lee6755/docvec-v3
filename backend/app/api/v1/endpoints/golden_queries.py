@@ -108,7 +108,11 @@ async def run_golden_eval(
     is small (a handful to dozens of queries) so this stays well within
     request timeout, and the per-run result needs to come back synchronously
     for the UI to show right away."""
+    from app.core.rate_limit import enforce_user_rate_limit
     from app.services.qdrant_service import qdrant_service
+
+    # 골든셋 전체를 동기로 검색·임베딩한다 — 반복 클릭으로 워커가 막히지 않게 제한한다.
+    enforce_user_rate_limit(str(current_user.id), "golden_eval", limit=5, window_seconds=60)
 
     await check_collection_access(db, collection_id, current_user, min_role="viewer")
 

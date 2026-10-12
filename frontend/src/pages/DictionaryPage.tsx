@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
-  AlertTriangle, ArrowLeftRight, Ban, BookOpen, CheckCircle2, Clock, Download,
+  AlertTriangle, ArrowLeftRight, Ban, BookOpen, CheckCircle2, Download,
   History, Loader2, Pencil, Search, ShieldOff, Tag, Trash2, Upload, X,
 } from 'lucide-react'
 import {
@@ -8,7 +8,6 @@ import {
   useDeleteDictionaryEntry,
   useDictionaryEntries,
   useDictionaryEntryImpact,
-  useDictionaryRevisions,
   useExportDictionaryEntries,
   useImportDictionaryEntries,
   useUpdateDictionaryEntry,
@@ -23,19 +22,9 @@ import {
   type UserProcessingRule,
   type UserTermType,
 } from '../hooks/useDictionary'
-import { useStartPartialReprocess } from '../hooks/useDocumentRuns'
 import { useAuthStore } from '../store/authStore'
-
-const REVISION_CHANGE_LABELS: Record<string, string> = {
-  CREATE: '추가', UPDATE: '수정', DELETE: '삭제', IMPORT: '엑셀 가져오기',
-}
-
-// DictionaryEntryType(백엔드/프론트 공용)을 부분 재처리 API의 start_block_type으로
-// 매핑 — 사전 블록 3종의 실제 block_type 이름(stopword/synonym/user_dict)과
-// entry_type 이름이 custom_word 하나만 다르다.
-const ENTRY_TYPE_TO_BLOCK_TYPE: Record<DictionaryEntryType, string> = {
-  stopword: 'stopword', synonym: 'synonym', custom_word: 'user_dict',
-}
+import { ImpactModal } from '../components/dictionary/ImpactModal'
+import { RevisionView } from '../components/dictionary/RevisionView'
 
 const TABS: { type: DictionaryEntryType; label: string; hint: string; icon: typeof Ban }[] = [
   { type: 'stopword', label: '불용어', hint: '분석/검색에서 의미 기여도가 낮아 제외할 단어입니다.', icon: Ban },
@@ -193,8 +182,6 @@ export default function DictionaryPage() {
   const exportEntries = useExportDictionaryEntries(tab)
   const importEntries = useImportDictionaryEntries(tab)
   const entryImpact = useDictionaryEntryImpact()
-  const startPartialReprocess = useStartPartialReprocess()
-  const { data: revisionsData, isLoading: revisionsLoading } = useDictionaryRevisions(view === 'revisions')
 
   const filtered = useMemo(() => {
     const items = data?.items ?? []
@@ -217,7 +204,14 @@ export default function DictionaryPage() {
     )
   }
 
-  const activeTab = TABS.find((t) => t.type === tab)!
+  const activeTab = TABS.find((t) => t.type === tab)
+  if (!activeTab) {
+    return (
+      <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
+        <p>탭 정보를 찾을 수 없습니다.</p>
+      </div>
+    )
+  }
 
   function resetForm() {
     setForm(EMPTY_FORM)
@@ -296,25 +290,6 @@ export default function DictionaryPage() {
     } else {
       createEntry.mutate(payload, { onSuccess: resetForm })
     }
-  }
-
-  async function handleReprocessAffected() {
-    if (!impact) return
-    const blockType = ENTRY_TYPE_TO_BLOCK_TYPE[tab]
-    let done = 0
-    for (const doc of impact.documents) {
-      try {
-        await startPartialReprocess.mutateAsync({
-          documentId: doc.id,
-          startBlockType: blockType,
-          reason: '사전 항목 변경에 따른 일괄 재처리',
-        })
-        done += 1
-      } catch {
-        // 개별 문서 재처리 실패는 건너뛰고 나머지는 계속 진행 — 완료 건수에만 반영
-      }
-    }
-    setReprocessDone(done)
   }
 
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -776,132 +751,15 @@ export default function DictionaryPage() {
       </>
       )}
 
-      {view === 'revisions' && (
-        <div className="dict-card" style={{ padding: 'var(--space-4)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
-            <h2 style={{ fontSize: 18, fontWeight: 600 }}>버전 이력</h2>
-            <span style={{
-              fontSize: 11, fontWeight: 600, color: 'var(--color-accent)', background: 'rgba(99,102,241,0.15)',
-              borderRadius: 999, padding: '2px 8px',
-            }}>
-              최근 {revisionsData?.revisions.length ?? 0}건
-            </span>
-          </div>
-          <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 'var(--space-4)' }}>
-            사전 항목의 추가·수정·삭제·엑셀 가져오기 이력입니다. 변경 전/후 값은 표시하지 않으며, 누가·언제·무엇을 했는지만 보여줍니다.
-          </p>
+      {view === 'revisions' && <RevisionView />}
 
-          {revisionsLoading && (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-8)' }}>
-              <Loader2 size={24} style={{ animation: 'dict-spin 1s linear infinite', color: 'var(--color-text-muted)' }} />
-            </div>
-          )}
-
-          {!revisionsLoading && (revisionsData?.revisions.length ?? 0) === 0 && (
-            <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
-              <Clock size={40} style={{ margin: '0 auto var(--space-3)', display: 'block', opacity: 0.4 }} />
-              <p style={{ fontSize: 13 }}>변경 이력이 없습니다.</p>
-            </div>
-          )}
-
-          {!revisionsLoading && (revisionsData?.revisions.length ?? 0) > 0 && (
-            <div className="krds-table-wrap" style={{ overflowX: 'auto' }}>
-              <table className="tbl col data">
-                <caption className="sr-only">사전 버전 이력</caption>
-                <thead>
-                  <tr>
-                    <th scope="col" style={{ width: '8%' }}>버전</th>
-                    <th scope="col">용어</th>
-                    <th scope="col" style={{ width: '10%' }}>유형</th>
-                    <th scope="col" style={{ width: '10%' }}>변경</th>
-                    <th scope="col" style={{ width: '14%' }}>작성자</th>
-                    <th scope="col" style={{ width: '18%' }}>일시</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {revisionsData?.revisions.map((rev) => (
-                    <tr key={rev.version} className="dict-row">
-                      <td>{rev.version}</td>
-                      <td>{rev.entry_term ?? <span style={{ color: 'var(--color-text-muted)' }}>(삭제된 항목)</span>}</td>
-                      <td>{rev.entry_type ? TABS.find((t) => t.type === rev.entry_type)?.label ?? rev.entry_type : '-'}</td>
-                      <td>{REVISION_CHANGE_LABELS[rev.change_type] ?? rev.change_type}</td>
-                      <td>{rev.created_by_name ?? <span style={{ color: 'var(--color-text-muted)' }}>-</span>}</td>
-                      <td>{new Date(rev.created_at).toLocaleString('ko-KR')}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {impact && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,
-          }}
-        >
-          <section className="krds-modal fade shown in" role="dialog">
-            <div className="modal-dialog modal-sm">
-              <div className="modal-content">
-                <div className="modal-header">
-                  <h2 className="modal-title">영향 문서 {impact.affected_document_count}건</h2>
-                </div>
-                <div className="modal-conts">
-                  <div className="conts-area" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                    <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>
-                      이 사전 항목이 이미 적용된 문서입니다. 변경 사항을 반영하려면 재처리가 필요합니다.
-                    </p>
-                    <div style={{
-                      maxHeight: 180, overflowY: 'auto', border: '1px solid var(--color-border)',
-                      borderRadius: 'var(--radius-md)',
-                    }}>
-                      {impact.documents.map((doc) => (
-                        <div key={doc.id} style={{ padding: '6px 10px', fontSize: 12, borderBottom: '1px solid #f1f5f9' }}>
-                          {doc.filename}
-                        </div>
-                      ))}
-                    </div>
-                    {reprocessDone !== null && (
-                      <p style={{ fontSize: 12, color: 'var(--color-success)', margin: 0 }}>
-                        {reprocessDone}건 재처리를 시작했습니다.
-                      </p>
-                    )}
-                    <div className="modal-btn btn-wrap">
-                      <button
-                        type="button"
-                        onClick={() => { setImpact(null); setReprocessDone(null) }}
-                        className="krds-btn medium secondary"
-                      >
-                        나중에
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleReprocessAffected}
-                        disabled={startPartialReprocess.isPending || reprocessDone !== null}
-                        className="krds-btn medium primary"
-                      >
-                        {startPartialReprocess.isPending ? '재처리 시작 중…' : `${impact.affected_document_count}건 재처리`}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="krds-btn medium icon btn-close close-modal"
-                  onClick={() => { setImpact(null); setReprocessDone(null) }}
-                >
-                  <span className="sr-only">닫기</span>
-                  <X size={20} />
-                </button>
-              </div>
-            </div>
-            <div className="modal-back"></div>
-          </section>
-        </div>
-      )}
+      <ImpactModal
+        impact={impact}
+        tab={tab}
+        reprocessDone={reprocessDone}
+        onClose={() => setImpact(null)}
+        onReprocessDone={setReprocessDone}
+      />
     </div>
   )
 }

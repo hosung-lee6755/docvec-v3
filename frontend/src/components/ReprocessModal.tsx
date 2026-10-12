@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { useDocumentRuns, useReprocessImpact, useStartPartialReprocess } from '../hooks/useDocumentRuns'
 import { useWorkflowRun } from '../hooks/useWorkflows'
@@ -18,9 +18,13 @@ export default function ReprocessModal({
   const { data: runsData } = useDocumentRuns(documentId)
   const latestRunId = runsData?.runs[0]?.id ?? null
   const { data: runDetail } = useWorkflowRun(latestRunId)
+
   // FAILED도 선택 가능해야 시간 제한 초과 등으로 멈춘 블록 자체를 다시 시작점으로
   // 고를 수 있다 — COMPLETED만 보여주면 정작 재시도하고 싶은 블록이 목록에서 빠진다.
-  const steps = runDetail?.steps.filter((s) => (s.status === 'COMPLETED' || s.status === 'FAILED') && s.block_type) ?? []
+  const steps = useMemo(
+    () => runDetail?.steps.filter((s) => (s.status === 'COMPLETED' || s.status === 'FAILED') && s.block_type) ?? [],
+    [runDetail],
+  )
 
   const [mode, setMode] = useState<'full' | 'specific'>(initialBlockInstanceId ? 'specific' : 'full')
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(initialBlockInstanceId ?? null)
@@ -62,12 +66,15 @@ export default function ReprocessModal({
 
   const handleSubmit = async () => {
     if (!canSubmit) return
+    const timeoutOverrides = hasValidOverride && selectedStep?.block_type
+      ? { [selectedStep.block_type as string]: overrideSeconds }
+      : undefined
     const result = await startReprocess.mutateAsync({
       documentId,
       startBlockType: startBlockType ?? undefined,
       startBlockInstanceId: startBlockInstanceId ?? undefined,
       reason: reason.trim() || undefined,
-      timeoutOverrides: hasValidOverride ? { [selectedStep!.block_type as string]: overrideSeconds } : undefined,
+      timeoutOverrides,
     })
     onStarted?.(result.run_id)
     onClose()

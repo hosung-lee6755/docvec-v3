@@ -241,10 +241,11 @@ class HWPAdapter(BaseAdapter):
 
     def _extract_hwp(self, file_path: Path) -> RawParsedDocument:
         try:
-            import xml.etree.ElementTree as ET
             from io import BytesIO
 
             from hwp5.xmlmodel import Hwp5File
+
+            from app.core.safe_xml import parse_xml_bytes
         except ImportError:
             return RawParsedDocument(
                 format_id="hwp",
@@ -259,7 +260,7 @@ class HWPAdapter(BaseAdapter):
         try:
             buf = BytesIO()
             Hwp5File(str(file_path)).xmlevents(embedbin=False).dump(buf, xml_declaration=True)
-            root = ET.fromstring(buf.getvalue())
+            root = parse_xml_bytes(buf.getvalue())
             body = root.find("BodyText")
             if body is not None:
                 _walk_hwp_body(body, paragraphs, raw_tables)
@@ -311,8 +312,9 @@ class HWPAdapter(BaseAdapter):
         )
 
     def _extract_hwpx(self, file_path: Path) -> RawParsedDocument:
-        import xml.etree.ElementTree as ET
         import zipfile
+
+        from app.core.safe_xml import parse_xml
 
         paragraphs: list[str] = []
         raw_tables: list[list[list[str]]] = []
@@ -321,8 +323,7 @@ class HWPAdapter(BaseAdapter):
                 for name in sorted(z.namelist()):
                     if name.startswith("Contents/") and name.endswith(".xml"):
                         with z.open(name) as f:
-                            tree = ET.parse(f)
-                            _walk_hwpx(tree.getroot(), paragraphs, raw_tables)
+                            _walk_hwpx(parse_xml(f), paragraphs, raw_tables)
                 raw_images = _hwpx_bindata_images(z)
         except Exception as exc:
             return RawParsedDocument(

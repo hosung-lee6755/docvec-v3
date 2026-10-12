@@ -7,6 +7,7 @@ import { useDocumentRuns, useReprocessImpact } from '../../hooks/useDocumentRuns
 import { useWorkflowRun } from '../../hooks/useWorkflows'
 
 const STRUCTURE_ANALYZE_BLOCK_TYPE = 'structure_analyze'
+const EMPTY_NODES: DocumentNodeItem[] = []
 
 const NODE_TYPES = [
   'DOCUMENT', 'COVER', 'TOC', 'SECTION', 'HEADING', 'PARAGRAPH', 'SENTENCE',
@@ -90,7 +91,8 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
   const [fontNameInput, setFontNameInput] = useState('')
   const [showReprocessBanner, setShowReprocessBanner] = useState(false)
 
-  const nodes = data?.nodes ?? []
+  // `?? []`를 렌더마다 새로 만들면 useMemo 의존성이 매번 바뀌므로 안정된 참조를 쓴다.
+  const nodes = data?.nodes ?? EMPTY_NODES
   const tree = useMemo(() => buildTree(nodes), [nodes])
 
   // 보정 저장 후 "구조 변경이 청크 N개에 영향" 배너(와이어프레임 §3.2)에

@@ -39,6 +39,31 @@ _CHAIN = [
 
 
 def upgrade() -> None:
+    # --- seed: system user FIRST (ON CONFLICT DO NOTHING for idempotency) -----
+    # This MUST run before workflow_definitions insert, because the latter has a
+    # foreign key created_by -> users.id. On an empty DB, if workflow_definitions
+    # runs first, the FK violation causes the entire transaction to roll back.
+    conn = op.get_bind()
+
+    # Insert or skip if the system user already exists (idempotent).
+    # For an existing DB after a fresh migration, this is a no-op.
+    # For a fresh DB, this creates the system user so the FK constraint works.
+    conn.execute(
+        sa.text(
+            "INSERT INTO users (id, email, username, hashed_password, role, is_active, created_at, updated_at) "
+            "VALUES (:id, :email, :username, :password, :role, :is_active, now(), now()) "
+            "ON CONFLICT (id) DO NOTHING"
+        ),
+        {
+            "id": _SYSTEM_USER_ID,
+            "email": "system@docvec.internal",
+            "username": "system",
+            "password": "$2b$12$" + "x" * 53,  # bcrypt hash of empty string (actual unused — see main.py)
+            "role": "admin",
+            "is_active": False,
+        },
+    )
+
     # --- workflow_definitions: allow system-owned (project_id NULL) rows ------
     op.alter_column('workflow_definitions', 'project_id', nullable=True)
 
@@ -50,7 +75,7 @@ def upgrade() -> None:
     )
 
     # --- seed: system 표준 전처리 워크플로우 (project_id=NULL, kind=PREPROCESS) --
-    conn = op.get_bind()
+    # System user was created above, so this FK insert now succeeds.
     conn.execute(
         sa.text(
             "INSERT INTO workflow_definitions "
@@ -113,3 +138,8 @@ def downgrade() -> None:
     op.drop_column('workflow_definitions', 'kind')
     sa.Enum(name='workflow_definition_kind').drop(op.get_bind(), checkfirst=True)
     op.alter_column('workflow_definitions', 'project_id', nullable=False)
+
+    # NOTE: Do NOT delete the system user here. The user is also created by
+    # app/main.py's lifespan hook on every startup (idempotent), so both the
+    # migration and the app manage it. Deleting it here would cause conflicts
+    # if downgrade is followed by an app restart.
