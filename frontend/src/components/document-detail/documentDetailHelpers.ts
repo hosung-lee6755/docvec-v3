@@ -35,7 +35,7 @@ export function qualityEvidenceText(category: string, metrics: QualityMetrics): 
     case 'structure':
       return `구조 노드 ${metrics.node_count ?? '-'}개, 빈 페이지 비율 ${((metrics.empty_page_ratio ?? 0) * 100).toFixed(1)}%`
     case 'normalization':
-      return `사전 적용 ${metrics.dictionary_application_count ?? 0}건 (정보성 지표 — 0건도 정상)`
+      return `사전 적용 ${metrics.dictionary_application_count ?? 0}건 · 항상 100점인 고정값(측정하지 않음, 사전 적용 건수는 참고용)`
     case 'chunking':
       return `생성된 청크 ${metrics.chunk_count ?? '-'}개`
     default:

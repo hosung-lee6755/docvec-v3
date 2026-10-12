@@ -2,6 +2,7 @@ import { AlertTriangle, Loader2 } from 'lucide-react'
 import type { TabKey } from './documentDetailHelpers'
 import type { QualityReport } from '../../hooks/useDocumentRuns'
 import type { useCancelRun, useResumeRun } from '../../hooks/useWorkflows'
+import { QUALITY_CRITERIA, QUALITY_DISCLAIMER, QUALITY_OVERALL_RULES } from './qualityCriteria'
 import { qualityStatusDisplay, QUALITY_CATEGORY_LABELS, qualityEvidenceText, QUALITY_WARNING_TAB } from './documentDetailHelpers'
 
 interface QualityTabProps {
@@ -56,6 +57,27 @@ export default function QualityTab({
           {qualityStatusDisplay(qualityReport.status, qualityReport.warnings?.length ?? 0).label}
         </span>
       </div>
+      <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0, lineHeight: 1.5 }}>
+        {QUALITY_DISCLAIMER}
+      </p>
+      <details>
+        <summary style={{ fontSize: 13, fontWeight: 600, cursor: 'pointer', userSelect: 'none' }}>
+          점수는 어떻게 계산되나요? (산정 기준 보기)
+        </summary>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', marginTop: 'var(--space-2)' }}>
+          {QUALITY_CRITERIA.map((c) => (
+            <div key={c.key} style={{ fontSize: 12, lineHeight: 1.6 }}>
+              <strong>{c.label}</strong>
+              <span className="krds-badge small bg-gray" style={{ marginLeft: 6 }}>{c.basis}</span>
+              <div>{c.how}</div>
+              <div style={{ color: 'var(--color-text-muted)' }}>보지 않는 것·한계: {c.limits}</div>
+            </div>
+          ))}
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.6 }}>
+            {QUALITY_OVERALL_RULES.map((rule) => <li key={rule}>{rule}</li>)}
+          </ul>
+        </div>
+      </details>
       {qualityReport.scores && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           {Object.entries(qualityReport.scores).map(([category, score]) => (
