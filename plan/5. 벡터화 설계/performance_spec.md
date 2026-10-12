@@ -264,7 +264,7 @@ LibreOffice 미리보기 PDF 텍스트와 매칭할 때 사용할 단락/표 텍
 | `_ZIP_MAX_ENTRY_UNCOMPRESSED_BYTES` | 200 MB |
 | `_ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES` | 2 GB |
 
-(backend/app/api/v1/endpoints/documents.py:65-67)
+(backend/app/api/v1/endpoints/documents/ 패키지 — 분리 전 documents.py:65-67)
 
 **설계:** 집 폭탄(zip bomb) 및 경로 조회(path traversal) 공격 방지.
 파일명은 `PurePosixPath(info.filename).name` 으로 정규화해 상위 디렉토리 탈출 차단.
