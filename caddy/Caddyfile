@@ -50,10 +50,15 @@
 	}
 	handle @minio {
 		# 변환 미리보기(HTML)는 iframe 으로 띄우므로 같은 출처 프레임만 허용한다(전역 DENY 덮어쓰기).
-		# 이제 MinIO 가 앱과 같은 출처라, 문서에서 변환된 HTML 이 앱 권한으로 스크립트를 실행하지 못하게
-		# CSP sandbox(고유 출처)와 script/연결 차단을 건다. 원본 파일 내용은 신뢰하지 않는다.
 		header X-Frame-Options SAMEORIGIN
-		header Content-Security-Policy "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:"
+		# 서명 URL 의 출처가 앱 출처와 달라도(예: 접속 주소와 MINIO_PUBLIC_ENDPOINT 가 다른 경우)
+		# 앱이 fetch 로 받을 수 있게 읽기 전용 경로에만 CORS 를 연다. 서명이 없으면 어차피 403 이다.
+		header Access-Control-Allow-Origin "*"
+		# 이제 MinIO 가 앱과 같은 출처라, 문서에서 변환된 HTML 이 앱 권한으로 스크립트를 실행하지 못하게
+		# CSP sandbox(고유 출처)를 건다. PDF 는 브라우저 PDF 뷰어가 처리하고, sandbox 가 걸린 PDF 는
+		# iframe 에서 뷰어가 차단되므로(원문대조의 대체 경로가 깨짐) PDF 에는 걸지 않는다.
+		@notpdf not path_regexp (?i)\.pdf$
+		header @notpdf Content-Security-Policy "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:"
 		reverse_proxy minio:9000
 	}
 
