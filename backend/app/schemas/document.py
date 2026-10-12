@@ -83,6 +83,20 @@ class DocumentReprocessRequest(BaseModel):
     # {block_type: timeoutSeconds} — 이 재처리 run에만 적용되는 시간 제한 오버라이드.
     # 셀러리 hard time limit에 걸려 멈췄던 run을 더 긴 제한으로 재시도할 때 쓴다.
     timeout_overrides: dict[str, int] | None = None
+    # True면 이전 실행의 버전을 물려받지 않고 문서 워크플로우의 최신 게시 버전으로
+    # 처음부터 새로 처리한다(워크플로우 설정을 바꿔 게시한 뒤 반영할 때).
+    # start_block_type 으로만 지정 가능(특정 블록 지정과는 함께 쓸 수 없다).
+    use_latest_version: bool = False
+
+    @model_validator(mode="after")
+    def _check_latest_version_mode(self) -> "DocumentReprocessRequest":
+        if self.use_latest_version and (
+            self.edited_text is not None or self.start_block_instance_id is not None
+        ):
+            raise ValueError(
+                "use_latest_version은 edited_text/start_block_instance_id와 함께 지정할 수 없습니다."
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_timeout_overrides_bounds(self) -> "DocumentReprocessRequest":

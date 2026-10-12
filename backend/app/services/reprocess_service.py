@@ -13,10 +13,11 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models.collection import Collection
 from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
 from app.db.models.document_node import DocumentNode
-from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
+from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge, WorkflowVersion
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 from app.services.dictionary_service import current_dictionary_version
 
@@ -246,6 +247,103 @@ async def start_partial_reprocess(
         queue=step_queue_for_block(start_block),
     )
 
+    return new_run
+
+
+async def resolve_latest_version(db: AsyncSession, parent_run: WorkflowRun) -> WorkflowVersion:
+    """문서가 처리된 워크플로우의 "지금 쓰는" 버전. 컬렉션이 이 워크플로우의 특정 버전을
+    고정(default_workflow_version)했으면 그 버전, 아니면 최신 게시 버전 — 업로드 시
+    `_resolve_preprocess_version_id`와 같은 기준이라 새로 올린 문서와 같은 버전으로 처리된다."""
+    parent_version = await db.get(WorkflowVersion, parent_run.version_id)
+    if parent_version is None:
+        raise ReprocessError("원본 실행의 워크플로우 버전을 찾을 수 없습니다.")
+
+    query = select(WorkflowVersion).where(WorkflowVersion.workflow_id == parent_version.workflow_id)
+    collection = await db.get(Collection, parent_run.collection_id) if parent_run.collection_id else None
+    if (
+        collection is not None
+        and collection.default_workflow_id == parent_version.workflow_id
+        and collection.default_workflow_version is not None
+    ):
+        query = query.where(WorkflowVersion.version_number == collection.default_workflow_version)
+    else:
+        query = query.where(WorkflowVersion.published_at.is_not(None))
+    version = await db.scalar(query.order_by(WorkflowVersion.version_number.desc()).limit(1))
+    if version is None:
+        raise ReprocessError("이 워크플로우에 게시된 버전이 없습니다.")
+    return version
+
+
+async def start_reprocess_on_latest_version(
+    db: AsyncSession, doc: Document, reason: str | None,
+    timeout_overrides: dict[str, int] | None = None,
+) -> WorkflowRun:
+    """문서를 워크플로우의 최신 게시 버전으로 처음부터 다시 처리한다.
+
+    부분 재처리(`start_partial_reprocess`)는 상류 스텝을 복사해 이전 버전 설정 그대로
+    쓰므로 새 버전(예: text_extract.engine 변경)이 반영되지 않는다. 여기서는 스텝을
+    복사하지 않고 진입 블록부터 새 run을 실행한다 — 설정이 같은 블록은
+    block_execution_cache(config_hash 키)가 알아서 재사용한다."""
+    if not doc.active_run_id:
+        raise ReprocessError("이 문서는 아직 워크플로우로 처리된 적이 없어 이 기능을 사용할 수 없습니다.")
+    parent_run = await db.get(WorkflowRun, doc.active_run_id)
+    if parent_run is None:
+        raise ReprocessError("원본 실행 기록을 찾을 수 없습니다.")
+    if parent_run.status not in ("COMPLETED", "FAILED"):
+        raise ReprocessError(
+            "원본 실행이 아직 완료되지 않았습니다(백그라운드 후속 처리 중). 잠시 후 다시 시도하세요."
+        )
+
+    version = await resolve_latest_version(db, parent_run)
+    dictionary_version = await current_dictionary_version(db)
+
+    blocks = (
+        await db.scalars(select(WorkflowBlockInstance).where(WorkflowBlockInstance.version_id == version.id))
+    ).all()
+    edges = (await db.scalars(select(WorkflowEdge).where(WorkflowEdge.version_id == version.id))).all()
+    has_incoming = {e.to_block_id for e in edges}
+    entry_blocks = [b for b in blocks if b.id not in has_incoming]
+    if not entry_blocks:
+        raise ReprocessError("최신 버전에 시작 블록이 없습니다.")
+
+    new_run = WorkflowRun(
+        id=uuid4(),
+        version_id=version.id,
+        document_id=doc.id,
+        collection_id=parent_run.collection_id,
+        status="QUEUED",
+        trigger="REPROCESS",
+        parent_run_id=parent_run.id,
+        dictionary_version=dictionary_version,
+        timeout_overrides=timeout_overrides,
+        skip_review=parent_run.skip_review,
+        impact={
+            "reason": reason,
+            "changeType": "VERSION_UPGRADE",
+            "affectedBlocks": sorted({b.block_type for b in blocks}),
+            "affectedNodeCount": 0,
+            "affectedChunkCount": 0,
+            "fullReprocessingRequired": True,
+        },
+    )
+    db.add(new_run)
+    await db.flush()
+    doc.active_run_id = new_run.id
+
+    from app.pipeline.tasks.workflow import _STATUS_FOR_BLOCK_TYPE, run_workflow_step, step_queue_for_block
+
+    doc.status = _STATUS_FOR_BLOCK_TYPE.get(entry_blocks[0].block_type, "ANALYZING")
+    await db.commit()
+    await db.refresh(new_run)
+
+    for block in entry_blocks:
+        timeout_seconds = (timeout_overrides or {}).get(block.block_type) or (
+            block.config or {}
+        ).get("timeoutSeconds", 1800)
+        run_workflow_step.apply_async(
+            args=[str(new_run.id), str(block.id)], time_limit=timeout_seconds,
+            queue=step_queue_for_block(block),
+        )
     return new_run
 
 

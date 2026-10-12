@@ -114,7 +114,7 @@ export function useStartPartialReprocess() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({
-      documentId, startBlockType, startBlockInstanceId, reason, timeoutOverrides,
+      documentId, startBlockType, startBlockInstanceId, reason, timeoutOverrides, useLatestVersion,
     }: {
       documentId: string
       startBlockType?: string
@@ -122,12 +122,15 @@ export function useStartPartialReprocess() {
       reason?: string
       // {block_type: timeoutSeconds} — 이 재처리 run에만 적용되는 시간 제한 오버라이드.
       timeoutOverrides?: Record<string, number>
+      // true면 이전 실행의 워크플로우 버전이 아니라 최신 게시 버전으로 처음부터 처리한다.
+      useLatestVersion?: boolean
     }) => {
       const { data } = await apiClient.post(`/documents/${documentId}/reprocess`, {
         start_block_type: startBlockType ?? null,
         start_block_instance_id: startBlockInstanceId ?? null,
         reason: reason ?? null,
         timeout_overrides: timeoutOverrides ?? null,
+        use_latest_version: useLatestVersion ?? false,
       })
       return data as { message: string; run_id: string; status: string; impact: ReprocessImpact }
     },

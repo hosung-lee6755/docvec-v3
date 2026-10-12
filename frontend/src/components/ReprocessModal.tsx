@@ -29,6 +29,9 @@ export default function ReprocessModal({
   const [mode, setMode] = useState<'full' | 'specific'>(initialBlockInstanceId ? 'specific' : 'full')
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(initialBlockInstanceId ?? null)
   const [reason, setReason] = useState('')
+  // 워크플로우 설정(예: 텍스트 추출 엔진)을 바꿔 새 버전을 게시한 뒤 반영하려면 켠다.
+  // 끄면 이 문서를 처리했던 버전 그대로 재실행한다.
+  const [useLatestVersion, setUseLatestVersion] = useState(false)
   const [timeoutOverrideSeconds, setTimeoutOverrideSeconds] = useState('')
   const selectedStep = steps.find((s) => s.block_instance_id === selectedInstanceId) ?? null
 
@@ -47,6 +50,7 @@ export default function ReprocessModal({
     }
   }, [mode, selectedInstanceId, steps])
 
+  const latestVersionApplies = mode === 'full' && useLatestVersion
   const startBlockType = mode === 'full' ? ENTRY_BLOCK_TYPE : null
   const startBlockInstanceId = mode === 'specific' ? selectedInstanceId : null
 
@@ -75,6 +79,7 @@ export default function ReprocessModal({
       startBlockInstanceId: startBlockInstanceId ?? undefined,
       reason: reason.trim() || undefined,
       timeoutOverrides,
+      useLatestVersion: latestVersionApplies,
     })
     onStarted?.(result.run_id)
     onClose()
@@ -117,6 +122,24 @@ export default function ReprocessModal({
                         특정 블록부터
                       </button>
                     </div>
+                    {mode === 'full' && (
+                      <div className="krds-form-check" style={{ marginLeft: 'var(--space-5)' }}>
+                        <input
+                          type="checkbox"
+                          className="chk"
+                          id="reprocess_latest_version"
+                          checked={useLatestVersion}
+                          onChange={(e) => setUseLatestVersion(e.target.checked)}
+                        />
+                        <label htmlFor="reprocess_latest_version" style={{ fontSize: 13 }}>
+                          최신 게시 버전으로 처리
+                        </label>
+                        <p style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 2 }}>
+                          워크플로우를 수정해 새 버전을 게시했다면 켜세요(예: 텍스트 추출 엔진 변경).
+                          끄면 이 문서를 처리했던 버전 그대로 다시 실행하므로 변경한 설정이 반영되지 않습니다.
+                        </p>
+                      </div>
+                    )}
                     {mode === 'specific' && (
                       <select
                         className="krds-form-select"

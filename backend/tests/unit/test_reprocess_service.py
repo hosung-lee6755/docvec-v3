@@ -284,3 +284,92 @@ async def test_start_partial_reprocess_uses_mapped_status_for_preprocess_block_t
         await start_partial_reprocess(db, doc, start_block, reason=None)
 
     assert doc.status == "PARSING"
+
+
+# ── 최신 게시 버전으로 재처리 ────────────────────────────────────────────────
+# 부분 재처리는 parent_run.version_id 를 그대로 물려받아, 워크플로우를 새로 게시해도
+# 재처리에는 반영되지 않는다(2026-10-12 text_extract.engine=docling 게시 후 재처리해도
+# 레거시로 처리됨). 이 경로는 문서의 워크플로우 최신 게시 버전으로 처음부터 새로 실행한다.
+from app.services.reprocess_service import start_reprocess_on_latest_version  # noqa: E402
+
+
+def _version(version_id=None):
+    version = MagicMock()
+    version.id = version_id or uuid4()
+    return version
+
+
+def _entry_db(entry_blocks):
+    db = AsyncMock()
+    db.add = MagicMock()
+    result = MagicMock()
+    result.all.return_value = entry_blocks
+    db.scalars = AsyncMock(side_effect=[result, MagicMock(all=MagicMock(return_value=[]))])
+    return db
+
+
+@pytest.mark.asyncio
+async def test_latest_version_reprocess_creates_run_on_new_version_not_parent_version():
+    parent = _run(status="COMPLETED")
+    parent.version_id = uuid4()
+    parent.skip_review = True
+    parent.collection_id = uuid4()
+    doc = _doc(active_run_id=parent.id)
+    new_version = _version()
+    entry = _block("file_validate")
+    entry.id = uuid4()
+    db = _entry_db([entry])
+
+    with patch("app.services.reprocess_service.resolve_latest_version", AsyncMock(return_value=new_version)), \
+         patch("app.services.reprocess_service.current_dictionary_version", AsyncMock(return_value=3)), \
+         patch("app.pipeline.tasks.workflow.run_workflow_step") as step:
+        db.get = AsyncMock(return_value=parent)
+        run = await start_reprocess_on_latest_version(db, doc, reason="엔진 변경")
+
+    assert run.version_id == new_version.id
+    assert run.version_id != parent.version_id
+    assert run.trigger == "REPROCESS"
+    assert run.parent_run_id == parent.id
+    assert run.skip_review is True
+    assert doc.active_run_id == run.id
+    assert run.impact["changeType"] == "VERSION_UPGRADE"
+    assert run.impact["fullReprocessingRequired"] is True
+    step.apply_async.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_latest_version_reprocess_blocks_while_parent_run_is_running():
+    parent = _run(status="RUNNING")
+    doc = _doc(active_run_id=parent.id)
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=parent)
+
+    with pytest.raises(ReprocessError):
+        await start_reprocess_on_latest_version(db, doc, reason=None)
+
+
+@pytest.mark.asyncio
+async def test_latest_version_reprocess_requires_a_previous_run():
+    with pytest.raises(ReprocessError):
+        await start_reprocess_on_latest_version(AsyncMock(), _doc(active_run_id=None), reason=None)
+
+
+@pytest.mark.asyncio
+async def test_latest_version_reprocess_sets_status_of_entry_block():
+    parent = _run(status="FAILED")
+    parent.version_id = uuid4()
+    parent.skip_review = False
+    parent.collection_id = None
+    doc = _doc(active_run_id=parent.id)
+    doc.status = "FAILED"
+    entry = _block("file_validate")
+    entry.id = uuid4()
+    db = _entry_db([entry])
+    db.get = AsyncMock(return_value=parent)
+
+    with patch("app.services.reprocess_service.resolve_latest_version", AsyncMock(return_value=_version())), \
+         patch("app.services.reprocess_service.current_dictionary_version", AsyncMock(return_value=1)), \
+         patch("app.pipeline.tasks.workflow.run_workflow_step"):
+        await start_reprocess_on_latest_version(db, doc, reason=None)
+
+    assert doc.status != "FAILED"

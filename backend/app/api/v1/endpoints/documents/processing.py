@@ -94,6 +94,27 @@ async def reprocess_document(
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="editor")
 
+    if body.use_latest_version:
+        from app.services.reprocess_service import (
+            ReprocessError,
+            reconcile_stuck_run,
+            start_reprocess_on_latest_version,
+        )
+
+        await reconcile_stuck_run(db, doc)
+        try:
+            new_run = await start_reprocess_on_latest_version(
+                db, doc, body.reason, timeout_overrides=body.timeout_overrides,
+            )
+        except ReprocessError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "message": "최신 게시 버전으로 재처리가 시작되었습니다",
+            "run_id": str(new_run.id),
+            "status": "QUEUED",
+            "impact": new_run.impact,
+        }
+
     if body.start_block_type is not None or body.start_block_instance_id is not None:
         from app.db.models.workflow_run import WorkflowRun as _WorkflowRun
         from app.services.reprocess_service import (
