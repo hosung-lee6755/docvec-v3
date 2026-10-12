@@ -2,7 +2,7 @@ import { AlertTriangle, Loader2 } from 'lucide-react'
 import type { TabKey } from './documentDetailHelpers'
 import type { QualityReport } from '../../hooks/useDocumentRuns'
 import type { useCancelRun, useResumeRun } from '../../hooks/useWorkflows'
-import { QUALITY_CRITERIA, QUALITY_DISCLAIMER, QUALITY_OVERALL_RULES } from './qualityCriteria'
+import { QUALITY_CRITERIA, QUALITY_DISCLAIMER, QUALITY_OVERALL_RULES, sourceRecallSkipReason } from './qualityCriteria'
 import { qualityStatusDisplay, QUALITY_CATEGORY_LABELS, qualityEvidenceText, QUALITY_WARNING_TAB } from './documentDetailHelpers'
 
 interface QualityTabProps {
@@ -102,6 +102,11 @@ export default function QualityTab({
             </div>
           ))}
         </div>
+      )}
+      {sourceRecallSkipReason(qualityReport.metrics?.source_recall_status) && (
+        <p style={{ fontSize: 11, color: 'var(--color-text-muted)', margin: 0 }}>
+          원문 재현율: {sourceRecallSkipReason(qualityReport.metrics?.source_recall_status)}
+        </p>
       )}
       {!!qualityReport.warnings?.length && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>

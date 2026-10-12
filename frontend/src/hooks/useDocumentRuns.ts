@@ -53,6 +53,13 @@ export interface QualityMetrics {
   structure?: number
   normalization?: number
   chunking?: number
+  sourceRecall?: number
+  // 원본 PDF 텍스트 레이어 대비 재현율 — 측정하지 못했으면 null 이고 사유는 source_recall_status
+  // (measured | unsupported_format | no_text_layer | error).
+  source_recall?: number | null
+  source_recall_status?: 'measured' | 'unsupported_format' | 'no_text_layer' | 'error'
+  source_recall_measured_pages?: number
+  source_recall_low_pages?: number[]
 }
 
 export interface QualityReport {

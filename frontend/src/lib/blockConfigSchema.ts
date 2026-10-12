@@ -171,6 +171,7 @@ const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: str
     max_chunk_chars_warning: { label: '청크 최대 글자 경고 기준' },
     max_implicit_table_ratio: { label: '선 없는 표 최대 비율(0~1)', help: '전체 표 중 테두리선 없이(정렬만으로) 검출된 표의 비율이 이 값을 넘으면 오탐 가능성 경고를 표시합니다.' },
     min_toc_heading_match_ratio: { label: '목차-제목 최소 일치율(0~1)', help: '목차 항목 중 실제 제목 노드와 일치하는 비율이 이 값보다 낮으면 경고를 표시합니다. 목차가 없는 문서에는 적용되지 않습니다.' },
+    min_source_recall: { label: '원문 재현율 최소 기준(0~1)', help: '원본 PDF 텍스트 레이어 중 추출 결과에 들어 있어야 하는 비율의 하한입니다. 미만이면 경고하고 점수를 깎습니다. 스캔본·PDF가 아닌 문서는 측정하지 않습니다.' },
     review_policy: { label: '검토 정책', options: [
       { value: 'auto_pass', label: '자동 통과' },
       { value: 'review_on_warning', label: '경고 시 검토' },

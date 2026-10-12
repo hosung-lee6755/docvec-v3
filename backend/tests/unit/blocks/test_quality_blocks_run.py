@@ -277,8 +277,62 @@ def test_run_carries_upstream_output():
 def test_block_metadata():
     block = qb.QualityCheckBlock()
     assert block.block_type == "quality_check"
-    assert block.block_version == "1.4.0"
+    assert block.block_version == "1.5.0"
     assert block.category == "품질·제어"
     assert block.config_schema is qb.QualityCheckConfig
     with pytest.raises(Exception):
         qb.QualityCheckConfig(min_extraction_chars="abc")
+
+# ---- 원문 재현율(sourceRecall) / 고정값 제외 ----
+PDF_PAGE = "연간 점등시간은 3,200시간이며 전력 단가는 145.21원이다. 절감 전력은 정격 소비전력 기준이다."
+
+
+def _pdf_doc(parsed_text):
+    return _doc(parsed_text=parsed_text, mime_type="application/pdf", minio_key="k.pdf")
+
+
+def test_normalization_is_not_scored_so_it_cannot_inflate_the_average():
+    result, _ = _run(_doc(), config={"review_policy": "auto_pass"})
+    assert "normalization" not in result.metrics
+    assert set(result.metrics) >= {"textExtraction", "ocr", "structure", "chunking"}
+
+
+def test_non_pdf_is_not_measured_and_reason_is_recorded():
+    result, _ = _run(_doc(mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+    assert result.metrics["source_recall_status"] == "unsupported_format"
+    assert result.metrics["source_recall"] is None
+    assert "sourceRecall" not in result.metrics
+
+
+def test_pdf_with_full_recall_scores_100_and_records_measurement():
+    with patch.object(qb, "_load_pdf_page_texts", return_value=[PDF_PAGE]):
+        result, _ = _run(_pdf_doc(PDF_PAGE * 3), config={"review_policy": "auto_pass"})
+    assert result.metrics["source_recall_status"] == "measured"
+    assert result.metrics["source_recall"] == 1.0
+    assert result.metrics["sourceRecall"] == 100.0
+    assert result.output["quality_status"] == "SUCCESS"
+
+
+def test_pdf_with_missing_text_warns_lowers_score_and_lists_pages():
+    parsed = "전혀 다른 내용이라서 원본 문장과 겹치지 않는 추출 결과입니다. " * 4
+    with patch.object(qb, "_load_pdf_page_texts", return_value=[PDF_PAGE, PDF_PAGE]):
+        result, _ = _run(_pdf_doc(parsed), config={"review_policy": "auto_pass"})
+    assert result.metrics["sourceRecall"] < 60
+    assert result.metrics["source_recall_low_pages"] == [1, 2]
+    assert any("재현율이 낮습니다" in w for w in result.warnings)
+    assert result.output["quality_status"] != "SUCCESS"
+    assert result.output["overall_score"] < 100.0
+
+
+def test_scanned_pdf_without_text_layer_is_not_measured():
+    with patch.object(qb, "_load_pdf_page_texts", return_value=["", "", ""]):
+        result, _ = _run(_pdf_doc(PDF_PAGE))
+    assert result.metrics["source_recall_status"] == "no_text_layer"
+    assert "sourceRecall" not in result.metrics
+
+
+def test_unreadable_original_is_recorded_as_error_not_silently_skipped():
+    with patch.object(qb, "_load_pdf_page_texts", side_effect=RuntimeError("minio down")):
+        result, _ = _run(_pdf_doc(PDF_PAGE))
+    assert result.metrics["source_recall_status"] == "error"
+    assert "sourceRecall" not in result.metrics

@@ -14,12 +14,24 @@ DocumentNode/DocumentChunk/DictionaryApplication)에서 직접 계산해 Quality
 require_admin_approval이 동일한 BlockResult.requires_review 메커니즘으로 이미
 실전 검증했다 — 이 블록은 그 스위치를 켜는 두 번째 생산자일 뿐이다.
 """
+import logging
 import re
 
 from pydantic import BaseModel
 
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
 from app.pipeline.blocks.content_blocks import _carry
+from app.pipeline.blocks.source_recall import SourceRecall, compute_source_recall
+
+logger = logging.getLogger(__name__)
+
+# 원문 재현율 측정 상태 — 리포트 metrics.source_recall_status 에 그대로 기록한다.
+RECALL_MEASURED = "measured"
+RECALL_UNSUPPORTED = "unsupported_format"  # PDF 가 아님(DOCX/HWP 등은 비교할 텍스트 레이어가 없다)
+RECALL_NO_TEXT_LAYER = "no_text_layer"  # 스캔본 — 정답이 없어 측정하지 않는다
+RECALL_ERROR = "error"  # 원본을 읽지 못함
+# 텍스트 레이어가 있는 페이지가 전체의 이 비율 미만이면 스캔본으로 보고 측정하지 않는다.
+_MIN_TEXT_LAYER_PAGE_RATIO = 0.5
 
 # U+FFFD(대체 문자) + 제어문자 — 텍스트 추출이 깨졌을 때 남는 전형적인 신호.
 _BROKEN_CHAR_RE = re.compile(r"[�\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -79,6 +91,33 @@ def _toc_heading_match_ratio(toc_texts: list[str], heading_texts: list[str]) -> 
     return matched / len(toc_texts)
 
 
+def _load_pdf_page_texts(doc) -> list[str]:
+    """원본 PDF 를 MinIO 에서 내려받아 페이지별 텍스트 레이어를 돌려준다."""
+    import fitz  # pymupdf
+
+    from app.core.config import settings
+    from app.services.storage import storage_service
+
+    raw = storage_service.download_file(settings.minio_bucket_originals, doc.minio_key)
+    with fitz.open(stream=raw, filetype="pdf") as pdf:
+        return [page.get_text() for page in pdf]
+
+
+def _measure_source_recall(doc) -> tuple[SourceRecall | None, str]:
+    """PDF 에 한해 원본 텍스트 레이어 대비 재현율을 잰다. 못 재면 (None, 사유) — 사유는 리포트에 남긴다."""
+    if "pdf" not in (getattr(doc, "mime_type", "") or "").lower():
+        return None, RECALL_UNSUPPORTED
+    try:
+        page_texts = _load_pdf_page_texts(doc)
+    except Exception:
+        logger.warning("source recall: failed to read original PDF for document %s", doc.id, exc_info=True)
+        return None, RECALL_ERROR
+    result = compute_source_recall(page_texts, doc.parsed_text)
+    if result.recall is None or result.measured_pages < result.total_pages * _MIN_TEXT_LAYER_PAGE_RATIO:
+        return None, RECALL_NO_TEXT_LAYER
+    return result, RECALL_MEASURED
+
+
 def _determine_status(
     *, chunk_count: int, overall_score: float, fail_below_score: float,
     failed_pages: list[int], total_ocr_pages: int, has_warnings: bool,
@@ -130,6 +169,9 @@ class QualityCheckConfig(BaseModel):
     # 계산 불가능했던 지표.
     max_implicit_table_ratio: float = 0.2
     min_toc_heading_match_ratio: float = 0.5
+    # 원본 PDF 텍스트 레이어 대비 추출 결과 재현율의 하한 — 미만이면 경고, 점수는 하한에서 60점,
+    # (1-하한)×2 만큼 빠지면 0점. 텍스트 레이어가 없는 스캔본·PDF 가 아닌 문서는 측정하지 않는다.
+    min_source_recall: float = 0.8
     review_policy: str = "review_on_warning"  # auto_pass | review_on_warning | always_review
     fail_below_score: float = 30.0
 
@@ -151,7 +193,11 @@ class QualityCheckBlock(BaseBlock):
         # 1.4.0: 청크 0개는 overall_score 평균과 무관하게 무조건 FAILURE로
         # 강제한다 — 캐시된 pre-1.4.0 결과는 청크 0개인 문서도 SUCCESS_WITH_
         # WARNING으로 남아 있을 수 있어 재사용하면 안 된다.
-        return "1.4.0"
+        #
+        # 1.5.0: 원본 PDF 텍스트 레이어 대비 재현율(sourceRecall) 실측 지표 추가, 측정하지 않는
+        # 고정값(normalization 항상 100점)을 종합점수 평균에서 제외 — 캐시된 1.4.0 이하 결과는
+        # 종합점수가 부풀려져 있어 재사용하면 안 된다.
+        return "1.5.0"
 
     @property
     def category(self) -> str:
@@ -292,7 +338,7 @@ class QualityCheckBlock(BaseBlock):
                 .filter(DictionaryApplication.document_id == doc.id, DictionaryApplication.run_id == context.run_id)
                 .count()
             )
-            scores["normalization"] = 100.0
+            # 정규화는 측정값이 없는 항목이라 점수에 넣지 않는다(건수는 metrics 에 참고용으로만 남긴다).
 
             # --- 분할 수준 ---
             chunks = (
@@ -329,6 +375,23 @@ class QualityCheckBlock(BaseBlock):
                 chunking_score = 0.0
             scores["chunking"] = round(chunking_score, 1)
 
+            # --- 원문 재현율 (PDF 이고 텍스트 레이어가 있을 때만) ---
+            source_recall, source_recall_status = _measure_source_recall(doc)
+            if source_recall is not None:
+                missing_ratio = 1.0 - source_recall.recall
+                scores["sourceRecall"] = round(
+                    _score_from_ratio(missing_ratio, warn_above=1.0 - cfg.min_source_recall), 1
+                )
+                if source_recall.recall < cfg.min_source_recall:
+                    pages_hint = (
+                        f" 특히 누락 의심 페이지: {source_recall.low_pages[:10]}" if source_recall.low_pages else ""
+                    )
+                    add_warning(
+                        "sourceRecall",
+                        f"원본 PDF 텍스트 대비 추출 재현율이 낮습니다({source_recall.recall:.1%} < "
+                        f"{cfg.min_source_recall:.0%}).{pages_hint}",
+                    )
+
             overall_score = round(sum(scores.values()) / len(scores), 1)
 
             # --- 상태 판정 ---
@@ -359,6 +422,10 @@ class QualityCheckBlock(BaseBlock):
                 "chunk_count": len(chunks),
                 "short_chunk_ids": short_chunk_ids,
                 "long_chunk_ids": long_chunk_ids,
+                "source_recall": round(source_recall.recall, 4) if source_recall else None,
+                "source_recall_status": source_recall_status,
+                "source_recall_measured_pages": source_recall.measured_pages if source_recall else 0,
+                "source_recall_low_pages": source_recall.low_pages[:50] if source_recall else [],
                 "failed_pages": failed_pages,
                 "implicit_table_ratio": round(implicit_table_ratio, 4),
                 "toc_heading_match_ratio": (

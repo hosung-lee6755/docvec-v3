@@ -23,7 +23,7 @@ export function qualityStatusDisplay(
 
 export const QUALITY_CATEGORY_LABELS: Record<string, string> = {
   textExtraction: '텍스트 추출', ocr: 'OCR', structure: '구조 분석',
-  normalization: '정규화', chunking: '청킹',
+  normalization: '정규화', chunking: '청킹', sourceRecall: '원문 재현율',
 }
 
 export function qualityEvidenceText(category: string, metrics: QualityMetrics): string {
@@ -35,7 +35,9 @@ export function qualityEvidenceText(category: string, metrics: QualityMetrics): 
     case 'structure':
       return `구조 노드 ${metrics.node_count ?? '-'}개, 빈 페이지 비율 ${((metrics.empty_page_ratio ?? 0) * 100).toFixed(1)}%`
     case 'normalization':
-      return `사전 적용 ${metrics.dictionary_application_count ?? 0}건 · 항상 100점인 고정값(측정하지 않음, 사전 적용 건수는 참고용)`
+      return '이전 버전 리포트의 항목 — 항상 100점인 고정값이며 측정하지 않습니다(현재는 종합점수에서 제외).'
+    case 'sourceRecall':
+      return `원본 PDF 텍스트 레이어의 ${((metrics.source_recall ?? 0) * 100).toFixed(1)}%가 추출 결과에 있음 (${metrics.source_recall_measured_pages ?? 0}페이지 비교)`
     case 'chunking':
       return `생성된 청크 ${metrics.chunk_count ?? '-'}개`
     default:
@@ -60,7 +62,7 @@ export const REVISION_SOURCE_LABELS: Record<string, string> = {
 }
 
 export const QUALITY_WARNING_TAB: Record<string, TabKey> = {
-  textExtraction: 'original', ocr: 'original', structure: 'structure',
+  textExtraction: 'original', ocr: 'original', sourceRecall: 'original', structure: 'structure',
   chunking: 'chunks', chunking_short: 'chunks', chunking_long: 'chunks',
 }
 
