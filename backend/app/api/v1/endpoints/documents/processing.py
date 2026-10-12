@@ -120,7 +120,7 @@ async def reprocess_document(
         from app.services.reprocess_service import (
             ReprocessError,
             reconcile_stuck_run,
-            resolve_start_block,
+            resolve_reprocess_parent,
             start_partial_reprocess,
         )
 
@@ -138,11 +138,13 @@ async def reprocess_document(
             )
 
         try:
-            start_block = await resolve_start_block(
-                db, parent_run.version_id, body.start_block_type, body.start_block_instance_id,
+            # 분석 run 이 active 인 문서는 전처리 블록이 그 워크플로우에 없다 — 기준 run 을 함께 정한다.
+            base_run, start_block = await resolve_reprocess_parent(
+                db, doc, body.start_block_type, body.start_block_instance_id,
             )
             new_run = await start_partial_reprocess(
                 db, doc, start_block, body.reason, timeout_overrides=body.timeout_overrides,
+                parent_run=base_run,
             )
         except ReprocessError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -246,7 +248,7 @@ async def get_document_reprocess_impact(
     from app.services.reprocess_service import (
         ReprocessError,
         compute_reprocess_impact,
-        resolve_start_block,
+        resolve_reprocess_parent,
     )
 
     if start_block_type is None and start_block_instance_id is None:
@@ -267,10 +269,10 @@ async def get_document_reprocess_impact(
         )
 
     try:
-        start_block = await resolve_start_block(
-            db, parent_run.version_id, start_block_type, start_block_instance_id,
+        base_run, start_block = await resolve_reprocess_parent(
+            db, doc, start_block_type, start_block_instance_id,
         )
-        computed = await compute_reprocess_impact(db, doc, start_block)
+        computed = await compute_reprocess_impact(db, doc, start_block, parent_run=base_run)
     except ReprocessError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

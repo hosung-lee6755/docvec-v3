@@ -336,3 +336,46 @@ def test_unreadable_original_is_recorded_as_error_not_silently_skipped():
         result, _ = _run(_pdf_doc(PDF_PAGE))
     assert result.metrics["source_recall_status"] == "error"
     assert "sourceRecall" not in result.metrics
+
+
+# ---- 부분 재처리(품질 검사부터)에서 상류가 만든 노드·청크 찾기 ----
+# 부분 재처리는 상류 단계 결과를 복사하지만 노드/청크/사전 적용 행은 원래 run_id 에 남는다.
+# 새 run 의 run_id 로만 조회하면 비어 있어 "청크가 없다"며 FAILURE 가 된다(2026-10-12 17건 재처리 사고).
+def test_lineage_run_ids_walks_parent_chain_without_cycles():
+    runs = {
+        "r3": SimpleNamespace(parent_run_id="r2"),
+        "r2": SimpleNamespace(parent_run_id="r1"),
+        "r1": SimpleNamespace(parent_run_id="r3"),  # 순환이어도 끝나야 한다
+    }
+    db = MagicMock()
+    db.get.side_effect = lambda model, rid: runs[rid]
+    assert qb._lineage_run_ids(db, "r3") == ["r3", "r2", "r1"]
+
+
+def test_lineage_run_ids_for_run_without_parent_is_just_itself():
+    db = MagicMock()
+    db.get.return_value = SimpleNamespace(parent_run_id=None)
+    assert qb._lineage_run_ids(db, "r1") == ["r1"]
+
+
+def test_run_reads_nodes_and_chunks_from_parent_run_when_own_run_has_none():
+    doc = _doc()
+    chunk = _chunk("c1")
+    chunk_calls = []
+
+    class _ChunkQ(_Q):
+        def all(self):
+            chunk_calls.append(1)
+            return [] if len(chunk_calls) == 1 else [chunk]
+
+    db = _db(doc, nodes=[_node("HEADING"), _node("PARAGRAPH")])
+    base = db.query.side_effect
+    db.query.side_effect = lambda model: _ChunkQ() if model.__name__ == "DocumentChunk" else base(model)
+
+    with patch("app.db.session.get_sync_db", return_value=db), \
+            patch("app.pipeline.tasks.workflow._resolve_output", side_effect=lambda o: o or {}), \
+            patch.object(qb, "_lineage_run_ids", return_value=["run-1", "parent-run"]):
+        result = qb.QualityCheckBlock().run(_ctx({"review_policy": "auto_pass"}))
+
+    assert result.metrics["chunk_count"] == 1
+    assert result.output["quality_status"] == "SUCCESS"

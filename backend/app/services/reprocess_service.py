@@ -92,15 +92,24 @@ class ReprocessImpact:
 
 async def compute_reprocess_impact(
     db: AsyncSession, doc: Document, start_block: WorkflowBlockInstance, reason: str | None = None,
+    parent_run: WorkflowRun | None = None,
 ) -> ReprocessImpact:
     """재처리 영향도 계산 — WorkflowRun을 만들거나 커밋하지 않는다. 미리보기 전용
     `GET .../reprocess/impact`와 실제 실행하는 `start_partial_reprocess` 양쪽에서
     재사용해, 영향도 계산 로직이 두 곳에서 갈라지지 않게 한다."""
     if not doc.active_run_id:
         raise ReprocessError("이 문서는 아직 워크플로우로 처리된 적이 없어 이 기능을 사용할 수 없습니다.")
-    parent_run = await db.get(WorkflowRun, doc.active_run_id)
-    if parent_run is None:
+    active_run = await db.get(WorkflowRun, doc.active_run_id)
+    if active_run is None:
         raise ReprocessError("원본 실행 기록을 찾을 수 없습니다.")
+    # parent_run 이 따로 주어지면(분석 run 이 active 인 문서의 전처리 재처리) 그 run 을 기준으로 하되,
+    # 문서의 최신 run(active)이 아직 도는 중이면 새 run 과 경합하므로 똑같이 막는다.
+    if parent_run is None:
+        parent_run = active_run
+    elif active_run.status not in ("COMPLETED", "FAILED"):
+        raise ReprocessError(
+            "문서의 최신 실행이 아직 완료되지 않았습니다(백그라운드 후속 처리 중). 잠시 후 다시 시도하세요."
+        )
     if parent_run.status not in ("COMPLETED", "FAILED"):
         # Document.status는 rag_store 블록이 직접 "INDEXED"로 세팅하는데, 그 시점에도
         # summarize/extract_keywords/output 등 같은 run의 후속 블록은 아직 백그라운드에서
@@ -168,11 +177,39 @@ async def compute_reprocess_impact(
     )
 
 
+async def resolve_reprocess_parent(
+    db: AsyncSession, doc: Document, start_block_type: str | None,
+    start_block_instance_id: UUID | str | None,
+) -> tuple[WorkflowRun, WorkflowBlockInstance]:
+    """재처리의 기준 run 과 시작 블록. 기본은 문서의 active run 이지만, 컬렉션에 기본 분석 워크플로우가
+    있으면 active run 이 AUTO_ANALYSIS run 이라 전처리 블록(file_validate, quality_check 등)은 그 워크플로우에
+    없다 — 그 경우 문서의 최근 PREPROCESS run 을 기준으로 삼는다. 어디에도 없으면 원래 오류를 그대로 올린다."""
+    if not doc.active_run_id:
+        raise ReprocessError("이 문서는 아직 워크플로우로 처리된 적이 없어 이 기능을 사용할 수 없습니다.")
+    active_run = await db.get(WorkflowRun, doc.active_run_id)
+    if active_run is None:
+        raise ReprocessError("원본 실행 기록을 찾을 수 없습니다.")
+    try:
+        return active_run, await resolve_start_block(
+            db, active_run.version_id, start_block_type, start_block_instance_id,
+        )
+    except ReprocessError as active_error:
+        preprocess_run = await find_preprocess_run(db, doc)
+        if preprocess_run is None or preprocess_run.id == active_run.id:
+            raise
+        try:
+            return preprocess_run, await resolve_start_block(
+                db, preprocess_run.version_id, start_block_type, start_block_instance_id,
+            )
+        except ReprocessError:
+            raise active_error from None
+
+
 async def start_partial_reprocess(
     db: AsyncSession, doc: Document, start_block: WorkflowBlockInstance, reason: str | None,
-    timeout_overrides: dict[str, int] | None = None,
+    timeout_overrides: dict[str, int] | None = None, parent_run: WorkflowRun | None = None,
 ) -> WorkflowRun:
-    computed = await compute_reprocess_impact(db, doc, start_block, reason=reason)
+    computed = await compute_reprocess_impact(db, doc, start_block, reason=reason, parent_run=parent_run)
     parent_run = computed.parent_run
     dictionary_version = await current_dictionary_version(db)
 
@@ -250,6 +287,22 @@ async def start_partial_reprocess(
     return new_run
 
 
+async def find_preprocess_run(db: AsyncSession, doc: Document) -> WorkflowRun | None:
+    """문서의 가장 최근 PREPROCESS 워크플로우 run. 컬렉션에 기본 분석 워크플로우가 있으면
+    문서의 active run 은 전처리가 끝난 뒤 자동으로 시작된 AUTO_ANALYSIS run 이라, active run 의
+    워크플로우로는 "전처리를 다시 돌릴 대상"을 알 수 없다."""
+    from app.db.models.workflow import WorkflowDefinition
+
+    return await db.scalar(
+        select(WorkflowRun)
+        .join(WorkflowVersion, WorkflowVersion.id == WorkflowRun.version_id)
+        .join(WorkflowDefinition, WorkflowDefinition.id == WorkflowVersion.workflow_id)
+        .where(WorkflowRun.document_id == doc.id, WorkflowDefinition.kind == "PREPROCESS")
+        .order_by(WorkflowRun.created_at.desc())
+        .limit(1)
+    )
+
+
 async def resolve_latest_version(db: AsyncSession, parent_run: WorkflowRun) -> WorkflowVersion:
     """문서가 처리된 워크플로우의 "지금 쓰는" 버전. 컬렉션이 이 워크플로우의 특정 버전을
     고정(default_workflow_version)했으면 그 버전, 아니면 최신 게시 버전 — 업로드 시
@@ -294,7 +347,9 @@ async def start_reprocess_on_latest_version(
             "원본 실행이 아직 완료되지 않았습니다(백그라운드 후속 처리 중). 잠시 후 다시 시도하세요."
         )
 
-    version = await resolve_latest_version(db, parent_run)
+    # 처리 대상은 active run 이 아니라 문서의 전처리 워크플로우다(active run 이 분석 run 일 수 있다).
+    base_run = await find_preprocess_run(db, doc) or parent_run
+    version = await resolve_latest_version(db, base_run)
     dictionary_version = await current_dictionary_version(db)
 
     blocks = (

@@ -91,6 +91,28 @@ def _toc_heading_match_ratio(toc_texts: list[str], heading_texts: list[str]) -> 
     return matched / len(toc_texts)
 
 
+_MAX_LINEAGE_DEPTH = 8
+
+
+def _lineage_run_ids(db, run_id) -> list:
+    """이 run 과 그 조상(parent_run_id) run id 목록(자신이 맨 앞). 순환이어도 끝난다.
+
+    부분 재처리는 시작 블록 상류 단계의 결과를 부모 run 에서 복사해 오지만, 그 단계들이 DB 에 쓴
+    노드·청크·사전 적용 행은 부모 run_id 에 그대로 남는다 — 새 run_id 로만 조회하면 비어 있다."""
+    from app.db.models.workflow_run import WorkflowRun
+
+    ids = [run_id]
+    current = run_id
+    for _ in range(_MAX_LINEAGE_DEPTH):
+        run = db.get(WorkflowRun, current)
+        parent = getattr(run, "parent_run_id", None)
+        if not parent or parent in ids:
+            break
+        ids.append(parent)
+        current = parent
+    return ids
+
+
 def _load_pdf_page_texts(doc) -> list[str]:
     """원본 PDF 를 MinIO 에서 내려받아 페이지별 텍스트 레이어를 돌려준다."""
     import fitz  # pymupdf
@@ -295,10 +317,30 @@ class QualityCheckBlock(BaseBlock):
             if empty_page_ratio > cfg.max_empty_page_ratio:
                 add_warning("structure", f"빈 페이지 비율이 기준을 초과했습니다({empty_page_ratio:.1%} > {cfg.max_empty_page_ratio:.1%}).")
 
+            # 상류 단계 결과를 부모 run 에서 복사해 시작한 부분 재처리에서는 이 run 의 run_id 로 쓰인
+            # 행이 없다 — 청크가 있는 가장 가까운 조상 run 을 데이터 기준 run 으로 쓴다.
+            chunks: list = []
+            data_run_id = context.run_id
+            for candidate_run_id in _lineage_run_ids(db, context.run_id):
+                chunks = (
+                    db.query(DocumentChunk)
+                    .filter(
+                        DocumentChunk.document_id == doc.id, DocumentChunk.run_id == candidate_run_id,
+                        # Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9) —
+                        # parent 행은 의도적으로 훨씬 크므로 포함하면 "너무 긴 청크"
+                        # 경고가 잘못 뜬다.
+                        DocumentChunk.chunk_tier == "child",
+                    )
+                    .all()
+                )
+                if chunks:
+                    data_run_id = candidate_run_id
+                    break
+
             # --- 구조 수준 — 빈 페이지도 함께 반영 ---
             nodes = (
                 db.query(DocumentNode)
-                .filter(DocumentNode.document_id == doc.id, DocumentNode.run_id == context.run_id)
+                .filter(DocumentNode.document_id == doc.id, DocumentNode.run_id == data_run_id)
                 .all()
             )
             node_types = {n.node_type for n in nodes}
@@ -335,23 +377,12 @@ class QualityCheckBlock(BaseBlock):
             # --- 사전 수준 (정보성 — 건수 0은 경고 아님) ---
             dict_application_count = (
                 db.query(DictionaryApplication)
-                .filter(DictionaryApplication.document_id == doc.id, DictionaryApplication.run_id == context.run_id)
+                .filter(DictionaryApplication.document_id == doc.id, DictionaryApplication.run_id == data_run_id)
                 .count()
             )
             # 정규화는 측정값이 없는 항목이라 점수에 넣지 않는다(건수는 metrics 에 참고용으로만 남긴다).
 
             # --- 분할 수준 ---
-            chunks = (
-                db.query(DocumentChunk)
-                .filter(
-                    DocumentChunk.document_id == doc.id, DocumentChunk.run_id == context.run_id,
-                    # Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9) —
-                    # parent 행은 의도적으로 훨씬 크므로 포함하면 "너무 긴 청크"
-                    # 경고가 잘못 뜬다.
-                    DocumentChunk.chunk_tier == "child",
-                )
-                .all()
-            )
             short_chunk_ids: list[str] = []
             long_chunk_ids: list[str] = []
             if chunks:

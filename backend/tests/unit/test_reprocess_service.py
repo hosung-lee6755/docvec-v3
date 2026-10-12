@@ -320,7 +320,8 @@ async def test_latest_version_reprocess_creates_run_on_new_version_not_parent_ve
     entry.id = uuid4()
     db = _entry_db([entry])
 
-    with patch("app.services.reprocess_service.resolve_latest_version", AsyncMock(return_value=new_version)), \
+    with patch("app.services.reprocess_service.find_preprocess_run", AsyncMock(return_value=None)), \
+         patch("app.services.reprocess_service.resolve_latest_version", AsyncMock(return_value=new_version)), \
          patch("app.services.reprocess_service.current_dictionary_version", AsyncMock(return_value=3)), \
          patch("app.pipeline.tasks.workflow.run_workflow_step") as step:
         db.get = AsyncMock(return_value=parent)
@@ -367,9 +368,112 @@ async def test_latest_version_reprocess_sets_status_of_entry_block():
     db = _entry_db([entry])
     db.get = AsyncMock(return_value=parent)
 
-    with patch("app.services.reprocess_service.resolve_latest_version", AsyncMock(return_value=_version())), \
+    with patch("app.services.reprocess_service.find_preprocess_run", AsyncMock(return_value=None)), \
+         patch("app.services.reprocess_service.resolve_latest_version", AsyncMock(return_value=_version())), \
          patch("app.services.reprocess_service.current_dictionary_version", AsyncMock(return_value=1)), \
          patch("app.pipeline.tasks.workflow.run_workflow_step"):
         await start_reprocess_on_latest_version(db, doc, reason=None)
 
     assert doc.status != "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_latest_version_reprocess_resolves_workflow_from_preprocess_run_not_analysis_run():
+    """컬렉션에 기본 분석 워크플로우가 있으면 문서의 active run 은 AUTO_ANALYSIS run 이다.
+    그 run 의 워크플로우로 최신 버전을 찾으면 전처리가 아니라 분석 워크플로우가 재실행된다."""
+    analysis_run = _run(status="COMPLETED")
+    analysis_run.version_id = uuid4()
+    analysis_run.skip_review = False
+    analysis_run.collection_id = None
+    preprocess_run = _run(status="COMPLETED")
+    preprocess_run.version_id = uuid4()
+    doc = _doc(active_run_id=analysis_run.id)
+    entry = _block("file_validate")
+    entry.id = uuid4()
+    db = _entry_db([entry])
+    db.get = AsyncMock(return_value=analysis_run)
+    resolve = AsyncMock(return_value=_version())
+
+    with patch("app.services.reprocess_service.find_preprocess_run", AsyncMock(return_value=preprocess_run)), \
+         patch("app.services.reprocess_service.resolve_latest_version", resolve), \
+         patch("app.services.reprocess_service.current_dictionary_version", AsyncMock(return_value=1)), \
+         patch("app.pipeline.tasks.workflow.run_workflow_step"):
+        await start_reprocess_on_latest_version(db, doc, reason=None)
+
+    resolve.assert_awaited_once_with(db, preprocess_run)
+
+
+# ── 분석 run 이 active 인 문서에서 전처리 블록부터 재처리 ──────────────────────────
+# 컬렉션에 기본 분석 워크플로우가 있으면 active run 은 AUTO_ANALYSIS run 이라, 전처리 블록
+# (file_validate, quality_check 등)은 그 run 의 워크플로우에 없어 재처리가 409 로 막혔다.
+from app.services.reprocess_service import resolve_reprocess_parent  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_resolve_reprocess_parent_uses_active_run_when_block_is_in_its_workflow():
+    active = _run(status="COMPLETED")
+    active.version_id = uuid4()
+    doc = _doc(active_run_id=active.id)
+    block = _block("classify")
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=active)
+
+    with patch("app.services.reprocess_service.resolve_start_block", AsyncMock(return_value=block)) as resolve, \
+         patch("app.services.reprocess_service.find_preprocess_run", AsyncMock()) as find:
+        parent, start_block = await resolve_reprocess_parent(db, doc, "classify", None)
+
+    assert parent is active and start_block is block
+    find.assert_not_awaited()
+    resolve.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_reprocess_parent_falls_back_to_preprocess_run_for_preprocess_blocks():
+    active = _run(status="COMPLETED")
+    active.version_id = uuid4()
+    preprocess = _run(status="COMPLETED")
+    preprocess.version_id = uuid4()
+    doc = _doc(active_run_id=active.id)
+    block = _block("quality_check")
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=active)
+
+    async def fake_resolve(_db, version_id, block_type, instance_id):
+        if version_id == active.version_id:
+            raise ReprocessError("'quality_check' 타입의 블록이 이 워크플로우에 없습니다.")
+        return block
+
+    with patch("app.services.reprocess_service.resolve_start_block", side_effect=fake_resolve), \
+         patch("app.services.reprocess_service.find_preprocess_run", AsyncMock(return_value=preprocess)):
+        parent, start_block = await resolve_reprocess_parent(db, doc, "quality_check", None)
+
+    assert parent is preprocess and start_block is block
+
+
+@pytest.mark.asyncio
+async def test_resolve_reprocess_parent_raises_original_error_when_block_is_nowhere():
+    active = _run(status="COMPLETED")
+    active.version_id = uuid4()
+    doc = _doc(active_run_id=active.id)
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=active)
+
+    with patch("app.services.reprocess_service.resolve_start_block",
+               AsyncMock(side_effect=ReprocessError("없는 블록"))), \
+         patch("app.services.reprocess_service.find_preprocess_run", AsyncMock(return_value=None)):
+        with pytest.raises(ReprocessError, match="없는 블록"):
+            await resolve_reprocess_parent(db, doc, "nope", None)
+
+
+@pytest.mark.asyncio
+async def test_partial_reprocess_with_explicit_parent_blocks_while_active_run_is_still_running():
+    active = _run(status="RUNNING")  # 분석 run 이 아직 도는 중
+    preprocess = _run(status="COMPLETED")
+    doc = _doc(active_run_id=active.id)
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=active)
+    block = _block("quality_check")
+    block.id = uuid4()
+
+    with pytest.raises(ReprocessError):
+        await compute_reprocess_impact(db, doc, block, parent_run=preprocess)
