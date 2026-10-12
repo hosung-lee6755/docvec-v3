@@ -56,10 +56,17 @@ class StorageService:
 
     def get_presigned_url(self, bucket: str, key: str, expires_seconds: int = 3600) -> str:
         from datetime import timedelta
+        from urllib.parse import urlsplit
 
-        return self._public_client.presigned_get_object(
+        url = self._public_client.presigned_get_object(
             bucket, key, expires=timedelta(seconds=expires_seconds)
         )
+        if not settings.minio_relative_urls:
+            return url
+        # 서명은 minio_public_endpoint 호스트로 계산되지만, URL 에서는 호스트를 뗀다. 브라우저가 접속한
+        # 출처로 요청하면 Caddy 가 Host 를 서명 호스트로 되돌려 MinIO 가 서명을 검증한다.
+        parts = urlsplit(url)
+        return f"{parts.path}?{parts.query}" if parts.query else parts.path
 
     def delete_file(self, bucket: str, key: str) -> None:
         try:

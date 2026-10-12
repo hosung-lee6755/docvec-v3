@@ -251,6 +251,26 @@ def test_presigned_url_comes_from_public_client_with_expiry(storage):
     storage._client.presigned_get_object.assert_not_called()
 
 
+def test_presigned_url_is_origin_relative_when_relative_urls_enabled(storage, monkeypatch):
+    """Caddy 가 서명 Host 로 되돌려 보내므로, URL 은 브라우저가 접속한 출처 기준(경로+쿼리)이어야 한다.
+    공유기가 내부→공인 IP 접속을 지원하지 않아도 서버 PC 에서 원본이 열린다."""
+    monkeypatch.setattr(settings, "minio_relative_urls", True)
+    storage._public_client.presigned_get_object.return_value = (
+        "https://49.168.97.107:4443/originals/doc/a%20b.pdf?X-Amz-Signature=abc&X-Amz-Expires=3600"
+    )
+
+    assert storage.get_presigned_url("originals", "doc/a b.pdf") == (
+        "/originals/doc/a%20b.pdf?X-Amz-Signature=abc&X-Amz-Expires=3600"
+    )
+
+
+def test_presigned_url_stays_absolute_by_default(storage, monkeypatch):
+    monkeypatch.setattr(settings, "minio_relative_urls", False)
+    storage._public_client.presigned_get_object.return_value = "https://pub/x?sig=1"
+
+    assert storage.get_presigned_url("b", "k") == "https://pub/x?sig=1"
+
+
 def test_delete_file_removes_object(storage):
     storage.delete_file("b", "k")
 

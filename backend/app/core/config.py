@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # presigned URL(브라우저가 직접 접근)을 https로 만들지 여부 — 내부 접속(minio_secure)과 별개.
     # Caddy(https) 뒤에서 MinIO를 같은 출처로 중계할 때 true.
     minio_public_secure: bool = False
+    # true 이면 presigned URL 을 호스트 없이 경로+쿼리로 내려준다 — 브라우저가 지금 접속한 출처로 요청하므로
+    # 사내 IP/공인 IP/포트와 무관하게 동작한다. Caddy 가 서명 Host(minio_public_endpoint)로 되돌려 보낸다.
+    minio_relative_urls: bool = False
     minio_bucket_originals: str = "originals"
     minio_bucket_artifacts: str = "artifacts"
 

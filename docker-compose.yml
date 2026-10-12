@@ -76,6 +76,7 @@ services:
       # this project's remapped port set), not the internal service port.
       - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-localhost:9002}
       - MINIO_PUBLIC_SECURE=${MINIO_PUBLIC_SECURE:-false}
+      - MINIO_RELATIVE_URLS=${MINIO_RELATIVE_URLS:-false}
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER?set MINIO_ROOT_USER}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD?set MINIO_ROOT_PASSWORD}
       - SECRET_KEY=${SECRET_KEY?set SECRET_KEY}
@@ -252,6 +253,8 @@ services:
       - "4443:443"  # 공유기 내부 포트를 4443으로 쓰는 구성용(Caddy 443과 동일)
       - "3001:443"  # 공유기 내부 포트를 3001로 쓰는 구성용 — 예전 3001 포워딩이 그대로 HTTPS로 동작(frontend 평문 3001은 제거됨)
       - "80:80"
+    environment:
+      - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-localhost:9002}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

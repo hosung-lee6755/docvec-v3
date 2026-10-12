@@ -59,7 +59,11 @@
 		# iframe 에서 뷰어가 차단되므로(원문대조의 대체 경로가 깨짐) PDF 에는 걸지 않는다.
 		@notpdf not path_regexp (?i)\.pdf$
 		header @notpdf Content-Security-Policy "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:"
-		reverse_proxy minio:9000
+		# presigned URL 은 호스트 없는 상대 경로로 내려가므로(MINIO_RELATIVE_URLS) 브라우저가 접속한 출처로 들어온다.
+		# 서명은 MINIO_PUBLIC_ENDPOINT 호스트로 계산되어 있으니 MinIO 로 보낼 때 Host 를 그 값으로 되돌린다.
+		reverse_proxy minio:9000 {
+			header_up Host {$MINIO_PUBLIC_ENDPOINT}
+		}
 	}
 
 	# frontend 컨테이너의 nginx가 /api/를 api:8000으로 다시 프록시하므로,
