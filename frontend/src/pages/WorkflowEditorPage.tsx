@@ -384,7 +384,7 @@ export default function WorkflowEditorPage() {
           }}
         >
           <Info size={14} style={{ flexShrink: 0 }} />
-          게시된 버전은 읽기 전용입니다. 블록·연결을 추가하거나 삭제하려면 "새 버전으로 저장"을 눌러 초안을 만드세요.
+          게시된 버전은 읽기 전용입니다. 블록 위치 이동·추가·삭제·연결을 하려면 "새 버전으로 저장"을 눌러 초안을 만드세요.
         </div>
       )}
 
@@ -469,6 +469,7 @@ export default function WorkflowEditorPage() {
             onDeleteBlock={handleDeleteBlock}
             onDeleteEdge={handleDeleteEdge}
             invalidBlockIds={validationErrors.map((e) => e.block_id).filter((id): id is string => !!id)}
+            readOnly={isReadOnly}
           />
         </div>
         <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'auto', background: 'var(--color-surface)' }}>

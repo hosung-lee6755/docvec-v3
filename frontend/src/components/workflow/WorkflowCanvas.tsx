@@ -7,6 +7,7 @@ import '@xyflow/react/dist/style.css'
 import type { WorkflowBlock, WorkflowEdge } from '../../hooks/useWorkflows'
 import BlockNode from './BlockNode'
 import { getBlockMeta } from '../../lib/workflowBlocks'
+import { fallbackPosition, hasPosition } from '../../lib/workflowLayout'
 
 const nodeTypes = { blockNode: BlockNode }
 
@@ -24,18 +25,21 @@ interface WorkflowCanvasProps {
   // 마지막 저장 시 서버 유효성 검사가 지목한 블록 id 목록 — 캔버스에서
   // 빨간색으로 강조 표시한다(워크플로우 에디터 팔레트/폼 재편, 통합 설계서 §5).
   invalidBlockIds?: string[]
+  // 게시된 버전은 읽기 전용 — 블록을 끌거나 연결선을 그릴 수 없다(저장할 수 없는 변경을 막는다).
+  readOnly?: boolean
 }
 
 export default function WorkflowCanvas({
   blocks, edges, selectedBlockId, onSelectBlock, selectedEdgeId, onSelectEdge,
-  onMoveBlock, onConnect, onDeleteBlock, onDeleteEdge, invalidBlockIds,
+  onMoveBlock, onConnect, onDeleteBlock, onDeleteEdge, invalidBlockIds, readOnly = false,
 }: WorkflowCanvasProps) {
   const invalidSet = useMemo(() => new Set(invalidBlockIds ?? []), [invalidBlockIds])
 
-  const nodes: Node[] = useMemo(() => blocks.map((block) => ({
+  const nodes: Node[] = useMemo(() => blocks.map((block, index) => ({
     id: block.id,
     type: 'blockNode',
-    position: 'x' in block.position ? (block.position as { x: number; y: number }) : { x: 0, y: 0 },
+    // 좌표가 없는 블록(position === {})은 한 점에 겹치지 않도록 순서대로 펼쳐 놓는다.
+    position: hasPosition(block.position) ? block.position : fallbackPosition(index),
     data: { label: block.label ?? '', blockType: block.block_type, invalid: invalidSet.has(block.id) },
     selected: block.id === selectedBlockId,
   })), [blocks, selectedBlockId, invalidSet])
@@ -120,7 +124,9 @@ export default function WorkflowCanvas({
         onEdgeClick={handleEdgeClick}
         onPaneClick={handlePaneClick}
         onDelete={handleDelete}
-        deleteKeyCode={['Backspace', 'Delete']}
+        deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
+        nodesDraggable={!readOnly}
+        nodesConnectable={!readOnly}
         fitView
         proOptions={{ hideAttribution: true }}
       >
