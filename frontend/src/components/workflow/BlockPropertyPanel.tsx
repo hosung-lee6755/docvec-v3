@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, Trash2 } from 'lucide-react'
 import { useBlockTypes, type WorkflowBlock } from '../../hooks/useWorkflows'
 import { useEmbeddingModels } from '../../hooks/useCollections'
+import { useDictionaryEntries } from '../../hooks/useDictionary'
 import { jsonSchemaToConfigFields } from '../../lib/blockConfigSchema'
 import { getBlockMeta, type ConfigField } from '../../lib/workflowBlocks'
 
@@ -87,6 +88,39 @@ function ConfigFieldInput({
     )
   }
 
+  if (field.type === 'list' && field.options) {
+    // 고정 선택지가 있는 배열 필드 — 체크박스로 고르게 해 오타를 원천 차단한다.
+    const options = field.options
+    const selected = Array.isArray(value) ? (value as string[]) : []
+    const toggle = (optValue: string, checked: boolean) => {
+      const next = checked ? [...selected, optValue] : selected.filter((v) => v !== optValue)
+      // 선택지 순서를 유지해 저장 값이 클릭 순서에 따라 달라지지 않게 한다(config_hash 안정).
+      const ordered = options.map((o) => o.value).filter((v) => next.includes(v))
+      onValueChange(ordered.length ? ordered : undefined)
+    }
+    return (
+      <fieldset style={{ border: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+        <legend style={{ ...fieldLabelStyle, padding: 0, marginBottom: 'var(--space-1)' }}>{field.label}</legend>
+        {options.map((opt) => {
+          const id = `${inputId}_${opt.value}`
+          return (
+            <div className="krds-form-check" key={opt.value}>
+              <input
+                type="checkbox"
+                className="chk"
+                id={id}
+                checked={selected.includes(opt.value)}
+                onChange={(e) => toggle(opt.value, e.target.checked)}
+              />
+              <label htmlFor={id} style={{ fontSize: 13, color: 'var(--color-text)' }}>{opt.label}</label>
+            </div>
+          )
+        })}
+        {field.help && <span style={helpStyle}>{field.help}</span>}
+      </fieldset>
+    )
+  }
+
   if (field.type === 'list') {
     const text = Array.isArray(value) ? value.join(', ') : ''
     return (
@@ -143,6 +177,7 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
   const [configError, setConfigError] = useState<string | null>(null)
   const { data: blockTypes } = useBlockTypes()
   const { data: embeddingModels } = useEmbeddingModels()
+  const { data: stopwordEntries } = useDictionaryEntries('stopword')
 
   useEffect(() => {
     setConfigText(JSON.stringify(block?.config ?? {}, null, 2))
@@ -171,8 +206,23 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
         }
         : f)
     }
+    // 불용어 적용 범위는 사전에 실제 등록된 범위 값 중에서 고른다(오타로 아무 항목에도
+    // 매치되지 않는 필터가 만들어지는 것을 막는다).
+    if (block.block_type === 'stopword') {
+      const scopes = Array.from(new Set((stopwordEntries?.items ?? []).flatMap((e) => e.scope ?? []))).sort()
+      const selected = Array.isArray(block.config?.scope_filter) ? (block.config.scope_filter as string[]) : []
+      const values = Array.from(new Set(['ALL', ...scopes, ...selected]))
+      return fields.map((f) => f.key === 'scope_filter'
+        ? {
+          ...f,
+          type: 'list' as const,
+          options: values.map((v) => ({ value: v, label: v })),
+          help: '사전에 등록된 적용 범위 중에서 고릅니다. 아무것도 체크하지 않으면 전체 범위에 적용합니다.',
+        }
+        : f)
+    }
     return fields
-  }, [block, blockTypes, embeddingModels])
+  }, [block, blockTypes, embeddingModels, stopwordEntries])
 
   if (!block) {
     return (

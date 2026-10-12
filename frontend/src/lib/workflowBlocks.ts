@@ -73,8 +73,8 @@ export const BLOCK_META: Record<string, BlockMeta> = {
       { key: 'max_entities', label: '최대 개수', type: 'number', default: 15, min: 1, max: 30 },
       {
         key: 'entity_types', label: '추출할 개체 유형', type: 'list',
-        placeholder: '인명, 기관명, 지명, 제품명, 날짜',
-        help: '쉼표로 구분. 비워 두면 인명/기관명/지명/제품명/날짜.',
+        options: ['인명', '기관명', '지명', '제품명', '날짜'].map((v) => ({ value: v, label: v })),
+        help: '아무것도 체크하지 않으면 5종 모두 추출합니다.',
       },
     ],
   },

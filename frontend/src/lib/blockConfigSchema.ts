@@ -27,13 +27,22 @@ export interface JsonSchema {
 const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: string; placeholder?: string; options?: { value: string; label: string }[] }>> = {
   file_validate: {
     max_file_size_mb: { label: '최대 파일 크기(MB)' },
-    allowed_extensions: { label: '허용 확장자', help: '쉼표로 구분 (예: .pdf, .docx)' },
+    allowed_extensions: { label: '허용 확장자', help: '체크한 형식만 허용합니다.', options: [
+      { value: '.pdf', label: 'PDF (.pdf)' },
+      { value: '.docx', label: 'Word (.docx)' },
+      { value: '.hwp', label: '한글 (.hwp)' },
+      { value: '.hwpx', label: '한글 (.hwpx)' },
+    ] },
     reject_encrypted: { label: '암호화된 파일 거부' },
     reject_duplicates: { label: '중복 파일 거부' },
     max_pages: { label: '최대 페이지 수' },
     scan_malware: { label: '악성코드 검사' },
   },
   text_extract: {
+    engine: { label: '추출 엔진', help: 'Docling은 PDF에만 적용됩니다(DOCX/HWP/HWPX는 항상 기존 엔진).', options: [
+      { value: 'legacy', label: '기존 엔진 (레거시)' },
+      { value: 'docling', label: 'Docling (PDF 전용)' },
+    ] },
     extract_tables: { label: '표 추출' },
     extract_images: { label: '이미지 추출' },
     recognize_figures: { label: '그림·도표 설명 인식' },
@@ -44,8 +53,15 @@ const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: str
   },
   ocr: {
     force_ocr: { label: '항상 OCR 실행', help: '텍스트 레이어가 있어도 강제로 OCR을 수행합니다.' },
-    engine: { label: 'OCR 엔진' },
-    language: { label: '인식 언어', help: '예: ko+en' },
+    engine: { label: 'OCR 엔진', options: [
+      { value: 'auto', label: '자동' },
+      { value: 'tesseract', label: 'Tesseract' },
+    ] },
+    language: { label: '인식 언어', options: [
+      { value: 'ko+en', label: '한국어 + 영어' },
+      { value: 'ko', label: '한국어' },
+      { value: 'en', label: '영어' },
+    ] },
     deskew: { label: '기울기 보정' },
     denoise: { label: '노이즈 제거' },
     contrast: { label: '대비 보정' },
@@ -78,7 +94,16 @@ const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: str
     case_sensitive_default: { label: '기본 대소문자 구분' },
   },
   user_dict: {
-    term_types: { label: '적용할 용어 유형', help: '비워 두면 전체 유형에 적용합니다.' },
+    term_types: { label: '적용할 용어 유형', help: '아무것도 체크하지 않으면 전체 유형에 적용합니다.', options: [
+      { value: 'TECHNICAL_TERM', label: '전문용어' },
+      { value: 'ABBREVIATION', label: '약어' },
+      { value: 'ORGANIZATION', label: '조직·기관' },
+      { value: 'PERSON', label: '인명' },
+      { value: 'PRODUCT', label: '제품' },
+      { value: 'PROJECT', label: '프로젝트' },
+      { value: 'POLICY', label: '정책·규정' },
+      { value: 'CUSTOM', label: '사용자 정의' },
+    ] },
     protect_from_stopwords: { label: '불용어 처리로부터 보호', help: '사용자 사전에 등록된 용어는 불용어 처리에서 제외합니다.' },
   },
   structure_analyze: {
@@ -90,7 +115,14 @@ const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: str
     preserve_clause_number: { label: '조항 번호 보존' },
   },
   pii_detect: {
-    entity_types: { label: '탐지할 개체 유형', help: '비워 두면 전체 6종(주민번호/전화번호/이메일/계좌/카드/이름)을 탐지합니다.' },
+    entity_types: { label: '탐지할 개체 유형', help: '아무것도 체크하지 않으면 전체 6종을 탐지합니다.', options: [
+      { value: 'RRN', label: '주민등록번호' },
+      { value: 'PHONE', label: '전화번호' },
+      { value: 'EMAIL', label: '이메일' },
+      { value: 'ACCOUNT', label: '계좌번호' },
+      { value: 'CARD', label: '카드번호' },
+      { value: 'NAME', label: '이름' },
+    ] },
     action: { label: '처리 방식', options: [
       { value: 'mark_only', label: '표시만' },
       { value: 'mask', label: '마스킹' },
@@ -98,7 +130,13 @@ const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: str
       { value: 'remove', label: '제거' },
       { value: 'exclude_from_embedding', label: '임베딩에서 제외' },
     ] },
-    mask_char: { label: '마스킹 문자' },
+    mask_char: { label: '마스킹 문자', options: [
+      { value: '*', label: '* (별표)' },
+      { value: '#', label: '# (샵)' },
+      { value: 'X', label: 'X' },
+      { value: '●', label: '● (원)' },
+      { value: '-', label: '- (하이픈)' },
+    ] },
     require_admin_approval: { label: '관리자 승인 필요' },
   },
   chunk_split: {
@@ -169,7 +207,8 @@ export function jsonSchemaToConfigFields(schema: JsonSchema, blockType: string):
     const field: ConfigField = {
       key,
       label: override?.label ?? rawProp.title ?? key,
-      type: options ? 'select' : _fieldType(prop),
+      // 배열 필드에 고정 선택지가 있으면 다중 선택(list + options), 스칼라면 단일 선택.
+      type: options && prop.type !== 'array' ? 'select' : _fieldType(prop),
       default: rawProp.default,
       help: override?.help,
       placeholder: override?.placeholder,
