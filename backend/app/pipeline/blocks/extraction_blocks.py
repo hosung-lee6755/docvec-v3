@@ -443,7 +443,12 @@ class TextExtractBlock(BaseBlock):
         # (Docling VLM 통합 조사, 2026-07-29). A cached pre-1.15.0 docling
         # result never attempted this escalation even when a key is now
         # registered, so it must be reprocessed to pick this up.
-        return "1.15.0"
+        #
+        # 1.16.0: pdf_adapter가 칸 선이 불완전한 표(머리글·가운데 열만 칸이 닫히고 첫/셋째 열 본문에는
+        # 칸 선이 없는 공고문 표 등)에서 어떤 셀에도 속하지 않는 글자를 본문에 남긴다 — 이전에는 표 영역
+        # 전체를 본문에서 지워 그 글자가 통째로 사라졌다(실측: 공고문 2건에서 표 17개, 약 2,500자 손실).
+        # 캐시된 1.15.0 이하 PDF 결과는 그 글자가 빠져 있어 재사용하면 안 된다.
+        return "1.16.0"
 
     @property
     def category(self) -> str:

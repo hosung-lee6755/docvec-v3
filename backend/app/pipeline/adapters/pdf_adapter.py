@@ -198,6 +198,17 @@ def _text_block_bbox(words: list[dict]) -> tuple[float, float, float, float] | N
     )
 
 
+def _table_exclusion_rects(tables) -> list:
+    """표 후보들이 본문에서 가릴 영역. 선으로 닫힌 칸이 있으면 그 칸들만, 없으면 bbox 전체."""
+    rects: list = []
+    for table in tables:
+        if table.cell_bboxes:
+            rects.extend(table.cell_bboxes)
+        elif table.bbox:
+            rects.append(table.bbox)
+    return rects
+
+
 def _text_excluding_tables(page, table_bboxes: list):
     """pdfplumber's `extract_text()` walks every character on the page by
     position — it has no notion of the ruled/bordered tables `find_tables()`
@@ -207,12 +218,25 @@ def _text_excluding_tables(page, table_bboxes: list):
     "1 김민준 개발팀", no longer pipe-delimited) reads as ordinary prose to
     downstream structure analysis, and digit-led rows can even misclassify as
     phantom headings. Cropping each table's bbox out before extraction keeps
-    table content sourced from exactly one place."""
-    for bbox in table_bboxes:
-        try:
-            page = page.outside_bbox(bbox)
-        except Exception:
-            continue
+    table content sourced from exactly one place.
+
+    `table_bboxes` 는 표의 칸(셀) 사각형들이다 — pdfplumber 가 셀 글자를 배정하는 것과 같은 기준(글자
+    중심점이 사각형 안)으로 가려서, 셀에 들어간 글자는 표 블록에만, 셀 밖 글자(칸 선이 불완전한 표의
+    첫 열 본문 등)는 본문에 남아 한 번씩만 나온다."""
+    if not table_bboxes:
+        return page.extract_text() or ""
+
+    def _in_table(obj) -> bool:
+        if obj.get("object_type") != "char":
+            return False
+        cx = (obj["x0"] + obj["x1"]) / 2
+        cy = (obj["top"] + obj["bottom"]) / 2
+        return any(x0 <= cx <= x1 and top <= cy <= bottom for x0, top, x1, bottom in table_bboxes)
+
+    try:
+        page = page.filter(lambda obj: not _in_table(obj))
+    except Exception:
+        return page.extract_text() or ""
     return page.extract_text() or ""
 
 
@@ -578,6 +602,7 @@ class PDFAdapter(BaseAdapter):
                                     page_number=page_num,
                                     rows=cleaned_rows,
                                     bbox=table.bbox,
+                                    cell_bboxes=[tuple(cell) for cell in table.cells],
                                 )
                             )
 
@@ -601,7 +626,8 @@ class PDFAdapter(BaseAdapter):
                         except Exception as implicit_exc:
                             warnings.append(f"page {page_num} implicit table detection failed: {implicit_exc}")
 
-                    text = _text_excluding_tables(page, [t.bbox for t in table_candidates])
+                    exclusion_rects = _table_exclusion_rects(table_candidates)
+                    text = _text_excluding_tables(page, exclusion_rects)
                     block_type = "paragraph"
                     coverage = _text_coverage(text, page.width, page.height)
                     image_ratio = _image_area_ratio(page)
@@ -670,7 +696,7 @@ class PDFAdapter(BaseAdapter):
                             )
                         )
                         if block_type != "ocr" and extract_font_signals_enabled:
-                            for line in _extract_line_layout(page, [t.bbox for t in table_candidates]):
+                            for line in _extract_line_layout(page, exclusion_rects):
                                 line["page_number"] = page_num
                                 line_layout.append(line)
 

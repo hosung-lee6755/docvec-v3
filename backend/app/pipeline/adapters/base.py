@@ -61,6 +61,10 @@ class RawTableCandidate:
     # "ruled" (pdfplumber find_tables, bordered) | "implicit_alignment"
     # (whitespace/column clustering, no ruling lines).
     detected_as: str = "ruled"
+    # 선으로 닫힌 칸(셀)의 사각형들(pdfplumber table.cells). 칸 선이 불완전한 표는 bbox 안에 어떤
+    # 셀에도 속하지 않는 글자가 생기는데, bbox 전체를 본문에서 지우면 그 글자가 사라진다 — 본문 제외는
+    # 이 셀 사각형으로만 한다. None 이면 bbox 전체를 표 영역으로 본다(암시적 표 등).
+    cell_bboxes: list[tuple[float, float, float, float]] | None = None
 
 
 @dataclass

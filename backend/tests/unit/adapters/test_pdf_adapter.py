@@ -388,3 +388,57 @@ def test_plain_prose_is_not_misdetected_as_implicit_table(tmp_path):
 
     implicit = [t for t in result.pages[0].table_candidates if t.detected_as == "implicit_alignment"]
     assert implicit == []
+
+
+# ── 일부 칸만 닫힌(선이 불완전한) 표의 셀 밖 텍스트 보존 ─────────────────────────────
+# 실제 사례(공고문 "신청 예시별 지원 조건" 표): 머리글 행과 가운데 열만 칸이 닫히고 첫 열·셋째 열 본문에는
+# 칸 선이 없다. pdfplumber 는 그 글자를 어떤 셀에도 넣지 못하는데, 표 영역 전체를 본문에서 지워
+# 글자가 사라졌다.
+def _make_pdf_with_partially_ruled_table(tmp_path: Path) -> Path:
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    top, bottom = 100, 300
+    left, c1, c2, right = 50, 250, 350, 540
+    # 머리글 행은 완전히 닫고, 본문은 가운데 열(c1~c2)만 칸 선을 그린다 — 첫 열과 셋째 열 본문에는
+    # 바깥 세로선·가로선·아래 테두리가 없다(실제 공고문 표와 같은 모양).
+    page.draw_rect(fitz.Rect(left, top, right, top + 24), width=0.8)
+    page.draw_line((c1, top), (c1, bottom), width=0.8)
+    page.draw_line((c2, top), (c2, bottom), width=0.8)
+    for y in (top + 70, top + 116, top + 162, bottom):
+        page.draw_line((c1, y), (c2, y), width=0.8)
+    page.insert_text((left + 6, top + 16), "HeaderLeft", fontsize=10)
+    page.insert_text((c1 + 6, top + 16), "Limit", fontsize=10)
+    page.insert_text((c2 + 6, top + 16), "Target", fontsize=10)
+    page.insert_text((left + 6, top + 50), "LeftBodyAlpha zeta one", fontsize=10)
+    page.insert_text((left + 6, top + 96), "LeftBodyBeta zeta two", fontsize=10)
+    page.insert_text((c1 + 6, top + 50), "Max05", fontsize=10)
+    page.insert_text((c1 + 6, top + 96), "Max20", fontsize=10)
+    page.insert_text((c2 + 6, top + 50), "RightBodyGamma", fontsize=10)
+    for i in range(14):
+        page.insert_text((72, 340 + i * 14), f"Filler paragraph line {i} to keep the text density high.", fontsize=11)
+    path = tmp_path / "partial_table.pdf"
+    doc.save(str(path))
+    return path
+
+
+def _all_page_text(result) -> str:
+    return "\n".join(tb.text for page in result.pages for tb in page.text_blocks)
+
+
+def test_text_outside_closed_cells_of_a_ruled_table_is_not_lost(tmp_path):
+    path = _make_pdf_with_partially_ruled_table(tmp_path)
+
+    text = _all_page_text(PDFAdapter().extract(path, {}))
+
+    for expected in ("LeftBodyAlpha", "LeftBodyBeta", "RightBodyGamma", "Max05", "Max20"):
+        assert expected in text, f"{expected} 가 추출 결과에서 사라졌다"
+
+
+def test_cell_text_is_not_duplicated_in_body_text_and_table_block(tmp_path):
+    path = _make_pdf_with_partially_ruled_table(tmp_path)
+
+    text = _all_page_text(PDFAdapter().extract(path, {}))
+
+    # 칸에 들어간 글자는 표 블록에만, 칸 밖 글자는 본문에만 — 어느 쪽이든 한 번만 나와야 한다
+    assert text.count("Max05") == 1
+    assert text.count("LeftBodyAlpha") == 1
