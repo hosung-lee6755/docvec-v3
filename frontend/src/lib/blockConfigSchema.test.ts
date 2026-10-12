@@ -5,10 +5,11 @@ const field = (schema: JsonSchema, blockType: string, key: string) =>
   jsonSchemaToConfigFields(schema, blockType).find((f) => f.key === key)
 
 describe('jsonSchemaToConfigFields — 자유 입력을 선택으로', () => {
-  it('text_extract.engine 은 legacy/docling 선택이다', () => {
-    const f = field({ properties: { engine: { type: 'string', default: 'legacy' } } }, 'text_extract', 'engine')
+  it('text_extract.engine 은 auto/docling/legacy 선택이고 자동이 첫 항목이다', () => {
+    const f = field({ properties: { engine: { type: 'string', default: 'auto' } } }, 'text_extract', 'engine')
     expect(f?.type).toBe('select')
-    expect(f?.options?.map((o) => o.value)).toEqual(['legacy', 'docling'])
+    expect(f?.options?.map((o) => o.value)).toEqual(['auto', 'docling', 'legacy'])
+    expect(f?.help).toContain('스캔')
   })
 
   it('ocr.engine / ocr.language 는 선택이다', () => {

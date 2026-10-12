@@ -39,10 +39,16 @@ const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: str
     scan_malware: { label: '악성코드 검사' },
   },
   text_extract: {
-    engine: { label: '추출 엔진', help: 'Docling은 PDF에만 적용됩니다(DOCX/HWP/HWPX는 항상 기존 엔진).', options: [
-      { value: 'legacy', label: '기존 엔진 (레거시)' },
-      { value: 'docling', label: 'Docling (PDF 전용)' },
-    ] },
+    engine: {
+      label: '추출 엔진',
+      help: '자동: 텍스트가 있는 PDF는 Docling(표·구조 요소), 스캔 PDF는 전면 OCR로 처리합니다. '
+        + 'Docling을 직접 고르면 스캔 PDF의 글자를 거의 읽지 못할 수 있습니다. DOCX/HWP/HWPX는 항상 기존 엔진입니다.',
+      options: [
+        { value: 'auto', label: '자동 (권장)' },
+        { value: 'docling', label: 'Docling (PDF 전용)' },
+        { value: 'legacy', label: '기존 엔진 (레거시)' },
+      ],
+    },
     extract_tables: { label: '표 추출' },
     extract_images: { label: '이미지 추출' },
     recognize_figures: { label: '그림·도표 설명 인식' },

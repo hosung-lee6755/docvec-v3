@@ -127,6 +127,29 @@ def _detect_pdf_signals(path: Path) -> tuple[bool, bool, float]:
         return True, False, 0.5
 
 
+def resolve_extract_engine(engine: str, path: Path, mime_type: str) -> tuple[str, str | None]:
+    """설정값(auto/docling/legacy)을 실제로 쓸 엔진(docling/legacy)과 안내 문구로 해석한다.
+
+    Docling 은 비트맵 영역에만 OCR 을 돌려, 글자가 윤곽선·이미지 한 장인 스캔 PDF 는 거의 빈 텍스트가
+    된다(실측: 스캔 공고문 전 페이지 텍스트 0자). 그래서 "auto" 는 텍스트 레이어가 있으면 Docling(표·구조
+    요소), 없으면 전면 OCR 을 하는 legacy(pdf_adapter) 로 보낸다. 명시적 "docling" 은 따르되 스캔본이면 경고한다.
+    PDF 가 아니면 엔진 값과 무관하게 legacy 어댑터다(DOCX/HWP/HWPX)."""
+    is_pdf = path.suffix.lower() == ".pdf" or mime_type == "application/pdf"
+    if not is_pdf:
+        return "legacy", None
+    if engine == "legacy":
+        return "legacy", None
+    has_text_layer, is_encrypted, _ = _detect_pdf_signals(path)
+    if has_text_layer or is_encrypted:
+        return "docling", None
+    if engine == "docling":
+        return "docling", (
+            "텍스트 레이어가 없는 스캔 PDF 인데 Docling 이 선택돼 텍스트를 거의 읽지 못할 수 있습니다. "
+            "추출 엔진을 '자동'으로 바꾸면 전면 OCR 로 처리합니다."
+        )
+    return "legacy", "텍스트 레이어가 없는 스캔 PDF 라 Docling 대신 전면 OCR 엔진으로 처리했습니다."
+
+
 class FormatDetectBlock(BaseBlock):
     @property
     def block_type(self) -> str:
@@ -210,9 +233,9 @@ class TextExtractConfig(BaseModel):
     # 끄면 structure_analyze는 항상 정규식-only 폴백 경로로만 동작한다
     # (extraction_layout이 없는 문서와 동일하게 처리).
     extract_font_signals: bool = True
-    # "docling"이면 PDF에 한해 DoclingAdapter 사용(DOCX/HWP/HWPX는 이 값과
-    # 무관하게 항상 기존 어댑터).
-    engine: str = "legacy"
+    # "auto"(기본): 텍스트 레이어가 있는 PDF 는 Docling, 스캔 PDF 는 전면 OCR(legacy).
+    # "docling"/"legacy"는 강제 선택. DOCX/HWP/HWPX는 이 값과 무관하게 항상 기존 어댑터.
+    engine: str = "auto"
 
 
 # Repeated-position clustering thresholds — a line counts as a running
@@ -448,7 +471,16 @@ class TextExtractBlock(BaseBlock):
         # 칸 선이 없는 공고문 표 등)에서 어떤 셀에도 속하지 않는 글자를 본문에 남긴다 — 이전에는 표 영역
         # 전체를 본문에서 지워 그 글자가 통째로 사라졌다(실측: 공고문 2건에서 표 17개, 약 2,500자 손실).
         # 캐시된 1.15.0 이하 PDF 결과는 그 글자가 빠져 있어 재사용하면 안 된다.
-        return "1.16.0"
+        #
+        # 1.17.0: (1) Tesseract 설정을 psm3+Otsu → psm4+회색조로 변경 — 실측(32쪽/56질문) F1 0.24→0.63,
+        # 검색 hit@1 0.30→0.68, 글자 벌어짐(한 글자 토큰) 40%→5%. (2) engine=docling 인데 텍스트 레이어가
+        # 없는 PDF 는 전면 OCR 어댑터로 우회. 캐시된 1.16.0 이하의 스캔 PDF 결과는 OCR 품질이 낮거나
+        # 비어 있어 재사용하면 안 된다.
+        #
+        # 1.18.0: 엔진 선택지에 "auto"(기본) 추가 — 텍스트 레이어 유무로 Docling/전면 OCR 을 고른다. 명시적
+        # "docling"은 더 이상 스캔 PDF 를 우회하지 않고 경고만 남긴다. 같은 설정 값의 의미가 바뀌었으므로
+        # 캐시된 1.17.0 이하 결과를 재사용하면 안 된다.
+        return "1.18.0"
 
     @property
     def category(self) -> str:
@@ -499,7 +531,10 @@ class TextExtractBlock(BaseBlock):
                     raise
             try:
                 try:
-                    adapter = get_adapter(tmp_path, doc.mime_type or "", engine=cfg.engine)
+                    engine, routing_note = resolve_extract_engine(
+                        cfg.engine, tmp_path, doc.mime_type or ""
+                    )
+                    adapter = get_adapter(tmp_path, doc.mime_type or "", engine=engine)
                 except UnsupportedFileTypeError as exc:
                     raise BlockExecutionError(
                         str(exc), error_code="FILE_UNSUPPORTED", permanent=True
@@ -511,6 +546,8 @@ class TextExtractBlock(BaseBlock):
                     "extract_font_signals": cfg.extract_font_signals,
                 }
                 parsed = adapter.extract(tmp_path, adapter_options)
+                if routing_note:
+                    parsed.warnings.append(routing_note)
             finally:
                 tmp_path.unlink(missing_ok=True)
 

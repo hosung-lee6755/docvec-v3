@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
 from app.pipeline.blocks.content_blocks import _carry
 from app.pipeline.blocks.source_recall import SourceRecall, compute_source_recall
+from app.pipeline.blocks.text_usability import single_char_token_ratio, usable_char_count
 
 logger = logging.getLogger(__name__)
 
@@ -143,12 +144,13 @@ def _measure_source_recall(doc) -> tuple[SourceRecall | None, str]:
 def _determine_status(
     *, chunk_count: int, overall_score: float, fail_below_score: float,
     failed_pages: list[int], total_ocr_pages: int, has_warnings: bool,
+    unusable_text: bool = False,
 ) -> str:
     """overall_score는 5개 지표 평균이라, 청크 0개처럼 그 자체로 치명적인
     신호가 다른 지표(예: 표 문법만으로 min_extraction_chars를 넘겨버린
     textExtraction=100)에 희석돼 SUCCESS_WITH_WARNING으로 조용히 넘어갈 수
     있다 — 청크 0개는 평균과 무관하게 먼저 FAILURE로 확정한다."""
-    if chunk_count == 0:
+    if chunk_count == 0 or unusable_text:
         return "FAILURE"
     if overall_score < fail_below_score:
         return "FAILURE"
@@ -194,6 +196,11 @@ class QualityCheckConfig(BaseModel):
     # 원본 PDF 텍스트 레이어 대비 추출 결과 재현율의 하한 — 미만이면 경고, 점수는 하한에서 60점,
     # (1-하한)×2 만큼 빠지면 0점. 텍스트 레이어가 없는 스캔본·PDF 가 아닌 문서는 측정하지 않는다.
     min_source_recall: float = 0.8
+    # 쪽당 실질 글자(표/제목 기호·공백 제외)가 이 값 미만이면 평균 점수와 무관하게 FAILURE —
+    # 스캔 PDF 가 거의 빈 텍스트로 추출돼도 다른 지표가 높아 통과하던 문제(서울 데이터 펠로우십 PDF)를 막는다.
+    min_usable_chars_per_page: int = 30
+    # OCR 결과에서 한 글자 한글 토큰 비율이 이 값을 넘으면 글자가 벌어진 것으로 본다(정상 ~5%, 실패 ~40%).
+    max_ocr_single_char_ratio: float = 0.25
     review_policy: str = "review_on_warning"  # auto_pass | review_on_warning | always_review
     fail_below_score: float = 30.0
 
@@ -219,7 +226,9 @@ class QualityCheckBlock(BaseBlock):
         # 1.5.0: 원본 PDF 텍스트 레이어 대비 재현율(sourceRecall) 실측 지표 추가, 측정하지 않는
         # 고정값(normalization 항상 100점)을 종합점수 평균에서 제외 — 캐시된 1.4.0 이하 결과는
         # 종합점수가 부풀려져 있어 재사용하면 안 된다.
-        return "1.5.0"
+        # 1.6.0: 쪽당 실질 글자 수 미달(스캔본이 빈 텍스트로 추출)은 평균과 무관하게 FAILURE, OCR 글자
+        # 벌어짐(한 글자 토큰 비율)을 측정해 ocr 점수에 반영한다. 캐시된 1.5.0 이하 결과에는 없다.
+        return "1.6.0"
 
     @property
     def category(self) -> str:
@@ -304,7 +313,34 @@ class QualityCheckBlock(BaseBlock):
                 else:
                     add_warning("ocr", "OCR을 사용했으나 신뢰도 정보를 확인할 수 없습니다.")
                     ocr_score = 70.0
+            # 단어 신뢰도가 높아도 글자 사이가 벌어지면 단어 검색·임베딩이 무력하다 — 별도 측정으로 점수를 깎는다.
+            ocr_single_char_ratio = single_char_token_ratio(text) if doc.ocr_used else None
+            if ocr_single_char_ratio is not None and ocr_single_char_ratio > cfg.max_ocr_single_char_ratio:
+                add_warning(
+                    "ocr",
+                    f"OCR 결과에서 글자 사이가 벌어진 단어가 많습니다({ocr_single_char_ratio:.0%} > "
+                    f"{cfg.max_ocr_single_char_ratio:.0%}). 검색 품질이 크게 떨어질 수 있습니다.",
+                )
+                ocr_score = min(
+                    ocr_score,
+                    _score_from_ratio(ocr_single_char_ratio, warn_above=cfg.max_ocr_single_char_ratio),
+                )
             scores["ocr"] = round(ocr_score, 1)
+
+            # 쪽당 실질 글자 수 — 길이(text_len)는 표 문법만으로도 채워져 "추출됨"으로 오판된다.
+            page_total = max(
+                getattr(doc, "page_count", None) or 0,
+                max((entry[1] for entry in (doc.page_map or [])), default=0),
+                1,
+            )
+            usable_chars_per_page = usable_char_count(text) / page_total
+            unusable_text = usable_chars_per_page < cfg.min_usable_chars_per_page
+            if unusable_text:
+                add_warning(
+                    "textExtraction",
+                    f"검색에 쓸 수 있는 텍스트가 거의 없습니다(쪽당 {usable_chars_per_page:.0f}자 < "
+                    f"{cfg.min_usable_chars_per_page}자). 스캔 문서이거나 추출 엔진이 내용을 읽지 못했을 수 있습니다.",
+                )
 
             failed_pages = _compute_failed_pages(doc.ocr_page_confidence, cfg.min_ocr_confidence)
 
@@ -433,6 +469,7 @@ class QualityCheckBlock(BaseBlock):
                 failed_pages=failed_pages,
                 total_ocr_pages=len(doc.ocr_page_confidence or []),
                 has_warnings=bool(warnings),
+                unusable_text=unusable_text,
             )
             if status == "PARTIAL_FAILURE":
                 # 일부 페이지만 OCR 신뢰도 기준 미달 — 문서 전체 재작업이
@@ -446,6 +483,10 @@ class QualityCheckBlock(BaseBlock):
             metrics = {
                 "overall_score": overall_score,
                 "text_chars": text_len,
+                "usable_chars_per_page": round(usable_chars_per_page, 1),
+                "ocr_single_char_ratio": (
+                    round(ocr_single_char_ratio, 4) if ocr_single_char_ratio is not None else None
+                ),
                 "broken_char_ratio": round(broken_ratio, 4),
                 "empty_page_ratio": round(empty_page_ratio, 4),
                 "node_count": len(nodes),

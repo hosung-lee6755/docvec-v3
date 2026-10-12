@@ -149,7 +149,7 @@ def test_run_healthy_document_is_success():
 
 
 def test_run_default_policy_requires_review_on_warning():
-    result, _ = _run(_doc(parsed_text="짧음"))
+    result, _ = _run(_doc(parsed_text="가" * 40))
     assert result.output["quality_status"] == "REVIEW_REQUIRED"
     assert result.requires_review is True
     assert any("매우 짧습니다" in w for w in result.warnings)
@@ -258,7 +258,7 @@ def test_run_reuses_existing_report_row():
 
 
 def test_run_skip_review_downgrades_policy_but_not_failure():
-    ok, _ = _run(_doc(parsed_text="짧음"), skip_review=True)
+    ok, _ = _run(_doc(parsed_text="가" * 40), skip_review=True)
     assert ok.requires_review is False
     failed, _ = _run(_doc(), chunks=[], skip_review=True)
     assert failed.requires_review is True
@@ -277,7 +277,7 @@ def test_run_carries_upstream_output():
 def test_block_metadata():
     block = qb.QualityCheckBlock()
     assert block.block_type == "quality_check"
-    assert block.block_version == "1.5.0"
+    assert block.block_version == "1.6.0"
     assert block.category == "품질·제어"
     assert block.config_schema is qb.QualityCheckConfig
     with pytest.raises(Exception):
@@ -379,3 +379,30 @@ def test_run_reads_nodes_and_chunks_from_parent_run_when_own_run_has_none():
 
     assert result.metrics["chunk_count"] == 1
     assert result.output["quality_status"] == "SUCCESS"
+
+
+def test_run_unusable_text_forces_failure_even_when_other_scores_look_fine():
+    # 10쪽 문서인데 표 문법만 남은 경우 — 길이는 있어도 검색할 내용이 없다(스캔 PDF 를 Docling 이 처리한 전형).
+    doc = _doc(parsed_text="| --- | --- |\n" * 200 + "가나다", page_count=10)
+    result, _ = _run(doc, config={"review_policy": "auto_pass"}, skip_review=True)
+    assert result.output["quality_status"] == "FAILURE"
+    assert result.requires_review is True  # skip_review 로도 우회 불가
+    assert result.metrics["usable_chars_per_page"] < 30
+    assert any("검색에 쓸 수 있는 텍스트" in w for w in result.warnings)
+
+
+def test_run_enough_usable_text_per_page_is_not_flagged():
+    doc = _doc(parsed_text="가" * 600, page_count=10)  # 쪽당 60자
+    result, _ = _run(doc, config={"review_policy": "auto_pass"})
+    assert result.output["quality_status"] == "SUCCESS"
+
+
+def test_run_scattered_ocr_text_lowers_ocr_score_and_warns_despite_high_confidence():
+    scattered = " ".join("가나다라마바사아자차" ) * 30  # 한 글자 토큰만 이어진 텍스트
+    doc = _doc(
+        parsed_text=scattered, ocr_used=True, ocr_page_confidence=[{"page": 1, "confidence": 0.95}],
+    )
+    result, _ = _run(doc)
+    assert result.metrics["ocr_single_char_ratio"] > 0.25
+    assert result.metrics["ocr"] < 70
+    assert any("글자 사이가 벌어" in w for w in result.warnings)

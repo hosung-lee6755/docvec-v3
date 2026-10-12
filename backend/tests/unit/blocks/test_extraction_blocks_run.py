@@ -403,11 +403,11 @@ def test_block_metadata(block, btype, schema):
 
 
 def test_text_extract_block_version():
-    assert eb.TextExtractBlock().block_version == "1.16.0"
+    assert eb.TextExtractBlock().block_version == "1.18.0"
 
 
 def test_config_defaults_and_validation():
-    assert eb.TextExtractConfig().engine == "legacy"
+    assert eb.TextExtractConfig().engine == "auto"
     assert eb.FileValidateConfig().allowed_extensions == [".pdf", ".docx", ".hwp", ".hwpx"]
     with pytest.raises(Exception):
         eb.FileValidateConfig(max_pages="lots")

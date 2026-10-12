@@ -112,9 +112,11 @@ def _cloud_vlm_ocr(image_bytes: bytes, vision_backend: str, vision_api_key: str)
         return None
 
 
-# LSTM engine + auto page segmentation — measurably better than defaults on
-# Korean scans in side-by-side tests on real documents.
-_TESSERACT_CONFIG = "--oem 1 --psm 3"
+# LSTM engine + single-column segmentation. psm3(자동)은 한글 스캔에서 글자 사이를 벌려
+# (한 글자 토큰 ~40%) 검색 가능한 텍스트가 나오지 않았다. scripts/ocr_benchmark.py 실측
+# (32쪽/56질문): psm3 F1 0.24·검색 hit@1 0.30 → psm4 F1 0.63·hit@1 0.68.
+# 값을 바꿀 때는 벤치마크를 다시 돌려 근거를 확인한다(유지보수 가이드 참고).
+_TESSERACT_CONFIG = "--oem 1 --psm 4"
 
 
 def _ocr_page_with_confidence(image, pytesseract) -> tuple[str, float | None, int]:
@@ -151,37 +153,9 @@ def _ocr_page_with_confidence(image, pytesseract) -> tuple[str, float | None, in
 
 
 def _preprocess_for_ocr(image):
-    """Grayscale → autocontrast → Otsu binarization. Tesseract's Korean
-    recognition degrades badly on gray/noisy scans, producing interleaved
-    Latin gibberish; adaptive-threshold binarization substantially reduces
-    that failure mode (verified on real scanned reports)."""
-    import numpy as np
-    from PIL import Image, ImageOps
-
-    gray = ImageOps.autocontrast(image.convert("L"))
-    arr = np.asarray(gray)
-    hist, _ = np.histogram(arr, bins=256, range=(0, 256))
-    total = arr.size
-    sum_all = float((np.arange(256) * hist).sum())
-    sum_b = 0.0
-    weight_b = 0.0
-    max_var = 0.0
-    threshold = 127
-    for i in range(256):
-        weight_b += hist[i]
-        if weight_b == 0:
-            continue
-        weight_f = total - weight_b
-        if weight_f == 0:
-            break
-        sum_b += i * hist[i]
-        mean_b = sum_b / weight_b
-        mean_f = (sum_all - sum_b) / weight_f
-        var = weight_b * weight_f * (mean_b - mean_f) ** 2
-        if var > max_var:
-            max_var = var
-            threshold = i
-    return Image.fromarray(((arr > threshold) * 255).astype("uint8"))
+    """Grayscale only. Otsu 이진화는 벤치마크에서 이득이 없었고(F1 0.628→0.621)
+    흐린 글자를 지울 위험이 있어 쓰지 않는다."""
+    return image.convert("L")
 
 
 def _text_block_bbox(words: list[dict]) -> tuple[float, float, float, float] | None:
