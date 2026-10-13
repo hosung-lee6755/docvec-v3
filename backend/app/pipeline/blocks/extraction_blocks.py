@@ -497,7 +497,7 @@ class TextExtractBlock(BaseBlock):
         # 1.19.0: Document.page_count 를 어댑터가 센 원본 쪽수로 기록(DOCX 는 미리보기 PDF 쪽수)하고, 원본
         # 제목 속성을 Document.source_title 로 남기며, 한글 비중 40% 이상이면 한국어로 판정하고, 사용자가
         # 고친 언어는 덮어쓰지 않는다 — 캐시된 이전 결과는 쪽수·제목 속성이 없고 언어 판정이 달랐다.
-        return "1.20.0"
+        return "1.21.0"
 
     @property
     def category(self) -> str:
@@ -589,8 +589,10 @@ class TextExtractBlock(BaseBlock):
                         "DOCX 미리보기 쪽수 계산 실패 — 파일 속성의 쪽수를 쓴다", exc_info=True,
                         extra={"document_id": str(doc.id)},
                     )
+                # Word 가 직접 저장한 쪽수(단어 수가 있는 문서만 어댑터가 넘긴다)가 LibreOffice 렌더링 쪽수보다
+                # 정확하다 — 글꼴이 달라 렌더링 쪽수는 달라질 수 있다.
                 word_pages = parsed.metadata.get("document_pages")
-                if parsed.page_count <= 1 and isinstance(word_pages, int) and word_pages > 1:
+                if isinstance(word_pages, int) and word_pages > 0:
                     parsed.page_count = word_pages
 
             image_records = []

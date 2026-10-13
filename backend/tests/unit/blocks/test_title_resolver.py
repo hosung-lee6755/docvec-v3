@@ -198,3 +198,24 @@ def test_garbled_cover_close_to_filename_prefers_filename_even_without_ocr_flag(
         filename="01_빅데이터 기반 심야버스 노선 수립을 위한 분석(요약본).pdf",
     )
     assert got == "빅데이터 기반 심야버스 노선 수립을 위한 분석(요약본)"
+
+
+def test_doc_type_line_wins_even_when_noise_removal_merges_it_with_the_issuer_line():
+    # 진단요약서: 날짜 줄이 잡음으로 빠지며 "…진단보고서" 와 기관명 줄이 한 덩어리가 되던 문제
+    got = resolve_title(
+        lines(
+            "에기협 제 23-대스-002", ("주식회사 디에스아이", None, True), "포항산단 스마트에너지 플랫폼 구축사업",
+            ("에너지.온실가스감축 진단보고서", None, True), "2023.  08", ("(사)한국에너지기술인협회", None, True),
+        ),
+        filename="02 주식회사 디에스아이 진단요약서.pdf",
+    )
+    assert got == "에너지.온실가스감축 진단보고서"
+
+
+def test_clean_cover_that_is_a_part_of_the_filename_is_kept():
+    # 표지는 "…2차 공고", 파일명은 "…2차 공고문" — 한 글자 차이로 표지를 버리지 않는다.
+    got = resolve_title(
+        lines("2026년도 디지털협업공장 구축사업 2차 공고"),
+        filename="2026년도_디지털협업공장_구축사업_2차_공고문.pdf",
+    )
+    assert got == "2026년도 디지털협업공장 구축사업 2차 공고"

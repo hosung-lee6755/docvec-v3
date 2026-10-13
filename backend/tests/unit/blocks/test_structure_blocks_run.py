@@ -245,7 +245,7 @@ def test_run_elements_path_keeps_toc_when_enabled():
 def test_block_metadata():
     block = sb.StructureAnalyzeBlock()
     assert block.block_type == "structure_analyze"
-    assert block.block_version == "1.9.0"
+    assert block.block_version == "1.10.0"
     assert block.category == "구조·보호"
     assert block.config_schema is sb.StructureAnalyzeConfig
     assert sb.StructureAnalyzeConfig().heading_max_level == 3

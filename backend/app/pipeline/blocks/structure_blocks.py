@@ -419,7 +419,7 @@ class StructureAnalyzeBlock(BaseBlock):
         # 1.7.0: Document.title 을 "첫 HEADING"이 아니라 title_resolver(내장 제목·표지 줄·글자 크기·
         # 파일명)로 정하고, 사용자가 고친 제목(user_edited_fields)은 덮어쓰지 않는다 — 캐시된 이전
         # 결과는 표지 연도·장 제목이 제목이 된 값이다.
-        return "1.9.0"
+        return "1.10.0"
 
     @property
     def category(self) -> str:

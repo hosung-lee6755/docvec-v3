@@ -163,8 +163,10 @@ def _cover_title(lead_lines: list[LeadLine]) -> str | None:
                 groups.append([line])
             previous_index = index
         for group in groups:
-            if _ends_with_doc_type(_join(group)):
-                return _join(group[:_MAX_COVER_LINES])
+            # 덩어리 앞쪽 줄만으로도 어미를 본다 — 잡음 줄이 빠지며 기관명 줄이 뒤에 붙어도 제목 줄을 놓치지 않게.
+            for size in range(1, min(len(group), _MAX_COVER_LINES) + 1):
+                if _ends_with_doc_type(_join(group[:size])):
+                    return _join(group[:size])
         return _join(groups[0][:_MAX_COVER_LINES])
 
     # 3) 신호가 없는 문서(HWPX 등): 맨 앞 짧은 줄 덩어리, 아니면 문서 종류 어미로 끝나는 짧은 줄
@@ -211,8 +213,11 @@ def resolve_title(
         if not file_title:
             return candidate
         core_title = re.sub(r"\s*[(\[][^)\]]*[)\]]$", "", file_title) or file_title  # (요약본) 같은 꼬리표는 비교에서 뺀다
-        if _letters(candidate) == _letters(core_title):
-            return candidate  # 기호·띄어쓰기만 다르면 표지 표기가 더 정확하다
+        candidate_letters, core_letters = _letters(candidate), _letters(core_title)
+        is_part_of_filename = candidate_letters in core_letters  # 같거나, 표지가 파일명의 일부("…공고" ⊂ "…공고문")
+        has_filename_inside = core_letters in candidate_letters and not ocr_used  # OCR 표지는 앞뒤에 잡음이 붙을 수 있다
+        if is_part_of_filename or has_filename_inside:
+            return candidate  # 기호·띄어쓰기만 다르거나 한쪽이 다른 쪽의 일부면 표지 표기가 더 정확하다
         similarity = _similarity(candidate, core_title)
         if ocr_used and similarity >= _OCR_FILENAME_SIMILARITY:
             return file_title

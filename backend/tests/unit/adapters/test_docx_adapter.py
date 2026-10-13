@@ -100,7 +100,7 @@ def test_extract_reports_core_title_and_word_page_count(tmp_path):
     with zipfile.ZipFile(path, "a") as archive:
         archive.writestr(
             "docProps/app.xml",
-            '<?xml version="1.0" encoding="UTF-8"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>5</Pages></Properties>',
+            '<?xml version="1.0" encoding="UTF-8"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>5</Pages><Words>522</Words></Properties>',
         )
 
     result = DOCXAdapter().extract(path, {})
@@ -120,6 +120,25 @@ def test_extract_without_core_title_reports_no_title(tmp_path):
     result = DOCXAdapter().extract(path, {})
 
     assert not result.metadata["document_title"]
+
+
+def test_word_page_count_ignores_template_placeholder_without_word_statistics(tmp_path):
+    # 생성기(docx-js 등)가 만든 문서는 app.xml 이 템플릿 값(Pages=1, Words=0)이라 실제 쪽수가 아니다.
+    import zipfile
+
+    from docx import Document
+
+    from app.pipeline.adapters.docx_adapter import _word_page_count
+
+    path = tmp_path / "generated.docx"
+    Document().save(path)
+    with zipfile.ZipFile(path, "a") as archive:
+        archive.writestr(
+            "docProps/app.xml",
+            '<?xml version="1.0"?><Properties><Pages>1</Pages><Words>0</Words></Properties>',
+        )
+
+    assert _word_page_count(path) is None
 
 
 def test_word_page_count_is_none_when_the_file_has_no_app_properties(tmp_path):

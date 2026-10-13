@@ -49,15 +49,20 @@ def _iter_block_items(doc) -> Iterator[object]:
 
 
 def _word_page_count(file_path: Path) -> int | None:
-    """docProps/app.xml 의 <Pages> 값(Word 가 마지막 저장 때 기록). 없거나 읽을 수 없으면 None."""
+    """docProps/app.xml 의 <Pages> 값(Word 가 마지막 저장 때 기록). 없거나 읽을 수 없으면 None.
+
+    <Words> 가 0 이거나 없으면 생성기가 심어 둔 템플릿 값(Pages=1, Words=0)이라 실제 쪽수가 아니므로 쓰지 않는다."""
     try:
         import re
         import zipfile
 
         with zipfile.ZipFile(file_path) as archive:
             app_xml = archive.read("docProps/app.xml").decode("utf-8", "ignore")
-        match = re.search(r"<Pages>\s*(\d+)\s*</Pages>", app_xml)
-        return int(match.group(1)) if match else None
+        pages = re.search(r"<Pages>\s*(\d+)\s*</Pages>", app_xml)
+        words = re.search(r"<Words>\s*(\d+)\s*</Words>", app_xml)
+        if not pages or not words or int(words.group(1)) <= 0:
+            return None
+        return int(pages.group(1))
     except Exception:
         return None
 

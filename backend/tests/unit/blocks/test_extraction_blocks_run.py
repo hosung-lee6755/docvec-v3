@@ -405,7 +405,7 @@ def test_block_metadata(block, btype, schema):
 
 
 def test_text_extract_block_version():
-    assert eb.TextExtractBlock().block_version == "1.20.0"
+    assert eb.TextExtractBlock().block_version == "1.21.0"
 
 
 def test_config_defaults_and_validation():
@@ -460,6 +460,20 @@ def test_text_extract_hwpx_with_repaginated_pages_keeps_the_real_count():
     page = _parsed().pages[0]
     result, *_ = _extract(doc, parsed=_parsed(format_id="hwpx", pages=[page, page, page], page_count=3))
     assert doc.page_count == 3
+
+
+def test_text_extract_docx_prefers_the_page_count_word_saved_in_the_file():
+    # Word 가 직접 저장한 쪽수가 LibreOffice 렌더링(글꼴 차이로 쪽수가 달라질 수 있음)보다 정확하다.
+    doc = _doc()
+    parsed = _parsed(format_id="docx", page_count=1)
+    parsed.metadata["document_pages"] = 5
+
+    def preview(_doc_id, _doc, parsed_doc):
+        parsed_doc.page_count = 4
+
+    _extract(doc, parsed=parsed, preview_pages=MagicMock(side_effect=preview))
+
+    assert doc.page_count == 5
 
 
 def test_text_extract_pdf_does_not_touch_the_preview_pdf():
