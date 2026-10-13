@@ -269,7 +269,7 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
     from app.pipeline.adapters.base import RawTextBlock
     from app.services.storage import storage_service
 
-    candidates: list[tuple[object, bytes]] = []  # (RawPage, png_bytes)
+    candidates: list[tuple[object, bytes, str | None]] = []  # (RawPage, png_bytes, native_text)
     seen_hashes: set[str] = set()
     for page in parsed.pages:
         for region in page.image_regions:
@@ -306,7 +306,7 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
                 logger.debug("이미지 PNG 변환 실패 — 그림 후보에서 제외", exc_info=True,
                              extra={"document_id": document_id})
                 continue
-            candidates.append((page, buf.getvalue()))
+            candidates.append((page, buf.getvalue(), region.native_text))
 
     if len(candidates) > _FIGURE_MAX_COUNT:
         logger.info(
@@ -316,8 +316,12 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
         candidates = candidates[:_FIGURE_MAX_COUNT]
 
     records: list[dict] = []
-    for figure_no, (page, png_bytes) in enumerate(candidates, 1):
-        text = _recognize_figure_text(png_bytes, vision_options)
+    for figure_no, (page, png_bytes, native_text) in enumerate(candidates, 1):
+        # 그림 안에 원본 텍스트 레이어가 있으면(차트 라벨·수치) 이미지 OCR 보다 정확하므로 그것을 쓴다.
+        if native_text and len(native_text.strip()) >= _FIGURE_MIN_MEANINGFUL_CHARS:
+            text = native_text.strip()
+        else:
+            text = _recognize_figure_text(png_bytes, vision_options)
         storage_key = f"images/{document_id}/{figure_no}.png"
         storage_service.upload_file(
             settings.minio_bucket_artifacts, storage_key, png_bytes, "image/png"

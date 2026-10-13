@@ -628,3 +628,32 @@ def test_continue_processing_survives_failure_recording_error():
         h.run()
 
     h.db.close.assert_called_once()
+
+
+def test_recognize_document_images_prefers_native_text_over_ocr():
+    # 그림 영역 안에 원본 텍스트 레이어가 있으면(차트 라벨·수치) 이미지 OCR 보다 정확하므로 그것을 쓴다.
+    parsed = _parsed_with_images(_png(100, 100))
+    parsed.pages[0].image_regions[0].native_text = "가정용 69,734 일반용 19,987"
+    ocr = MagicMock(return_value="깨진 OCR 결과 월별 en: 2")
+
+    with patch("app.services.storage.storage_service", MagicMock()), \
+         patch.object(proc, "_recognize_figure_text", ocr):
+        records = proc._recognize_document_images("d", parsed, {})
+
+    ocr.assert_not_called()
+    assert records[0]["text"] == "가정용 69,734 일반용 19,987"
+    figure_blocks = [b for b in parsed.pages[0].text_blocks if b.block_type == "image"]
+    assert figure_blocks[0].text == "[그림 1]\n가정용 69,734 일반용 19,987"
+
+
+def test_recognize_document_images_falls_back_to_ocr_when_native_text_is_too_short():
+    parsed = _parsed_with_images(_png(100, 100))
+    parsed.pages[0].image_regions[0].native_text = "1월"
+    ocr = MagicMock(return_value="이미지에서 읽은 충분히 긴 설명")
+
+    with patch("app.services.storage.storage_service", MagicMock()), \
+         patch.object(proc, "_recognize_figure_text", ocr):
+        records = proc._recognize_document_images("d", parsed, {})
+
+    ocr.assert_called_once()
+    assert records[0]["text"] == "이미지에서 읽은 충분히 긴 설명"

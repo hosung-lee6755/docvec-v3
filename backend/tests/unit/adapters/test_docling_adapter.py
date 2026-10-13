@@ -330,3 +330,38 @@ def test_no_escalation_without_registered_vision_key(fake_docling_module, tmp_pa
 
     assert [b.block_type for b in parsed.pages[0].text_blocks] == []
     assert not any(el["type"] == "vlm_ocr" for el in parsed.metadata["elements"])
+
+
+def test_native_text_in_bbox_reads_text_layer_inside_bottom_left_bbox():
+    # Docling 의 그림 bbox 는 PDF 좌표(왼쪽 아래 원점, t > b) — 차트 안 글자는 원본 텍스트 레이어에서 그대로 읽는다.
+    import fitz
+
+    from app.pipeline.adapters.docling_adapter import _native_text_in_bbox
+
+    pdf = fitz.open()
+    page = pdf.new_page(width=400, height=400)
+    page.insert_text((60, 100), "inside 69,734", fontsize=12)  # 위에서 100 → 아래에서 300
+    page.insert_text((60, 300), "outside", fontsize=12)
+    text = _native_text_in_bbox(pdf, 1, (40.0, 330.0, 360.0, 270.0))
+    pdf.close()
+
+    assert "69,734" in text
+    assert "outside" not in text
+
+
+def test_native_text_in_bbox_accepts_top_left_bbox_and_empty_region():
+    import fitz
+
+    from app.pipeline.adapters.docling_adapter import _native_text_in_bbox
+
+    pdf = fitz.open()
+    page = pdf.new_page(width=400, height=400)
+    page.insert_text((60, 100), "label 41", fontsize=12)
+    inside = _native_text_in_bbox(pdf, 1, (40.0, 70.0, 360.0, 130.0))  # 왼쪽 위 원점(t < b)
+    empty = _native_text_in_bbox(pdf, 1, (40.0, 200.0, 360.0, 250.0))
+    out_of_range = _native_text_in_bbox(pdf, 5, (40.0, 70.0, 360.0, 130.0))
+    pdf.close()
+
+    assert "label" in inside
+    assert empty == ""
+    assert out_of_range == ""

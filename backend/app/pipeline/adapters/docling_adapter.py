@@ -95,6 +95,43 @@ def _page_image_area_ratio(page: RawPage) -> float:
     return min(1.0, image_area / page_area)
 
 
+def _native_text_in_bbox(fitz_doc, page_no: int, bbox: tuple[float, float, float, float]) -> str:
+    """원본 PDF 텍스트 레이어에서 bbox 안의 글자를 읽는다(없으면 "").
+
+    Docling 은 그림(차트)으로 분류한 영역 안의 글자를 본문에서 빼 버리고, 그림 인식은 그 영역을
+    이미지로 렌더링해 OCR 한다 — 원본에 정확한 라벨·수치가 있어도 깨진 OCR 조각이 남는다.
+    bbox 는 Docling 의 PDF 좌표(왼쪽 아래 원점, top > bottom)나 왼쪽 위 원점(top < bottom) 모두 받는다."""
+    if page_no < 1 or page_no > len(fitz_doc):
+        return ""
+    import fitz
+
+    page = fitz_doc[page_no - 1]
+    left, first_y, right, second_y = bbox
+    if first_y > second_y:  # 왼쪽 아래 원점 → 왼쪽 위 원점으로 변환
+        top, bottom = page.rect.height - first_y, page.rect.height - second_y
+    else:
+        top, bottom = first_y, second_y
+    return page.get_text("text", clip=fitz.Rect(left, top, right, bottom)).strip()
+
+
+def _attach_native_text_to_pictures(file_path: Path, pages_by_no: dict[int, RawPage],
+                                    warnings: list[str]) -> None:
+    """그림 영역마다 원본 텍스트 레이어의 글자를 `native_text`로 붙인다(그림 인식이 OCR 보다 우선 사용)."""
+    regions = [(no, r) for no, page in pages_by_no.items() for r in page.image_regions if any(r.bbox)]
+    if not regions:
+        return
+    try:
+        import fitz  # pymupdf
+
+        with fitz.open(str(file_path)) as fitz_doc:
+            for page_no, region in regions:
+                text = _native_text_in_bbox(fitz_doc, page_no, region.bbox)
+                if text:
+                    region.native_text = text
+    except Exception as exc:  # 보강일 뿐이므로 실패해도 기존 OCR 경로로 계속한다
+        warnings.append(f"그림 영역 원본 텍스트 읽기 실패: {exc}")
+
+
 def _escalate_low_coverage_pages(
     file_path: Path,
     pages_by_no: dict[int, RawPage],
@@ -339,6 +376,8 @@ class DoclingAdapter(BaseAdapter):
         # 있을 때만 저-커버리지 페이지를 escalate한다(_resolve_vision_credentials,
         # process.py) — 키가 없으면 vision_backend/vision_api_key가 빈 값이라
         # 이 블록 자체가 스킵되고 기존 EasyOCR-only 동작과 동일하다.
+        _attach_native_text_to_pictures(file_path, pages_by_no, warnings)
+
         vision_backend = options.get("vision_backend")
         vision_api_key = options.get("vision_api_key")
         vlm_escalated = False

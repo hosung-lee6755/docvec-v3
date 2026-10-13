@@ -484,7 +484,10 @@ class TextExtractBlock(BaseBlock):
         # 1.18.1: OCR 본문을 image_to_data 단어 이어붙이기에서 image_to_string 결과로 교체(한글이
         # 음절 단위로 벌어지던 버그). 같은 입력의 OCR 텍스트가 달라지므로 1.18.0 캐시를 재사용하면
         # 안 된다 — 코드만 고치고 버전을 안 올리면 재처리해도 예전 결과가 그대로 나온다.
-        return "1.18.1"
+        #
+        # 1.18.2: Docling 이 그림으로 분류한 영역 안의 글자를 원본 텍스트 레이어에서 그대로 읽어
+        # 이미지 OCR 보다 먼저 쓴다(차트 라벨·수치가 깨진 OCR 조각이 되던 문제). 그림 텍스트가 달라진다.
+        return "1.18.2"
 
     @property
     def category(self) -> str:

@@ -72,6 +72,9 @@ class RawImageRegion:
     page_number: int
     bbox: tuple[float, float, float, float]
     image_bytes: bytes | None = None
+    # 그림 영역 안에 원본 PDF 텍스트 레이어가 있으면 그 글자(차트 라벨·수치). 어댑터가 그림 안 글자를
+    # 본문에서 빼는 경우(Docling)에만 채우며, 그림 인식이 이미지 OCR 보다 먼저 쓴다.
+    native_text: str | None = None
 
 
 @dataclass
