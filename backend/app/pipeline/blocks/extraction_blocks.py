@@ -480,7 +480,11 @@ class TextExtractBlock(BaseBlock):
         # 1.18.0: 엔진 선택지에 "auto"(기본) 추가 — 텍스트 레이어 유무로 Docling/전면 OCR 을 고른다. 명시적
         # "docling"은 더 이상 스캔 PDF 를 우회하지 않고 경고만 남긴다. 같은 설정 값의 의미가 바뀌었으므로
         # 캐시된 1.17.0 이하 결과를 재사용하면 안 된다.
-        return "1.18.0"
+        #
+        # 1.18.1: OCR 본문을 image_to_data 단어 이어붙이기에서 image_to_string 결과로 교체(한글이
+        # 음절 단위로 벌어지던 버그). 같은 입력의 OCR 텍스트가 달라지므로 1.18.0 캐시를 재사용하면
+        # 안 된다 — 코드만 고치고 버전을 안 올리면 재처리해도 예전 결과가 그대로 나온다.
+        return "1.18.1"
 
     @property
     def category(self) -> str:

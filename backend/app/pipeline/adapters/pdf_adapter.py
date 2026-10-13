@@ -120,34 +120,28 @@ _TESSERACT_CONFIG = "--oem 1 --psm 4"
 
 
 def _ocr_page_with_confidence(image, pytesseract) -> tuple[str, float | None, int]:
-    """Runs image_to_data (word-level confidence + position) instead of
-    image_to_string (문서 파싱 고도화 Phase 3) — reconstructs the same flowing
-    text (grouped by Tesseract's block/paragraph/line indices, one line per
-    group) while also returning the page's mean word confidence (0-1) and
-    word count, so quality_check can validate OCR quality against a real
-    measurement instead of format_detect's page-level approximation."""
+    """Returns (text, mean word confidence 0-1, word count) for one page.
+
+    The text is Tesseract's own image_to_string output. image_to_data (word
+    boxes) is used only for the confidence: for Hangul it returns syllable-sized
+    "words", so joining them with spaces scatters every sentence ("취 약 지",
+    single-character tokens ~65% on a real scanned report vs ~5-10% from
+    image_to_string). The OCR benchmark measures image_to_string, so this keeps
+    production text identical to what the benchmark scored."""
     data = pytesseract.image_to_data(
         image, lang="kor+eng", config=_TESSERACT_CONFIG, output_type=pytesseract.Output.DICT,
     )
-    lines: dict[tuple[int, int, int], list[str]] = {}
-    order: list[tuple[int, int, int]] = []
     confidences: list[float] = []
     for i, word in enumerate(data["text"]):
-        word = word.strip()
-        if not word:
+        if not word.strip():
             continue
         try:
             conf = float(data["conf"][i])
         except (TypeError, ValueError):
             conf = -1.0
-        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
-        if key not in lines:
-            lines[key] = []
-            order.append(key)
-        lines[key].append(word)
         if conf >= 0:
             confidences.append(conf)
-    text = "\n".join(" ".join(lines[key]) for key in order)
+    text = pytesseract.image_to_string(image, lang="kor+eng", config=_TESSERACT_CONFIG).strip()
     mean_confidence = (sum(confidences) / len(confidences) / 100.0) if confidences else None
     return text, mean_confidence, len(confidences)
 

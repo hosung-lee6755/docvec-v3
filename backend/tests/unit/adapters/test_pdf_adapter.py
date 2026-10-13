@@ -195,29 +195,37 @@ class _FakeOutput:
 class _FakePytesseract:
     Output = _FakeOutput()
 
-    def __init__(self, data):
+    def __init__(self, data, text=""):
         self._data = data
+        self._text = text
+        self.string_config = None
 
     def image_to_data(self, image, lang, config, output_type):
         return self._data
 
+    def image_to_string(self, image, lang, config):
+        self.string_config = config
+        return self._text
 
-def test_ocr_page_with_confidence_groups_words_into_lines_and_averages_confidence():
-    from app.pipeline.adapters.pdf_adapter import _ocr_page_with_confidence
+
+def test_ocr_page_text_comes_from_image_to_string_not_joined_word_boxes():
+    # image_to_data 는 한글을 음절 단위로 쪼개 주므로(이어 붙이면 한 글자 토큰 ~65%) 본문 텍스트는
+    # Tesseract 가 직접 만든 image_to_string 결과를 쓰고, data 는 신뢰도 계산에만 쓴다.
+    from app.pipeline.adapters.pdf_adapter import _TESSERACT_CONFIG, _ocr_page_with_confidence
 
     data = {
-        "text": ["Hello", "World", "", "Second", "Line"],
-        "conf": ["95", "85", "-1", "70", "90"],
-        "block_num": [1, 1, 1, 1, 1],
-        "par_num": [1, 1, 1, 1, 1],
-        "line_num": [1, 1, 1, 2, 2],
+        "text": ["도", "시", "범", "죄", "", "Second"],
+        "conf": ["95", "85", "70", "90", "-1", "80"],
+        "block_num": [1] * 6, "par_num": [1] * 6, "line_num": [1, 1, 1, 1, 1, 2],
     }
+    fake = _FakePytesseract(data, text="도시 범죄\nSecond\n")
 
-    text, confidence, word_count = _ocr_page_with_confidence(object(), _FakePytesseract(data))
+    text, confidence, word_count = _ocr_page_with_confidence(object(), fake)
 
-    assert text == "Hello World\nSecond Line"
-    assert word_count == 4
-    assert confidence == pytest.approx((95 + 85 + 70 + 90) / 4 / 100.0)
+    assert text == "도시 범죄\nSecond"
+    assert fake.string_config == _TESSERACT_CONFIG
+    assert word_count == 5
+    assert confidence == pytest.approx((95 + 85 + 70 + 90 + 80) / 5 / 100.0)
 
 
 def test_ocr_page_with_confidence_returns_none_when_no_words_found():

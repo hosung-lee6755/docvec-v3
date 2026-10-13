@@ -54,11 +54,11 @@ def score(gt: str, ocr: str) -> dict:
 def _tesseract(image, psm: int, binarize: bool) -> str:
     import pytesseract
 
-    from app.pipeline.adapters.pdf_adapter import _ocr_page_with_confidence, _preprocess_for_ocr
+    from app.pipeline.adapters.pdf_adapter import _preprocess_for_ocr
 
+    # 운영(_ocr_page_with_confidence)도 본문은 image_to_string 결과를 쓰므로 같은 경로다.
+    # (과거 운영은 image_to_data 단어를 이어 붙여 한글이 음절 단위로 벌어졌다 — 표의 "이전 운영" 행.)
     prepared = _preprocess_for_ocr(image) if binarize else image.convert("L")
-    if psm == 3 and binarize:  # 현재 운영 설정과 완전히 같은 경로
-        return _ocr_page_with_confidence(prepared, pytesseract)[0]
     return pytesseract.image_to_string(prepared, lang="kor+eng", config=f"--oem 1 --psm {psm}")
 
 
