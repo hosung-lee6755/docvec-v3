@@ -33,6 +33,16 @@ def test_bold_oversized_line_without_numbering_is_promoted_to_heading():
     assert heading[5]["font_size"] == 16.0
 
 
+def test_square_bullet_line_is_a_level_one_heading():
+    # 공고문 hwpx 는 글자 크기 정보가 없고 "□ 사업개요" 로 절을 나눈다 — 제목이 0개로 잡혀 검토 대기가 되던 문제
+    assert _classify("□ 사업개요", None, None) == ("HEADING", 1)
+    assert _classify("□ 신청 기간‧방법", None, None) == ("HEADING", 1)
+
+
+def test_square_bullet_without_text_is_not_a_heading():
+    assert _classify("□", None, None) == ("PARAGRAPH", None)
+
+
 def test_small_font_delta_does_not_trigger_false_heading():
     # Rendering jitter (11.0 vs 12.0, below _HEADING_FONT_DELTA) must not be
     # mistaken for a real heading promotion.

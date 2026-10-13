@@ -450,3 +450,30 @@ def test_cell_text_is_not_duplicated_in_body_text_and_table_block(tmp_path):
     # 칸에 들어간 글자는 표 블록에만, 칸 밖 글자는 본문에만 — 어느 쪽이든 한 번만 나와야 한다
     assert text.count("Max05") == 1
     assert text.count("LeftBodyAlpha") == 1
+
+
+def test_extract_reports_embedded_title_property(tmp_path):
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 100), "Body text of the document", fontsize=12)
+    doc.set_metadata({"title": "AI Servor 기능 소개서"})
+    path = tmp_path / "titled.pdf"
+    doc.save(path)
+    doc.close()
+
+    result = PDFAdapter().extract(path, {})
+
+    assert result.metadata["document_title"] == "AI Servor 기능 소개서"
+
+
+def test_extract_embedded_title_is_none_when_absent(tmp_path):
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 100), "Body text of the document", fontsize=12)
+    path = tmp_path / "untitled.pdf"
+    doc.save(path)
+    doc.close()
+
+    result = PDFAdapter().extract(path, {})
+
+    assert not result.metadata["document_title"]

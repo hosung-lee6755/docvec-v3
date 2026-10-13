@@ -153,6 +153,12 @@ class Document(Base):
     language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 원본 파일이 스스로 가진 제목 속성(PDF info dict/DOCX core.title) — text_extract 가 기록하고
+    # structure_analyze 의 제목 판정(title_resolver)이 후보로 쓴다. 신뢰할 수 없는 값은 판정 쪽에서 거른다.
+    source_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 사용자가 직접 고친 자동 생성 필드 이름(title/language/category). 여기 있는 필드는 재처리가
+    # 덮어쓰지 않는다 — PATCH /documents/{id}/metadata 의 reset_fields 로만 해제된다.
+    user_edited_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # 문서 내용에서 신뢰성 있게 자동 추출할 수 없어, 자동 생성 로직 없이
     # PATCH /documents/{id}/metadata를 통해 사용자가 직접 입력해야만 채워지는 필드.
     # 기본값은 항상 None.

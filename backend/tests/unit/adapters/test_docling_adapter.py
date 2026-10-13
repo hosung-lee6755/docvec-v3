@@ -365,3 +365,33 @@ def test_native_text_in_bbox_accepts_top_left_bbox_and_empty_region():
     assert "label" in inside
     assert empty == ""
     assert out_of_range == ""
+
+
+def test_pdf_properties_report_real_page_count_and_title_even_with_blank_pages(tmp_path):
+    # Docling 은 요소가 있는 쪽만 RawPage 로 만든다 — 쪽수와 제목 속성은 원본 PDF 에서 직접 읽는다.
+    import fitz
+
+    from app.pipeline.adapters.docling_adapter import _pdf_properties
+
+    pdf = fitz.open()
+    pdf.new_page().insert_text((72, 100), "첫 쪽", fontsize=12)
+    pdf.new_page()  # 빈 쪽
+    pdf.new_page()  # 빈 쪽
+    pdf.set_metadata({"title": "디지털 정부서비스 UI/UX 가이드라인"})
+    path = tmp_path / "blank-pages.pdf"
+    pdf.save(path)
+    pdf.close()
+
+    page_count, title = _pdf_properties(path)
+
+    assert page_count == 3
+    assert title == "디지털 정부서비스 UI/UX 가이드라인"
+
+
+def test_pdf_properties_are_empty_for_a_broken_file(tmp_path):
+    from app.pipeline.adapters.docling_adapter import _pdf_properties
+
+    path = tmp_path / "broken.pdf"
+    path.write_bytes(b"not a pdf")
+
+    assert _pdf_properties(path) == (0, None)

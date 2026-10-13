@@ -95,6 +95,18 @@ def _page_image_area_ratio(page: RawPage) -> float:
     return min(1.0, image_area / page_area)
 
 
+def _pdf_properties(file_path: Path) -> tuple[int, str | None]:
+    """원본 PDF 의 (실제 쪽수, 제목 속성). Docling 은 요소가 있는 쪽만 RawPage 로 만들어 빈 쪽·그림 쪽이
+    빠지므로 쪽수는 파일에서 직접 센다. 못 읽으면 (0, None)."""
+    try:
+        import fitz  # pymupdf
+
+        with fitz.open(str(file_path)) as pdf:
+            return pdf.page_count, ((pdf.metadata or {}).get("title") or "").strip() or None
+    except Exception:
+        return 0, None
+
+
 def _native_text_in_bbox(fitz_doc, page_no: int, bbox: tuple[float, float, float, float]) -> str:
     """원본 PDF 텍스트 레이어에서 bbox 안의 글자를 읽는다(없으면 "").
 
@@ -397,15 +409,19 @@ class DoclingAdapter(BaseAdapter):
         ]
 
         pages = [pages_by_no[no] for no in sorted(pages_by_no)]
+        source_page_count, document_title = _pdf_properties(file_path)
         ocr_used = vlm_escalated or any(
             getattr(item, "confidence", None) is not None for item, _ in doc.iterate_items()
         )
 
         return RawParsedDocument(
             format_id="pdf",
-            page_count=len(pages),
+            page_count=max(len(pages), source_page_count),
             pages=pages,
-            metadata={"ocr_used": ocr_used, "line_layout": line_layout, "elements": elements},
+            metadata={
+                "ocr_used": ocr_used, "line_layout": line_layout, "elements": elements,
+                "document_title": document_title,
+            },
             warnings=warnings,
         )
 

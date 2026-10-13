@@ -48,6 +48,20 @@ def _iter_block_items(doc) -> Iterator[object]:
             yield DocxTable(child, doc)
 
 
+def _word_page_count(file_path: Path) -> int | None:
+    """docProps/app.xml 의 <Pages> 값(Word 가 마지막 저장 때 기록). 없거나 읽을 수 없으면 None."""
+    try:
+        import re
+        import zipfile
+
+        with zipfile.ZipFile(file_path) as archive:
+            app_xml = archive.read("docProps/app.xml").decode("utf-8", "ignore")
+        match = re.search(r"<Pages>\s*(\d+)\s*</Pages>", app_xml)
+        return int(match.group(1)) if match else None
+    except Exception:
+        return None
+
+
 class DOCXAdapter(BaseAdapter):
     @property
     def format_id(self) -> str:
@@ -172,11 +186,22 @@ class DOCXAdapter(BaseAdapter):
             except Exception:
                 pass
 
+            document_title = None
+            try:
+                document_title = (doc.core_properties.title or "").strip() or None
+            except Exception:
+                pass
+
             return RawParsedDocument(
                 format_id="docx",
                 page_count=1,
                 pages=[page],
-                metadata={"line_layout": line_layout, "document_created_at": document_created_at},
+                metadata={
+                    "line_layout": line_layout, "document_created_at": document_created_at,
+                    "document_title": document_title,
+                    # Word 가 저장할 때 app.xml 에 남기는 쪽수 — 미리보기 PDF 를 못 만들 때의 대체값.
+                    "document_pages": _word_page_count(file_path),
+                },
                 warnings=warnings,
             )
         except Exception as exc:

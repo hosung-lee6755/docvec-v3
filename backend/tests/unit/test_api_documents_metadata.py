@@ -114,6 +114,53 @@ def test_metadata_request_rejects_unknown_security_level():
         DocumentMetadataUpdateRequest(security_level="TopSecret")
 
 
+async def test_update_metadata_marks_title_language_category_as_user_edited(db_session):  # noqa: F811
+    doc = await add_doc(db_session, "m-meta-edit")
+    body = DocumentMetadataUpdateRequest(title="  새 제목 ", language="en", category="제안서")
+
+    result = await md.update_document_metadata(doc.id, body, db_session, owner_user())
+
+    assert (result.title, result.language, result.category) == ("새 제목", "en", "제안서")
+    assert sorted(result.user_edited_fields) == ["category", "language", "title"]
+
+
+async def test_update_metadata_reset_fields_clears_value_and_mark(db_session):  # noqa: F811
+    doc = await add_doc(db_session, "m-meta-reset", title="수정본", user_edited_fields=["title", "category"])
+
+    result = await md.update_document_metadata(
+        doc.id, DocumentMetadataUpdateRequest(reset_fields=["title"]), db_session, owner_user()
+    )
+
+    assert result.title is None
+    assert result.user_edited_fields == ["category"]
+
+
+async def test_update_metadata_syncs_language_to_chunks(db_session):  # noqa: F811
+    from sqlalchemy import select
+
+    from app.db.models.document_chunk import DocumentChunk
+
+    from tests.unit._docs_api_support import doc_with_run
+
+    doc, run = await doc_with_run(db_session, "m-meta-lang")
+    db_session.add(DocumentChunk(document_id=doc.id, run_id=run.id, chunk_order=0, chunk_text="x", language="ko"))
+    await db_session.flush()
+
+    await md.update_document_metadata(
+        doc.id, DocumentMetadataUpdateRequest(language="en"), db_session, owner_user()
+    )
+
+    langs = (await db_session.scalars(select(DocumentChunk.language).where(DocumentChunk.document_id == doc.id))).all()
+    assert langs == ["en"]
+
+
+def test_metadata_request_validates_language_and_reset_fields():
+    with pytest.raises(ValidationError):
+        DocumentMetadataUpdateRequest(language="xx")
+    with pytest.raises(ValidationError):
+        DocumentMetadataUpdateRequest(reset_fields=["author"])
+
+
 async def test_update_metadata_404_and_403(db_session):  # noqa: F811
     doc = await add_doc(db_session, "m-meta-g")
     body = DocumentMetadataUpdateRequest(author="x")

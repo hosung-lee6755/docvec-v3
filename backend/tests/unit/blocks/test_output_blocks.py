@@ -95,6 +95,19 @@ def test_output_writes_summary_tags_category_and_indexes():
     index.assert_called_once_with("doc-1", "요약")
 
 
+def test_output_does_not_overwrite_user_edited_category():
+    doc = _doc(category="내가 정한 분류", user_edited_fields=["category"])
+    result, _, _ = _run_output({"u": {"category": "보고서", "keywords": ["에너지"]}}, doc)
+    assert doc.category == "내가 정한 분류"
+    assert "category" not in result.output["saved_to_document"]
+
+
+def test_output_overwrites_category_when_only_other_fields_were_edited():
+    doc = _doc(category="낡은 분류", user_edited_fields=["title"])
+    _run_output({"u": {"category": "공고문"}}, doc)
+    assert doc.category == "공고문"
+
+
 def test_output_truncates_category_to_50_chars():
     doc = _doc()
     _run_output({"u": {"category": "가" * 80}}, doc)
@@ -203,7 +216,7 @@ def test_output_closes_db_when_commit_fails():
 def test_block_metadata():
     out, post = ob.OutputBlock(), ob.PostprocessBlock()
     assert out.block_type == "output" and post.block_type == "postprocess"
-    assert out.block_version == "1.5.0"
+    assert out.block_version == "1.6.0"
     assert out.config_schema is ob.OutputConfig
     assert post.config_schema is None
     assert out.category == post.category == "분석"

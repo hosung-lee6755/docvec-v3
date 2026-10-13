@@ -154,7 +154,7 @@ def test_classify_picks_category_found_in_answer(monkeypatch):
     calls = _fake_llm(monkeypatch, " 이 문서는 '계약서' 입니다. ")
     result = cb.ClassifyBlock().run(_ctx())
     assert result.output["category"] == "계약서"
-    assert "보고서, 계약서" in calls[0][1]
+    assert ", ".join(cb._DEFAULT_CATEGORIES) in calls[0][1]
 
 
 def test_classify_falls_back_to_last_category(monkeypatch):
@@ -168,10 +168,25 @@ def test_classify_uses_custom_categories(monkeypatch):
     assert result.output["category"] == "B"
 
 
+def test_classify_prompt_explains_default_categories_and_includes_filename(monkeypatch):
+    calls = _fake_llm(monkeypatch, "소개서")
+    cb.ClassifyBlock().run(_ctx(extra={"filename": "AI_Servor_소개서.pdf"}))
+    system_prompt, user_content = calls[0]
+    assert "- 소개서:" in system_prompt and "주제로 고르지 마세요" in system_prompt
+    assert "파일명: AI_Servor_소개서.pdf" in user_content
+
+
+def test_classify_custom_categories_get_no_hints(monkeypatch):
+    calls = _fake_llm(monkeypatch, "B")
+    cb.ClassifyBlock().run(_ctx(config={"categories": ["A", "B"]}))
+    assert "카테고리 설명" not in calls[0][0]
+
+
 def test_classify_truncates_input(monkeypatch):
     calls = _fake_llm(monkeypatch, "기타")
     cb.ClassifyBlock().run(_ctx("가" * (cb._MAX_LLM_INPUT_CHARS + 500)))
-    assert calls[0][1].count("가") == cb._MAX_LLM_INPUT_CHARS
+    document_part = calls[0][1].split("문서:\n", 1)[1]  # 카테고리 이름에 든 글자는 세지 않는다
+    assert document_part.count("가") == cb._MAX_LLM_INPUT_CHARS
 
 
 # ---- Entities / Keywords ----
@@ -275,3 +290,12 @@ def test_config_schemas_reject_bad_types():
     with pytest.raises(Exception):
         cb.ExtractKeywordsConfig(max_keywords="abc")
     assert cb.SummarizeConfig().format == "paragraph"
+
+
+def test_default_categories_distinguish_common_korean_business_documents():
+    from app.pipeline.blocks.content_blocks import _DEFAULT_CATEGORIES
+
+    # 공고문·제안서·소개서·가이드라인이 전부 "보고서"로 뭉개지지 않도록 세분화돼 있어야 한다.
+    for name in ("공고문", "제안서", "소개서", "가이드라인", "기준서", "사례집", "진단보고서", "보고서", "계약서", "공문", "매뉴얼"):
+        assert name in _DEFAULT_CATEGORIES
+    assert _DEFAULT_CATEGORIES[-1] == "기타"  # 모델 답이 어디에도 안 맞을 때의 폴백

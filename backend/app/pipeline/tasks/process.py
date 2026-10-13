@@ -368,6 +368,17 @@ def _normalize_ws(text: str) -> str:
 _REPAGINATE_ANCHOR_CHARS = 60
 
 
+def _apply_preview_page_count(document_id: str, doc, parsed) -> None:
+    """DOCX 는 파일에 쪽 구분이 없다 — 원문 대조 탭과 같은 LibreOffice 미리보기 PDF(없으면 이때 만들어 캐시)의
+    쪽수를 실제 쪽수로 쓴다. PDF 변환이 안 되면(HTML 미리보기로 대체) 아무것도 바꾸지 않는다."""
+    from app.services.preview_service import pdf_pages_text_for, preview_url_for
+
+    preview_url_for(document_id, doc.filename, doc.minio_key)
+    pages_text = pdf_pages_text_for(document_id)
+    if pages_text:
+        parsed.page_count = len(pages_text)
+
+
 def _repaginate_hwp_like(document_id: str, doc, parsed) -> None:
     """HWP/HWPX adapters return everything as a single RawPage numbered 1 —
     these formats have no page boundaries of their own (see hwp_adapter.py).
@@ -487,7 +498,8 @@ def _repaginate_hwp_like(document_id: str, doc, parsed) -> None:
         ).image_regions.extend(only_page.image_regions)
 
     parsed.pages = [pages_by_number[n] for n in sorted(pages_by_number)]
-    parsed.page_count = len(parsed.pages)
+    # 쪽수는 렌더링된 PDF 의 전체 쪽수 — 텍스트 블록이 없는 쪽(빈 쪽·그림 쪽)도 쪽으로 센다.
+    parsed.page_count = len(pages_text)
 
 
 @celery_app.task(name="tasks.continue_processing", queue="embed", bind=True, max_retries=3)

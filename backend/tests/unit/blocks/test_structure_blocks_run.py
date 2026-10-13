@@ -140,7 +140,8 @@ def test_run_builds_tree_with_headings_lists_tables():
     assert item.parent_node_id == h2.id
     assert table.source_table_id == "tbl-1"
     assert [n.sort_order for n in nodes] == list(range(6))
-    assert doc.title == "1. 서론"
+    # 장 제목("1. 서론")은 문서 제목이 아니다 — 표지 줄도 파일명도 없으면 비워 둔다(title_resolver).
+    assert doc.title is None
     assert result.output["node_count"] == 6 and result.output["text"] == TEXT
     assert result.metrics == {"node_count": 6}
     db.commit.assert_called_once()
@@ -244,7 +245,7 @@ def test_run_elements_path_keeps_toc_when_enabled():
 def test_block_metadata():
     block = sb.StructureAnalyzeBlock()
     assert block.block_type == "structure_analyze"
-    assert block.block_version == "1.6.0"
+    assert block.block_version == "1.9.0"
     assert block.category == "구조·보호"
     assert block.config_schema is sb.StructureAnalyzeConfig
     assert sb.StructureAnalyzeConfig().heading_max_level == 3

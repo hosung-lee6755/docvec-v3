@@ -17,7 +17,12 @@ _MAX_LLM_INPUT_CHARS = 12_000
 _LLM_MODEL_KEY = "qwen2.5-3b"
 _MAX_HAN_RATIO = 0.2
 
-_DEFAULT_CATEGORIES = ["보고서", "계약서", "공문", "매뉴얼", "기타"]
+# 설정에 categories 가 없을 때의 기본 분류 — 공고문·제안서·소개서 등이 전부 "보고서"로 뭉개지던 문제를
+# 막기 위해 세분화했다. 모델 답이 어디에도 안 맞으면 마지막 항목("기타")으로 폴백한다.
+_DEFAULT_CATEGORIES = [
+    "공고문", "제안서", "진단보고서", "가이드라인", "매뉴얼", "사례집", "소개서", "기준서",
+    "계약서", "공문", "보고서", "기타",
+]
 
 
 class PreprocessConfig(BaseModel):
@@ -79,7 +84,23 @@ def _carry(context: BlockContext) -> dict:
     return dict(next(iter(context.upstream_outputs.values()), {}))
 
 
-_ANSWER_NOISE = " \t\r\n'\"`.,。·「」『』()[]"
+# 기본 분류 목록의 이름만으로는 모델이 주제로 오분류한다("버스 분석" 요약본 → 공고문) — 종류 판단 기준을 함께 준다.
+_CATEGORY_HINTS = {
+    "공고문": "지원사업·모집·입찰 등을 알리는 공식 공고(신청 자격·기간·접수 방법이 있다)",
+    "제안서": "사업 수행을 제안하는 문서(제안 배경·수행 방안·추진 일정)",
+    "진단보고서": "현장·설비·에너지 등을 진단한 결과 보고서",
+    "가이드라인": "따라야 할 원칙과 기준을 제시하는 지침",
+    "매뉴얼": "사용·운영 절차를 단계별로 설명하는 안내서",
+    "사례집": "여러 사례를 모아 소개하는 자료",
+    "소개서": "제품·서비스·기관을 소개하는 자료",
+    "기준서": "검수·평가 등의 기준과 항목을 정의한 문서",
+    "계약서": "당사자 간 권리·의무를 정한 계약 문서",
+    "공문": "기관 간 주고받는 공식 시행·회신 문서",
+    "보고서": "조사·분석·연구 결과를 정리한 보고서",
+    "기타": "위 어디에도 맞지 않을 때",
+}
+
+_ANSWER_NOISE =" \t\r\n'\"`.,。·「」『』()[]"
 
 
 def _pick_category(raw: str, categories: list[str]) -> str:
@@ -211,10 +232,17 @@ class ClassifyBlock(BaseBlock):
         # UI 설정에 섞인 빈 항목은 `"" in 응답` 이 항상 참이라 선택과 폴백을 망친다.
         categories = [c for c in (context.config.get("categories") or []) if c and c.strip()]
         categories = categories or _DEFAULT_CATEGORIES
+        upstream = next(iter(context.upstream_outputs.values()), {})
+        filename = str(upstream.get("filename") or "").strip()
+        hints = [f"- {name}: {_CATEGORY_HINTS[name]}" for name in categories if name in _CATEGORY_HINTS]
         raw = _generate(
             "당신은 문서를 분류하는 어시스턴트입니다. 주어진 카테고리 중 문서에 가장 잘 맞는 "
-            "하나만 골라 그 카테고리 이름만 답하세요. 설명이나 다른 문장은 쓰지 마세요.",
-            f"카테고리: {', '.join(categories)}\n\n문서:\n{text[:_MAX_LLM_INPUT_CHARS]}",
+            "하나만 골라 그 카테고리 이름만 답하세요. 설명이나 다른 문장은 쓰지 마세요. "
+            "문서 종류(형식과 목적)로 고르고, 다루는 주제로 고르지 마세요."
+            + ("\n카테고리 설명:\n" + "\n".join(hints) if hints else ""),
+            f"카테고리: {', '.join(categories)}\n\n"
+            + (f"파일명: {filename}\n" if filename else "")
+            + f"문서:\n{text[:_MAX_LLM_INPUT_CHARS]}",
         ).strip()
         category = _pick_category(raw, categories)
         return BlockResult(output={**_carry(context), "category": category, "text": text})

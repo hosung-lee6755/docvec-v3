@@ -1,10 +1,12 @@
 import { Loader2 } from 'lucide-react'
 import { STATUS_BADGE_CLASSES, STATUS_LABELS } from '../../lib/documentStatus'
 import type { TabKey } from './documentDetailHelpers'
-import { Row, CopyableValue, EditableMetaField, DateMetaField, SecurityLevelField } from './documentDetailParts'
+import {
+  Row, CopyableValue, EditableMetaField, DateMetaField, SecurityLevelField, LanguageMetaField, AutoValueControls,
+} from './documentDetailParts'
 import { qualityStatusDisplay, RUN_TRIGGER_LABELS, RUN_STATUS_BADGE } from './documentDetailHelpers'
 import type { useAcceptTagSuggestion, useDismissTagSuggestion, useUpdateDocumentTags } from '../../hooks/useDocuments'
-import type { useUpdateDocumentMetadata } from '../../hooks/useDocumentMetadata'
+import type { MetadataResettableField, useUpdateDocumentMetadata } from '../../hooks/useDocumentMetadata'
 import type { Document } from '../../hooks/useDocuments'
 import type { DocumentRunItem, QualityReport } from '../../hooks/useDocumentRuns'
 
@@ -25,6 +27,10 @@ interface DocumentSidebarProps {
   onActiveTabChange: (tab: TabKey) => void
 }
 
+// PATCH /documents/{id}/metadata의 길이 제한(title 500자, category 50자)과 맞춘 값.
+const TITLE_MAX_LENGTH = 500
+const CATEGORY_MAX_LENGTH = 50
+
 export default function DocumentSidebar({
   doc,
   isReady,
@@ -41,6 +47,10 @@ export default function DocumentSidebar({
   onTagInputChange,
   onActiveTabChange,
 }: DocumentSidebarProps) {
+  const isUserEdited = (field: MetadataResettableField) => !!doc.user_edited_fields?.includes(field)
+  const resetField = (field: MetadataResettableField) => updateMetadata.mutate({ documentId: doc.id, reset_fields: [field] })
+  const showCategoryHint = doc.metadata_status === 'PENDING' && !doc.category
+
   return (
     <div>
       <div style={{ maxWidth: 640 }}>
@@ -59,9 +69,40 @@ export default function DocumentSidebar({
         <Row label="파일 크기">{(doc.file_size / 1024).toFixed(1)} KB</Row>
         <Row label="생성일">{new Date(doc.created_at).toLocaleString('ko-KR')}</Row>
         <Row label="수정일">{new Date(doc.updated_at).toLocaleString('ko-KR')}</Row>
-        <Row label="제목">{doc.title || doc.original_filename}</Row>
-        <Row label="언어">{doc.language ?? '미판별'}</Row>
-        <Row label="분류">{doc.category ?? '미분류'}</Row>
+        <EditableMetaField
+          label="제목"
+          value={doc.title}
+          placeholder={doc.original_filename}
+          maxLength={TITLE_MAX_LENGTH}
+          allowEmpty={false}
+          onSave={(value) => updateMetadata.mutate({ documentId: doc.id, title: value })}
+          viewExtra={
+            <AutoValueControls isEdited={isUserEdited('title')} onReset={() => resetField('title')} />
+          }
+        />
+        <LanguageMetaField
+          value={doc.language}
+          isEdited={isUserEdited('language')}
+          onSave={(value) => updateMetadata.mutate({ documentId: doc.id, language: value })}
+          onReset={() => resetField('language')}
+        />
+        <EditableMetaField
+          label="분류"
+          value={doc.category}
+          placeholder="미분류"
+          maxLength={CATEGORY_MAX_LENGTH}
+          onSave={(value) => updateMetadata.mutate({ documentId: doc.id, category: value })}
+          viewExtra={
+            <>
+              <AutoValueControls isEdited={isUserEdited('category')} onReset={() => resetField('category')} />
+              {showCategoryHint && (
+                <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                  자동 분석이 실행되지 않아 비어 있습니다. 직접 입력할 수 있습니다.
+                </span>
+              )}
+            </>
+          }
+        />
         <Row label="페이지 수">{doc.page_count ?? '-'}</Row>
         <Row label="체크섬">
           {doc.checksum

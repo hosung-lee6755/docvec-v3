@@ -8,6 +8,7 @@ from app.api.v1.permissions import (
 )
 from app.core.config import settings
 from app.db.models.document import Document
+from app.db.models.document_chunk import DocumentChunk
 from app.db.models.user import User
 from app.db.session import get_db
 from app.schemas.document import (
@@ -19,10 +20,13 @@ from app.schemas.document import (
     DocumentTagsUpdateRequest,
 )
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
+
+# 자동 생성되며 사용자가 수정하면 재처리에서 보호되는 필드(user_edited_fields 대상).
+_AUTO_FIELDS = frozenset({"title", "language", "category"})
 
 async def _sync_tags_to_index(doc: Document, tags: list[str]) -> None:
     """이미 색인된 청크의 tags payload를 Postgres 저장 직후 맞춘다(재임베딩 불필요).
@@ -84,8 +88,27 @@ async def update_document_metadata(
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="editor")
 
-    for field, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    resets = set(updates.pop("reset_fields", None) or [])
+    edited = list(doc.user_edited_fields or [])
+    for field, value in updates.items():
+        if field in _AUTO_FIELDS:
+            value = value.strip() if isinstance(value, str) else value
+            if not value:  # 값을 비우면 자동값으로 되돌리는 것과 같다
+                resets.add(field)
+                continue
+            if field not in edited:
+                edited.append(field)
         setattr(doc, field, value)
+    for field in resets:
+        setattr(doc, field, None)
+        edited = [f for f in edited if f != field]
+    doc.user_edited_fields = edited or None
+
+    if "language" in updates or "language" in resets:
+        await db.execute(
+            update(DocumentChunk).where(DocumentChunk.document_id == doc.id).values(language=doc.language)
+        )
     await db.commit()
     await db.refresh(doc)
     return doc

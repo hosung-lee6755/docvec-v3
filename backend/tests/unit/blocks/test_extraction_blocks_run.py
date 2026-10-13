@@ -264,7 +264,7 @@ def _parsed(**kw):
     return SimpleNamespace(**base)
 
 
-def _extract(doc, parsed=None, config=None, adapter_error=None, extract_error=None, images=None, repaginate_error=None):
+def _extract(doc, parsed=None, config=None, adapter_error=None, extract_error=None, images=None, repaginate_error=None, preview_pages=None):
     db = MagicMock()
     db.get.return_value = doc
     adapter = MagicMock()
@@ -280,6 +280,7 @@ def _extract(doc, parsed=None, config=None, adapter_error=None, extract_error=No
         images_mock.side_effect = images
     job = {"start": MagicMock(return_value="job"), "complete": MagicMock(), "fail": MagicMock()}
     repaginate = MagicMock(side_effect=repaginate_error) if repaginate_error else MagicMock()
+    preview_pages = preview_pages or MagicMock()
     with patch("app.db.session.get_sync_db", return_value=db), \
             patch("app.services.storage.storage_service", storage), \
             patch("app.pipeline.adapters.get_adapter", getter), \
@@ -289,6 +290,7 @@ def _extract(doc, parsed=None, config=None, adapter_error=None, extract_error=No
             patch("app.pipeline.tasks.process._build_page_map", return_value=[[10, 1]]), \
             patch("app.pipeline.tasks.process._recognize_document_images", images_mock), \
             patch("app.pipeline.tasks.process._repaginate_hwp_like", repaginate), \
+            patch("app.pipeline.tasks.process._apply_preview_page_count", preview_pages), \
             patch("app.pipeline.tasks.process._resolve_vision_credentials", return_value={"k": "v"}):
         try:
             result = eb.TextExtractBlock().run(_ctx(config))
@@ -403,7 +405,7 @@ def test_block_metadata(block, btype, schema):
 
 
 def test_text_extract_block_version():
-    assert eb.TextExtractBlock().block_version == "1.18.2"
+    assert eb.TextExtractBlock().block_version == "1.20.0"
 
 
 def test_config_defaults_and_validation():
@@ -411,3 +413,74 @@ def test_config_defaults_and_validation():
     assert eb.FileValidateConfig().allowed_extensions == [".pdf", ".docx", ".hwp", ".hwpx"]
     with pytest.raises(Exception):
         eb.FileValidateConfig(max_pages="lots")
+
+
+def test_text_extract_page_count_uses_real_source_pages_not_pages_with_items():
+    # Docling 은 요소가 있는 쪽만 RawPage 로 만든다 — 빈 쪽·이미지 쪽이 빠져도 쪽수는 원본 쪽수여야 한다.
+    doc = _doc()
+    result, *_ = _extract(doc, parsed=_parsed(page_count=988))
+    assert doc.page_count == 988 and result.output["page_count"] == 988
+
+
+def test_text_extract_records_embedded_title_property_and_clears_it_when_absent():
+    doc = _doc()
+    parsed = _parsed()
+    parsed.metadata["document_title"] = "  AI Servor 기능 소개서 "
+    _extract(doc, parsed=parsed)
+    assert doc.source_title == "AI Servor 기능 소개서"
+
+    _extract(doc, parsed=_parsed())
+    assert doc.source_title is None
+
+
+def test_text_extract_embedded_title_keeps_letters_and_collapses_whitespace():
+    # 공백 정리 정규식이 글자 s 를 지우던 오타를 막는다(소문자 s 가 든 제목).
+    doc = _doc()
+    parsed = _parsed()
+    parsed.metadata["document_title"] = "Design   system	guide"
+    _extract(doc, parsed=parsed)
+    assert doc.source_title == "Design system guide"
+
+
+def test_text_extract_docx_page_count_is_resolved_from_the_preview_pdf():
+    preview = MagicMock()
+    _extract(_doc(), parsed=_parsed(format_id="docx"), preview_pages=preview)
+    preview.assert_called_once()
+
+
+def test_text_extract_hwpx_without_real_pagination_leaves_page_count_unknown():
+    # 미리보기 PDF 로 쪽을 나누지 못한 hwp/hwpx 는 쪽수를 알 수 없다 — 1쪽이라고 단정하지 않는다.
+    doc = _doc()
+    result, *_ = _extract(doc, parsed=_parsed(format_id="hwpx", page_count=1))
+    assert doc.page_count is None and result.output["page_count"] is None
+
+
+def test_text_extract_hwpx_with_repaginated_pages_keeps_the_real_count():
+    doc = _doc()
+    page = _parsed().pages[0]
+    result, *_ = _extract(doc, parsed=_parsed(format_id="hwpx", pages=[page, page, page], page_count=3))
+    assert doc.page_count == 3
+
+
+def test_text_extract_pdf_does_not_touch_the_preview_pdf():
+    preview = MagicMock()
+    _extract(_doc(), parsed=_parsed(format_id="pdf"), preview_pages=preview)
+    preview.assert_not_called()
+
+
+def test_text_extract_preview_page_count_failure_keeps_the_extraction():
+    doc = _doc()
+    result, *_ = _extract(doc, parsed=_parsed(format_id="docx"), preview_pages=MagicMock(side_effect=RuntimeError("soffice")))
+    assert not isinstance(result, Exception) and doc.page_count == 1
+
+
+def test_text_extract_does_not_overwrite_user_edited_language():
+    doc = _doc(language="en", user_edited_fields=["language"])
+    _extract(doc)
+    assert doc.language == "en"
+
+
+def test_text_extract_overwrites_language_when_not_user_edited():
+    doc = _doc(language="en", user_edited_fields=["category"])
+    _extract(doc)
+    assert doc.language == "ko"

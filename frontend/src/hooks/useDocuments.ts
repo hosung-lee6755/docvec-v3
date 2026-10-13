@@ -42,6 +42,9 @@ export interface Document {
   source_path: string | null
   file_type: string | null
   document_created_at: string | null
+  // 사용자가 직접 수정한 필드 이름(title/language/category 중 일부). 자동 생성값을
+  // 덮어쓴 상태를 표시하고, reset_fields로 되돌릴 수 있는지 판단하는 데 쓴다.
+  user_edited_fields?: string[]
 }
 
 export interface DocumentListResponse {

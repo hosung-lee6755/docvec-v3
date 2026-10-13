@@ -224,7 +224,7 @@ describe('DocumentDetailPage', () => {
 
     renderPage()
     expect(screen.getByText('Test Title')).toBeInTheDocument()
-    expect(screen.getByText('ko')).toBeInTheDocument()
+    expect(screen.getByLabelText('언어')).toHaveDisplayValue('한국어')
   })
 
   it('renders tabs and panels when document is INDEXED', () => {

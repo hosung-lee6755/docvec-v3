@@ -23,9 +23,12 @@ from pydantic import BaseModel
 
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
 from app.pipeline.blocks.content_blocks import _carry, _upstream_text
+from app.pipeline.blocks.title_resolver import LeadLine, _is_chapter_heading, resolve_title
 
 _HEADING_NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*)[.\)]?\s+\S")
 _HEADING_KOREAN_RE = re.compile(r"^제\s*\d+\s*[장절조편]")
+# 공고문·계획서 hwpx 는 글자 크기 없이 "□ 사업개요" 로 절을 나눈다(한국 공문서 관례).
+_HEADING_SQUARE_BULLET_RE = re.compile(r"^□\s*\S")
 _LIST_RE = re.compile(r"^([-*•]|\d+[\).])\s+\S")
 # pdf_adapter.py가 표를 만나면 "[표 N]\n{table_text}" 형태로 RawTextBlock을
 # 만들고, extraction_blocks.py가 그걸 다른 블록들과 "\n\n"로 이어붙여
@@ -150,6 +153,8 @@ def _classify(
         level = m.group(1).count(".") + 1
         return "HEADING", level
     if _HEADING_KOREAN_RE.match(line):
+        return "HEADING", 1
+    if _HEADING_SQUARE_BULLET_RE.match(line):
         return "HEADING", 1
     if _LIST_RE.match(line):
         return "LIST_ITEM", None
@@ -329,6 +334,48 @@ def _extract_title(
     return None
 
 
+_HEADING_STYLE_PREFIXES = ("title", "section_header", "section-header", "heading")
+
+
+def _title_lead_lines(doc, built_blocks) -> list[LeadLine]:
+    """제목 판정이 볼 앞쪽 줄 — 1쪽 레이아웃(글자 크기·제목 표시)이 있으면 그것을, 없으면(HWPX 등)
+    트리의 앞쪽 블록 텍스트를 쓴다. 장 번호가 붙은 heading("1. 사업개요")은 제목 표시를 달지 않는다."""
+    layout = [
+        entry for entry in (doc.extraction_layout or [])
+        if entry.get("page_number") == 1 and entry.get("role") not in ("header", "footer") and entry.get("text")
+    ]
+    if len(layout) >= 2:
+        return [
+            LeadLine(
+                text=entry["text"], size=entry.get("font_size"),
+                is_heading=str(entry.get("style_name") or "").lower().startswith(_HEADING_STYLE_PREFIXES),
+            )
+            for entry in layout
+        ]
+    lines: list[LeadLine] = []
+    for node_type, _level, _start, _end, block_text, _layout in built_blocks[:12]:
+        if node_type in ("TABLE", "TOC"):
+            continue
+        is_heading = node_type == "HEADING" and not _is_chapter_heading(block_text)
+        lines.extend(
+            LeadLine(text=line, is_heading=is_heading) for line in block_text.splitlines() if line.strip()
+        )
+    return lines
+
+
+def _apply_document_title(doc, built_blocks) -> None:
+    """Document.title 을 판정해 채운다. 사용자가 직접 고친 제목(user_edited_fields)은 덮어쓰지 않는다."""
+    if "title" in (getattr(doc, "user_edited_fields", None) or []):
+        return
+    doc.title = resolve_title(
+        _title_lead_lines(doc, built_blocks),
+        filename=getattr(doc, "original_filename", None) or getattr(doc, "filename", None) or "",
+        embedded_title=getattr(doc, "source_title", None),
+        ocr_used=bool(getattr(doc, "ocr_used", False)),
+        fallback_heading=_extract_title(built_blocks),
+    )
+
+
 class StructureAnalyzeConfig(BaseModel):
     detect_headings: bool = True
     heading_max_level: int = 3
@@ -368,7 +415,11 @@ class StructureAnalyzeBlock(BaseBlock):
         # 1.6.0: DocumentNode.style에 style_name/font_name도 채운다(legacy
         # 경로만, extraction_layout에서 전달) — 캐시된 이전 결과는 이 두
         # 키가 없었다(메타 정보 생성.txt 2절, 2026-07-24).
-        return "1.6.0"
+        #
+        # 1.7.0: Document.title 을 "첫 HEADING"이 아니라 title_resolver(내장 제목·표지 줄·글자 크기·
+        # 파일명)로 정하고, 사용자가 고친 제목(user_edited_fields)은 덮어쓰지 않는다 — 캐시된 이전
+        # 결과는 표지 연도·장 제목이 제목이 된 값이다.
+        return "1.9.0"
 
     @property
     def category(self) -> str:
@@ -494,7 +545,7 @@ class StructureAnalyzeBlock(BaseBlock):
                 if node_type == "HEADING":
                     stack.append((level, node_id))
 
-            doc.title = _extract_title(built_blocks)
+            _apply_document_title(doc, built_blocks)
 
             db.commit()
 

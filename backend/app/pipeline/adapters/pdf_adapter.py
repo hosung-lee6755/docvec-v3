@@ -522,10 +522,12 @@ class PDFAdapter(BaseAdapter):
         # 세션으로 처리해 아래 본문 추출(pdfplumber 기반) 로직과 독립적으로
         # 동작하며, 손상되었거나 값이 없으면 None으로 남긴다(그레이스풀 폴백).
         document_created_at = None
+        document_title = None
         try:
             meta_doc = fitz.open(str(file_path))
             try:
                 document_created_at = _parse_pdf_date(meta_doc.metadata.get("creationDate"))
+                document_title = (meta_doc.metadata.get("title") or "").strip() or None
             finally:
                 meta_doc.close()
         except Exception:
@@ -729,6 +731,8 @@ class PDFAdapter(BaseAdapter):
                         "ocr_used": ocr_used,
                         "line_layout": line_layout,
                         "document_created_at": document_created_at,
+                        # 원본 파일의 제목 속성 — 제목 판정(title_resolver)이 쓸 만한 값인지 걸러 쓴다.
+                        "document_title": document_title,
                     },
                     warnings=warnings,
                 )

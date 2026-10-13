@@ -84,3 +84,48 @@ def test_paragraphs_and_tables_preserve_document_reading_order(tmp_path):
     assert texts[0] == "PARA_ONE"
     assert "CELL_A" in texts[1] and "CELL_B" in texts[1]
     assert texts[2] == "PARA_TWO"
+
+
+def test_extract_reports_core_title_and_word_page_count(tmp_path):
+    import zipfile
+
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("본문")
+    doc.core_properties.title = "AIDE 검수 기준서 v1.3"
+    path = tmp_path / "titled.docx"
+    doc.save(path)
+    # Word 가 저장 시 app.xml 에 남기는 쪽수를 흉내 낸다(python-docx 는 쓰지 않는다).
+    with zipfile.ZipFile(path, "a") as archive:
+        archive.writestr(
+            "docProps/app.xml",
+            '<?xml version="1.0" encoding="UTF-8"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>5</Pages></Properties>',
+        )
+
+    result = DOCXAdapter().extract(path, {})
+
+    assert result.metadata["document_title"] == "AIDE 검수 기준서 v1.3"
+    assert result.metadata["document_pages"] == 5
+
+
+def test_extract_without_core_title_reports_no_title(tmp_path):
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("본문")
+    path = tmp_path / "plain.docx"
+    doc.save(path)
+
+    result = DOCXAdapter().extract(path, {})
+
+    assert not result.metadata["document_title"]
+
+
+def test_word_page_count_is_none_when_the_file_has_no_app_properties(tmp_path):
+    from app.pipeline.adapters.docx_adapter import _word_page_count
+
+    broken = tmp_path / "not-a-zip.docx"
+    broken.write_bytes(b"plain bytes")
+
+    assert _word_page_count(broken) is None

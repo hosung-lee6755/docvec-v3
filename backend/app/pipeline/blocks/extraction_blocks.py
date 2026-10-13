@@ -330,18 +330,24 @@ _HANGUL_RE = re.compile(r"[가-힣]")
 _LATIN_RE = re.compile(r"[a-zA-Z]")
 
 
+# 글자(한글+영문) 중 한글 비중 기준 — 영문 기술용어가 많은 한국어 문서(AIDE 제안서 62%)도 한국어로 본다.
+_KO_MIN_HANGUL_SHARE = 0.4
+_EN_MAX_HANGUL_SHARE = 0.1
+
+
 def _detect_language(text: str) -> str | None:
-    """한글/영문 문자 비율 휴리스틱으로 문서 언어를 추정한다(메타 정보 생성
-    설계서, 2026-07-23 Phase 1) — 정밀 언어 감지 라이브러리 없이 두 문자
-    집합 중 한쪽이 최소 2배 우세할 때만 "ko"/"en"으로 판정. 텍스트가 비었거나
-    두 문자 집합이 비슷한 비중이면(예: 코드/숫자 위주 문서) None."""
+    """한글/영문 문자 비중 휴리스틱으로 문서 언어를 추정한다(메타 정보 생성
+    설계서, 2026-07-23 Phase 1) — 한글이 글자의 40% 이상이면 "ko"(영문 용어가
+    섞인 한국어 문서 포함), 10% 이하면 "en", 그 사이는 판단하지 않는다. 텍스트가
+    비었거나 글자가 없으면(코드/숫자 위주 문서) None."""
     hangul = len(_HANGUL_RE.findall(text))
     latin = len(_LATIN_RE.findall(text))
     if hangul == 0 and latin == 0:
         return None
-    if hangul >= latin * 2:
+    share = hangul / (hangul + latin)
+    if share >= _KO_MIN_HANGUL_SHARE:
         return "ko"
-    if latin >= hangul * 2:
+    if share <= _EN_MAX_HANGUL_SHARE:
         return "en"
     return None
 
@@ -487,7 +493,11 @@ class TextExtractBlock(BaseBlock):
         #
         # 1.18.2: Docling 이 그림으로 분류한 영역 안의 글자를 원본 텍스트 레이어에서 그대로 읽어
         # 이미지 OCR 보다 먼저 쓴다(차트 라벨·수치가 깨진 OCR 조각이 되던 문제). 그림 텍스트가 달라진다.
-        return "1.18.2"
+        #
+        # 1.19.0: Document.page_count 를 어댑터가 센 원본 쪽수로 기록(DOCX 는 미리보기 PDF 쪽수)하고, 원본
+        # 제목 속성을 Document.source_title 로 남기며, 한글 비중 40% 이상이면 한국어로 판정하고, 사용자가
+        # 고친 언어는 덮어쓰지 않는다 — 캐시된 이전 결과는 쪽수·제목 속성이 없고 언어 판정이 달랐다.
+        return "1.20.0"
 
     @property
     def category(self) -> str:
@@ -504,6 +514,7 @@ class TextExtractBlock(BaseBlock):
         from app.pipeline.adapters import UnsupportedFileTypeError, get_adapter
         from app.pipeline.job_tracker import complete_job, fail_job, start_job
         from app.pipeline.tasks.process import (
+            _apply_preview_page_count,
             _build_page_map,
             _recognize_document_images,
             _repaginate_hwp_like,
@@ -568,6 +579,20 @@ class TextExtractBlock(BaseBlock):
                         extra={"document_id": str(doc.id)},
                     )
 
+            if parsed.format_id == "docx":
+                # DOCX 는 쪽 구분이 파일에 없다 — LibreOffice 로 렌더링한 미리보기 PDF 의 쪽수가 실제 쪽수다.
+                # 변환이 안 되면 Word 가 파일에 저장해 둔 쪽수(app.xml)로 대신한다.
+                try:
+                    _apply_preview_page_count(str(doc.id), doc, parsed)
+                except Exception:
+                    logger.warning(
+                        "DOCX 미리보기 쪽수 계산 실패 — 파일 속성의 쪽수를 쓴다", exc_info=True,
+                        extra={"document_id": str(doc.id)},
+                    )
+                word_pages = parsed.metadata.get("document_pages")
+                if parsed.page_count <= 1 and isinstance(word_pages, int) and word_pages > 1:
+                    parsed.page_count = word_pages
+
             image_records = []
             if cfg.recognize_figures:
                 try:
@@ -631,8 +656,18 @@ class TextExtractBlock(BaseBlock):
             # 메타 정보 생성 설계서(2026-07-23) Phase 1 — 문서 내용에서 자동
             # 유도되는 Document 레벨 필드. title은 구조분석(structure_blocks.py)
             # 이후가 더 정확해 여기서는 채우지 않는다.
-            doc.page_count = len(parsed.pages)
-            doc.language = _detect_language(full_text)
+            # 쪽수는 어댑터가 센 원본 쪽수 — len(parsed.pages)는 요소가 있는 쪽만이라 빈 쪽·이미지 쪽이 빠진다.
+            source_page_count = parsed.page_count if parsed.page_count and parsed.page_count > 0 else len(parsed.pages)
+            if parsed.format_id in ("hwp", "hwpx") and len(parsed.pages) <= 1:
+                # hwp/hwpx 는 쪽 구분이 파일에 없고 미리보기 PDF 로도 나누지 못했다 — 모르는 값을 1 로 적지 않는다.
+                source_page_count = None
+            doc.page_count = source_page_count
+            # 원본 파일이 가진 제목 속성 — 구조분석의 제목 판정(title_resolver)이 후보로 쓴다.
+            source_title = re.sub(r"\s+", " ", str(parsed.metadata.get("document_title") or "")).strip()
+            doc.source_title = source_title[:500] or None
+            # 사용자가 직접 고친 언어(user_edited_fields)는 재처리가 덮어쓰지 않는다.
+            if "language" not in (getattr(doc, "user_edited_fields", None) or []):
+                doc.language = _detect_language(full_text)
             # 메타 정보 생성.txt 1절 document_created_at — docx/pdf 어댑터만
             # 채울 수 있다(hwp/hwpx는 None). None이면 절대 덮어쓰지 않아
             # hwp/hwpx 문서에 사용자가 PATCH /documents/{id}/metadata로
@@ -650,7 +685,7 @@ class TextExtractBlock(BaseBlock):
                     "document_id": str(doc.id),
                     "text": full_text,
                     "chars": len(full_text),
-                    "page_count": len(parsed.pages),
+                    "page_count": source_page_count,
                     "ocr_used": doc.ocr_used,
                 },
                 metrics={"chars": len(full_text), "tables": table_count, "images": len(image_records)},

@@ -44,6 +44,8 @@ class DocumentResponse(BaseModel):
     language: str | None = None
     category: str | None = None
     page_count: int | None = None
+    # 사용자가 직접 수정해 재처리가 덮어쓰지 않는 자동 생성 필드명 목록.
+    user_edited_fields: list[str] | None = None
     author: str | None = None
     organization: str | None = None
     security_level: str | None = None
@@ -287,6 +289,13 @@ class DocumentMetadataUpdateRequest(BaseModel):
     # 추출되지만, hwp/hwpx는 파싱 라이브러리가 생성일 메타데이터를
     # 노출하지 않아 자동 불가 → 수동 입력.
     document_created_at: datetime | None = None
+    # 자동 생성 필드의 사용자 수정. 값을 보내면 해당 필드는 "직접 수정됨"으로
+    # 표시되어 재처리가 덮어쓰지 않는다. reset_fields는 값을 지우고 표시를
+    # 해제해 다음 재처리에서 자동값이 다시 채워지게 한다.
+    title: str | None = Field(None, max_length=500)
+    language: Literal["ko", "en", "ja", "zh"] | None = None
+    category: str | None = Field(None, max_length=50)
+    reset_fields: list[Literal["title", "language", "category"]] | None = None
 
     model_config = {"extra": "forbid"}
 

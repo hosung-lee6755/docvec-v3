@@ -8,8 +8,17 @@ import { apiClient } from '../lib/apiClient'
 // 되돌아갈 수 있도록).
 export type SecurityLevel = 'Public' | 'Internal' | 'Confidential'
 
+// 제목/언어/분류는 자동 생성값이 기본이고, 사용자가 직접 수정하면 user_edited_fields에
+// 표시된다. reset_fields로 보내면 직접 수정 표시와 값을 함께 지워 다음 처리 때 자동 생성된다.
+export type DocumentLanguage = 'ko' | 'en' | 'ja' | 'zh'
+export type MetadataResettableField = 'title' | 'language' | 'category'
+
 export interface DocumentMetadataUpdate {
   documentId: string
+  title?: string | null
+  language?: DocumentLanguage | null
+  category?: string | null
+  reset_fields?: MetadataResettableField[]
   author?: string | null
   organization?: string | null
   security_level?: SecurityLevel | null

@@ -657,3 +657,40 @@ def test_recognize_document_images_falls_back_to_ocr_when_native_text_is_too_sho
 
     ocr.assert_called_once()
     assert records[0]["text"] == "이미지에서 읽은 충분히 긴 설명"
+
+
+def test_repaginate_page_count_is_the_whole_preview_pdf_including_blank_pages():
+    para = RawTextBlock("유일한 문단", 1)
+    parsed = _hwp_parsed([para])
+
+    _repaginate(parsed, [
+        {"page_number": 1, "text": "유일한 문단"}, {"page_number": 2, "text": ""}, {"page_number": 3, "text": ""},
+    ])
+
+    assert [p.page_number for p in parsed.pages] == [1]
+    assert parsed.page_count == 3
+
+
+def _apply_preview_pages(parsed, pages_text):
+    doc = SimpleNamespace(filename="a.docx", minio_key="k")
+    with patch("app.services.preview_service.preview_url_for") as preview,          patch("app.services.preview_service.pdf_pages_text_for", return_value=pages_text):
+        proc._apply_preview_page_count("doc-1", doc, parsed)
+    return preview
+
+
+def test_apply_preview_page_count_uses_the_rendered_pdf_page_count():
+    parsed = _hwp_parsed([RawTextBlock("본문", 1)])
+    parsed.format_id = "docx"
+
+    preview = _apply_preview_pages(parsed, [{"page_number": n, "text": "x"} for n in range(1, 6)])
+
+    preview.assert_called_once_with("doc-1", "a.docx", "k")
+    assert parsed.page_count == 5
+
+
+def test_apply_preview_page_count_keeps_the_count_when_no_pdf_preview():
+    parsed = _hwp_parsed([RawTextBlock("본문", 1)])
+
+    _apply_preview_pages(parsed, None)
+
+    assert parsed.page_count == 1

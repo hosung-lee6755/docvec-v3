@@ -1,4 +1,5 @@
 import type { QualityMetrics } from '../../hooks/useDocumentRuns'
+import type { DocumentLanguage } from '../../hooks/useDocumentMetadata'
 
 export type TabKey =
   | 'edit' | 'tables' | 'images' | 'chunks' | 'original' | 'quality' | 'history'
@@ -52,6 +53,19 @@ export const RUN_TRIGGER_LABELS: Record<string, string> = {
 export const RUN_STATUS_BADGE: Record<string, string> = {
   QUEUED: 'bg-gray', RUNNING: 'bg-information', COMPLETED: 'bg-success',
   FAILED: 'bg-danger', CANCELLED: 'bg-gray', WAITING_REVIEW: 'bg-warning',
+}
+
+// 문서 언어 선택지 — 백엔드 PATCH /documents/{id}/metadata의 language 허용값과 맞춘다.
+export const DOCUMENT_LANGUAGE_OPTIONS: { code: DocumentLanguage; label: string }[] = [
+  { code: 'ko', label: '한국어' },
+  { code: 'en', label: '영어' },
+  { code: 'ja', label: '일본어' },
+  { code: 'zh', label: '중국어' },
+]
+
+// 알 수 없는 코드는 가공하지 않고 그대로 보여 준다(백엔드가 새 언어를 추가했을 때 대비).
+export function documentLanguageLabel(code: string): string {
+  return DOCUMENT_LANGUAGE_OPTIONS.find((option) => option.code === code)?.label ?? code
 }
 
 export const REVISION_SOURCE_LABELS: Record<string, string> = {

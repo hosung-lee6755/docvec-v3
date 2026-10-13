@@ -96,7 +96,10 @@ class OutputBlock(BaseBlock):
         #
         # 1.5.0: 키워드 역전파가 이제 chunk_tier=="child" 청크만 대상으로
         # 한다 — parent Retrieval 청크는 제외.
-        return "1.5.0"
+        #
+        # 1.6.0: 사용자가 직접 고친 분류(user_edited_fields)는 Document.category 에 덮어쓰지 않는다 —
+        # 캐시된 이전 결과를 재생하면 사용자 수정이 있어도 분류가 되돌려진다.
+        return "1.6.0"
 
     @property
     def config_schema(self) -> type[BaseModel] | None:
@@ -157,8 +160,10 @@ class OutputBlock(BaseBlock):
                     category = upstream.get("category")
                     if isinstance(category, str) and category.strip():
                         tags.append(category.strip())
-                        doc.category = category.strip()[:50]
-                        saved_fields.append("category")
+                        # 사용자가 직접 고친 분류(user_edited_fields)는 재처리가 덮어쓰지 않는다.
+                        if "category" not in (getattr(doc, "user_edited_fields", None) or []):
+                            doc.category = category.strip()[:50]
+                            saved_fields.append("category")
                     if tags:
                         before_tags = list(doc.suggested_tags or [])
                         existing = {t.lower() for t in (doc.tags or [])}
