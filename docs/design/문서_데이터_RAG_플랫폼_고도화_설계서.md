@@ -538,6 +538,9 @@ Query
 ```
 
 > **⚠ 실제 구현**: 메타 정보 생성 Phase 0~9 전체 완료 (`backend/app/pipeline/tasks/metadata.py`). Phase 9는 Parent Retrieval 계층형 구조 (child chunk의 parent_chunk_id와 chunk_tier로 대부분 표현). Qdrant Summary Index는 별도 Phase 5로 document_summaries 컬렉션 구성.
+>
+> **문서 레벨 메타정보 판정(2026-10)**: `document_title`은 파일 속성·표지 줄·정제 파일명 순(`title_resolver`), `page_count`는 원본 쪽수(DOCX 는 LibreOffice 미리보기 쪽수, HWPX 는 변환 불가 시 비움), `language`는 한글 비율, `category`는 12종 기본 목록 분류(LLM).
+> 사용자가 제목·언어·분류를 직접 수정하면 재처리가 덮어쓰지 않는다(`documents.user_edited_fields`). 상세는 `docs/유지보수_가이드.md` 1.5 (N).
 
 ### 11.3 필수 추적 버전
 
