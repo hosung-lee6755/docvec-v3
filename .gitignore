@@ -37,3 +37,6 @@ backend/celerybeat-schedule
 
 # Stray/root-level node_modules and tool caches
 node_modules/
+
+# Internal network notes (internal IPs/ports — never commit)
+docs/참고/*섹션정보.txt
