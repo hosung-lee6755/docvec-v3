@@ -14,10 +14,18 @@ SUMMARY_COLLECTION_NAME = "document_summaries"
 
 
 def index_document_summary(
-    document_id: str, summary: str, embedding_model: str | None = None,
+    document_id: str,
+    summary: str,
+    embedding_model: str | None = None,
+    access_fields: dict | None = None,
 ) -> None:
     """문서 요약이 확정될 때(summary_status → DONE) 호출한다. 빈 요약은
-    조용히 무시 — 색인할 내용이 없다."""
+    조용히 무시 — 색인할 내용이 없다.
+
+    access_fields: v3 권한 사본(access_payload.access_payload_sync 결과 —
+    sec_rank/acl/owner_id/collection_id). 없으면 권한 필터에 걸려 검색되지 않는다
+    (fail-closed). 호출부는 반드시 넘긴다.
+    """
     if not summary or not summary.strip():
         return
     provider = get_embedding_provider(embedding_model)
@@ -26,7 +34,7 @@ def index_document_summary(
     qdrant_service.upsert_points(SUMMARY_COLLECTION_NAME, [{
         "id": document_id,
         "vector": vector,
-        "payload": {"document_id": document_id, "summary": summary},
+        "payload": {"document_id": document_id, "summary": summary, **(access_fields or {})},
     }])
 
 
@@ -36,11 +44,13 @@ def delete_document_summary(document_id: str) -> None:
     qdrant_service.delete_points(SUMMARY_COLLECTION_NAME, [document_id])
 
 
-def search_document_summaries(query: str, limit: int = 10) -> list[dict]:
+def search_document_summaries(query: str, limit: int = 10, query_filter=None) -> list[dict]:
     """쿼리를 임베딩해 document_summaries 컬렉션에서 가장 가까운 문서 요약
-    top-k를 반환한다. `qdrant_service.search`의 collection_id/필터는 쓰지
-    않는다 — 요약 인덱스는 아직 컬렉션 스코프 payload를 싣지 않으므로
-    호출자가 반환된 document_id로 접근 권한을 직접 확인해야 한다."""
+    top-k를 반환한다. query_filter에 v3 권한 필터(access_policy.qdrant_access_filter)를
+    넘기면 검색 단계에서 거른다 — 그래도 호출자는 반환된 document_id를 Postgres
+    기준으로 다시 확인해야 한다(페이로드 동기화 지연 대비)."""
     provider = get_embedding_provider()
     vector = provider.embed([query])[0]
-    return qdrant_service.search(SUMMARY_COLLECTION_NAME, vector, limit=limit)
+    return qdrant_service.search(
+        SUMMARY_COLLECTION_NAME, vector, limit=limit, query_filter=query_filter
+    )

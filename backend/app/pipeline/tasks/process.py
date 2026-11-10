@@ -598,6 +598,9 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
         vectors = provider.embed(chunks)
         complete_job(db, current_job, f"{len(vectors)}개 벡터 생성 ({provider.dimension}차원)")
 
+        from app.services.access_payload import access_payload_sync
+
+        access_fields = access_payload_sync(db, document_id)
         points = [
             {
                 "id": str(uuid.uuid4()),
@@ -610,6 +613,8 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
                     "filename": doc.original_filename,
                     "page_number": _page_number_for_offset(doc.page_map, start_offset),
                     "tags": doc.tags or [],
+                    # v3 권한 사본(sec_rank/acl/owner_id/collection_id) — 정본은 Postgres.
+                    **access_fields,
                 },
             }
             for i, ((chunk, start_offset, _end_offset), vec) in enumerate(

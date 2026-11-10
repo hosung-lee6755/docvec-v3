@@ -3,6 +3,10 @@ import logging
 from typing import Literal
 from uuid import UUID
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import asc, delete, desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.api.v1.deps import get_current_user
 from app.api.v1.endpoints.documents.models import (
     BatchDeleteRequest,
@@ -27,11 +31,15 @@ from app.schemas.document import (
     DocumentSummarySearchRequest,
     DocumentSummarySearchResponse,
 )
+from app.services.access_policy import (
+    build_access_context,
+    document_visibility_clause,
+    load_document_facts,
+    qdrant_visibility_filter,
+    visible_document_ids,
+)
 from app.services.audit import log_audit
 from app.services.document_storage import release_original
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import asc, delete, desc, func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 
@@ -58,6 +66,8 @@ async def list_documents(
 ):
     offset = (page - 1) * limit
 
+    # v3 권한: 컬렉션 접근 + 보안등급 + 문서 ACL(+업로더 본인)을 한 SQL 조건으로 적용한다.
+    ctx = await build_access_context(db, current_user)
     if project_id is not None:
         # Inside a project workspace, documents are scoped to the project's
         # collections regardless of who personally owns each document — unlike
@@ -68,13 +78,12 @@ async def list_documents(
         )
         if not project_collection_ids:
             return {"total": 0, "page": page, "limit": limit, "items": []}
-        filters = [Document.collection_id.in_(project_collection_ids)]
+        filters = [
+            Document.collection_id.in_(project_collection_ids),
+            document_visibility_clause(ctx),
+        ]
     else:
-        shared_ids = await accessible_collection_ids(db, current_user)
-        owned_or_shared = [Document.created_by == str(current_user.id)]
-        if shared_ids:
-            owned_or_shared.append(Document.collection_id.in_(shared_ids))
-        filters = [or_(*owned_or_shared)]
+        filters = [document_visibility_clause(ctx)]
     if collection_id is not None:
         filters.append(Document.collection_id == collection_id)
     if status is not None:
@@ -113,13 +122,9 @@ async def list_all_tags(
 ):
     """Distinct tags across every document the user can access — feeds the
     search page's tag-filter suggestion list."""
-    shared_ids = await accessible_collection_ids(db, current_user)
-    owned_or_shared = [Document.created_by == str(current_user.id)]
-    if shared_ids:
-        owned_or_shared.append(Document.collection_id.in_(shared_ids))
-
+    ctx = await build_access_context(db, current_user)
     rows = await db.scalars(
-        select(Document.tags).where(or_(*owned_or_shared), Document.tags.isnot(None))
+        select(Document.tags).where(document_visibility_clause(ctx), Document.tags.isnot(None))
     )
     tags = sorted({tag for tag_list in rows for tag in (tag_list or [])})
     return {"tags": tags}
@@ -132,24 +137,23 @@ async def search_documents_by_summary(
     current_user: User = Depends(get_current_user),
 ):
     """메타 정보 생성 설계서(2026-07-23) Phase 5 — Summary Index 검색.
-    document_summaries 컬렉션에서 top-k를 가져온 뒤, 사용자가 접근 가능한
-    컬렉션의 문서로만 필터링한다(요약 인덱스 자체엔 collection_id payload가
-    없어 Qdrant 쿼리 단계에서 스코핑할 수 없음 — 여기서 후처리로 거른다)."""
-    import asyncio
 
+    v3: 요약 포인트도 권한 사본(collection_id/sec_rank/acl/owner_id)을 싣으므로 Qdrant
+    검색 단계에서 거른다 — 예전처럼 top-k를 자른 뒤 거르면 결과가 줄어든다. 그래도
+    반환 직전에 Postgres 기준으로 다시 확인한다(페이로드 동기화 지연 대비, fail-closed).
+    """
     from app.services.summary_index import search_document_summaries
 
-    hits = await asyncio.to_thread(search_document_summaries, body.query, body.limit)
+    ctx = await build_access_context(db, current_user)
+    # 목록과 같은 결과 집합 — 컬렉션 접근이 없어도 본인이 올린 문서는 검색된다.
+    hits = await asyncio.to_thread(
+        search_document_summaries, body.query, body.limit, qdrant_visibility_filter(ctx)
+    )
     if not hits:
         return {"items": []}
 
-    hit_doc_ids = [h["payload"].get("document_id") for h in hits if h["payload"].get("document_id")]
-    shared_ids = await accessible_collection_ids(db, current_user)
-    docs = (await db.scalars(select(Document).where(Document.id.in_(hit_doc_ids)))).all()
-    owned_or_shared_ids = {
-        str(d.id) for d in docs
-        if str(d.created_by) == str(current_user.id) or (d.collection_id and str(d.collection_id) in shared_ids)
-    }
+    facts = await load_document_facts(db, {h["payload"].get("document_id") for h in hits})
+    owned_or_shared_ids = visible_document_ids(ctx, facts)
 
     items = [
         {
@@ -206,8 +210,9 @@ async def batch_delete_documents(
         d for d in candidates
         if str(d.created_by) == str(current_user.id) or (d.collection_id and d.collection_id in owned_collection_ids)
     ]
-    from app.db.models.workflow_run import WorkflowRun
     from sqlalchemy import update as sa_update
+
+    from app.db.models.workflow_run import WorkflowRun
 
     doc_ids = [doc.id for doc in docs]
     if doc_ids:
@@ -353,8 +358,9 @@ async def delete_document(
     if not (is_owner or is_collection_owner):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    from app.db.models.workflow_run import WorkflowRun
     from sqlalchemy import update as sa_update
+
+    from app.db.models.workflow_run import WorkflowRun
 
     await db.execute(delete(ProcessingJob).where(ProcessingJob.document_id == document_id))
     # Keep workflow run history but drop the document link (FK would abort

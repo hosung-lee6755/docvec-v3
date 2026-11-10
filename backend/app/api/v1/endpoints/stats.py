@@ -2,12 +2,11 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user
-from app.api.v1.permissions import accessible_collection_ids
-from app.db.models.collection import Collection
+from app.services.access_policy import build_access_context, document_visibility_clause
 from app.db.models.document import Document
 from app.db.models.quality_report import QualityReport
 from app.db.models.user import User
@@ -65,11 +64,10 @@ async def get_stats(
     # Match list_documents visibility scope: include not only owned documents but
     # also documents in accessible (shared) collections. Filtering only created_by
     # would exclude shared collection documents and cause stats to undercount.
-    shared_ids = await accessible_collection_ids(db, current_user)
-    owned_or_shared = [Document.created_by == str(current_user.id)]
-    if shared_ids:
-        owned_or_shared.append(Document.collection_id.in_(shared_ids))
-    doc_scope = or_(*owned_or_shared)
+    # v3: 목록과 같은 가시성 조건(컬렉션 접근 + 보안등급 + 문서 ACL + 업로더 본인).
+    ctx = await build_access_context(db, current_user)
+    shared_ids = ctx.collection_ids
+    doc_scope = document_visibility_clause(ctx)
 
     total_documents = await db.scalar(
         select(func.count(Document.id)).where(doc_scope)

@@ -92,48 +92,47 @@ async def check_document_access(
     user: User,
     min_role: str = "viewer",
 ) -> None:
+    """문서 열람(min_role=viewer)·수정(editor) 권한 확인. 실패 시 403.
+
+    업로더 본인은 항상 통과. 그 외에는 컬렉션 역할 확인 후 v3 문서 단위 규칙
+    (보안등급 대 열람등급, 문서 ACL)을 app/services/access_policy.py로 판정한다 —
+    볼 수 없는 문서는 수정도 할 수 없다.
+    """
     if str(doc.created_by) == str(user.id):
         return
-    if doc.collection_id:
-        await check_collection_access(db, doc.collection_id, user, min_role=min_role)
-        return
-    raise HTTPException(status_code=403, detail="Access denied")
+    if not doc.collection_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    await check_collection_access(db, doc.collection_id, user, min_role=min_role)
+
+    from app.services.access_policy import (
+        AccessContext,
+        can_view,
+        group_ids_stmt,
+        load_document_facts,
+    )
+
+    facts = (await load_document_facts(db, [str(doc.id)])).get(str(doc.id))
+    group_ids = (await db.scalars(group_ids_stmt(str(user.id)))).all()
+    # 컬렉션 접근은 바로 위에서 확인했으므로 이 문서의 컬렉션만 넣어 판정한다.
+    ctx = AccessContext.create(user.id, [str(doc.collection_id)], user.clearance_level, group_ids)
+    if facts is None or not can_view(ctx, facts):
+        raise HTTPException(status_code=403, detail="Access denied")
 
 
 async def accessible_collection_ids(
     db: AsyncSession, user: User, project_id: UUID | str | None = None
 ) -> list[str]:
-    owned_q = select(Collection.id).where(Collection.created_by == str(user.id))
-    member_q = select(CollectionMember.collection_id).where(
-        CollectionMember.user_id == str(user.id)
+    """사용자가 컬렉션 단위로 접근할 수 있는 컬렉션 id 목록.
+
+    규칙은 access_policy.accessible_collection_ids_stmt 한 곳에만 있다(채팅 워커의
+    sync 경로도 같은 문을 실행한다). project_id가 있으면 그 프로젝트로 좁히고,
+    그 프로젝트에 속하지 않은 사용자는 프로젝트 상속분을 얻지 못한다(방어적 교차 검증).
+    문서 단위 규칙(등급·ACL)은 여기서 판정하지 않는다 — 문서 목록은
+    access_policy.document_visibility_clause, 검색은 qdrant_access_filter를 쓴다.
+    """
+    from app.services.access_policy import accessible_collection_ids_stmt
+
+    stmt = accessible_collection_ids_stmt(
+        str(user.id), str(project_id) if project_id is not None else None
     )
-
-    # project_id narrows the result to a single project's collections. The
-    # project_ids intersection below is deliberate defense-in-depth: even if a
-    # caller passes a project_id without having already verified the user's
-    # access to it (via check_project_access), this still can't leak collections
-    # from a project the user isn't actually a member of.
-    user_project_ids = await accessible_project_ids(db, user)
-    if project_id is not None:
-        pid = str(project_id)
-        owned_q = owned_q.where(Collection.project_id == pid)
-        member_q = member_q.join(Collection, Collection.id == CollectionMember.collection_id).where(
-            Collection.project_id == pid
-        )
-        project_ids = [pid] if pid in user_project_ids else []
-    else:
-        project_ids = user_project_ids
-
-    owned = await db.scalars(owned_q)
-    member_of = await db.scalars(member_q)
-    via_project: list = []
-    if project_ids:
-        via_project = (
-            await db.scalars(
-                select(Collection.id).where(
-                    Collection.project_id.in_(project_ids),
-                    Collection.restrict_to_members.is_(False),
-                )
-            )
-        ).all()
-    return list({str(cid) for cid in [*owned.all(), *member_of.all(), *via_project]})
+    return list({str(cid) for cid in (await db.scalars(stmt)).all()})

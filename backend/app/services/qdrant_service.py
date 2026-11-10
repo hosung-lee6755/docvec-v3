@@ -5,6 +5,7 @@ from qdrant_client.models import (
     Filter,
     MatchAny,
     MatchValue,
+    PayloadSchemaType,
     PointStruct,
     VectorParams,
 )
@@ -22,6 +23,28 @@ class QdrantService:
             self._client.create_collection(
                 collection_name=name,
                 vectors_config=VectorParams(size=dimension, distance=Distance.COSINE),
+            )
+            self.ensure_access_indexes(name)
+
+    def collection_exists(self, name: str) -> bool:
+        return name in {c.name for c in self._client.get_collections().collections}
+
+    # v3 권한 필터(access_policy.qdrant_access_filter)가 매 검색에 쓰는 필드. 인덱스가
+    # 없어도 결과는 같지만 포인트가 많아지면 필터가 전수 검사로 느려진다. 이미 있는
+    # 인덱스를 다시 만들어도 Qdrant는 오류 없이 넘어간다(멱등) — 기존 컬렉션은 백필
+    # 스크립트가 이 함수를 호출해 인덱스를 만든다.
+    _ACCESS_INDEX_FIELDS = {
+        "collection_id": PayloadSchemaType.KEYWORD,
+        "document_id": PayloadSchemaType.KEYWORD,
+        "owner_id": PayloadSchemaType.KEYWORD,
+        "acl": PayloadSchemaType.KEYWORD,
+        "sec_rank": PayloadSchemaType.INTEGER,
+    }
+
+    def ensure_access_indexes(self, name: str) -> None:
+        for field, schema in self._ACCESS_INDEX_FIELDS.items():
+            self._client.create_payload_index(
+                collection_name=name, field_name=field, field_schema=schema
             )
 
     def upsert_points(self, collection: str, points: list[dict]) -> None:
@@ -45,7 +68,13 @@ class QdrantService:
         collection_ids: list[str] | None = None,
         filters: dict | None = None,
         with_vectors: bool = False,
+        query_filter: Filter | None = None,
     ) -> list[dict]:
+        """query_filter를 주면 아래 collection_id/filters 조합 대신 그 필터를 그대로 쓴다 —
+        v3 권한 필터(access_policy.qdrant_access_filter)를 받는 통로. 사용자 권한이 걸린
+        검색 경로는 반드시 이 인자를 써야 한다."""
+        if query_filter is not None:
+            return self._query(collection, vector, limit, query_filter, with_vectors)
         must_conditions: list[FieldCondition] = []
         if collection_id:
             must_conditions.append(
@@ -69,6 +98,16 @@ class QdrantService:
             must=must_conditions or None,
             must_not=[FieldCondition(key="disabled", match=MatchValue(value=True))],
         )
+        return self._query(collection, vector, limit, query_filter, with_vectors)
+
+    def _query(
+        self,
+        collection: str,
+        vector: list[float],
+        limit: int,
+        query_filter: Filter,
+        with_vectors: bool,
+    ) -> list[dict]:
         response = self._client.query_points(
             collection_name=collection,
             query=vector,

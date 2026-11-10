@@ -167,7 +167,10 @@ async def test_summary_search_filters_hits_to_accessible_documents(db_session): 
             DocumentSummarySearchRequest(query="계약", limit=3), db_session, owner_user()
         )
 
-    search.assert_called_once_with("계약", 3)
+    search.assert_called_once()
+    query, limit, query_filter = search.call_args.args
+    assert (query, limit) == ("계약", 3)
+    assert query_filter is not None  # v3: 권한 필터 없이 요약 인덱스를 검색하면 안 된다
     assert result["items"] == [{"document_id": str(mine.id), "score": 0.8, "summary": "내 문서 요약"}]
 
 

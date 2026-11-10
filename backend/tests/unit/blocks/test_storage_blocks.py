@@ -316,7 +316,7 @@ def test_rag_store_closes_db_on_embedding_error():
 def test_block_metadata():
     split, store = sb.ChunkSplitBlock(), sb.RagStoreBlock()
     assert (split.block_type, store.block_type) == ("chunk_split", "rag_store")
-    assert split.block_version == "1.5.0" and store.block_version == "1.3.0"
+    assert split.block_version == "1.5.0" and store.block_version == "1.4.0"
     assert split.category == store.category == "분할·저장"
     assert split.config_schema is sb.ChunkSplitConfig
     assert store.config_schema is sb.RagStoreConfig

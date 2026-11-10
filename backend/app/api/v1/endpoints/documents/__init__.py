@@ -6,6 +6,7 @@ path 변수로 잡히지 않는다. 각 모듈은 자신이 맡은 구간의 라
 from fastapi import APIRouter
 
 from app.api.v1.endpoints.documents import (
+    acl,
     chunks,
     listing,
     metadata,
@@ -15,7 +16,7 @@ from app.api.v1.endpoints.documents import (
 )
 
 router = APIRouter()
-for _module in (upload, listing, processing, structure, chunks, metadata):
+for _module in (upload, listing, processing, structure, chunks, acl, metadata):
     # include_router는 경로가 ""인 목록 라우트를 거부하므로 선언 순서 그대로 라우트를 이어붙인다.
     router.routes.extend(_module.router.routes)
 
@@ -41,7 +42,10 @@ from app.api.v1.endpoints.documents.models import (  # noqa: E402,F401
     BatchDeleteRequest,
     BatchReprocessRequest,
 )
-from app.api.v1.endpoints.documents.processing import proceed_document, reprocess_document  # noqa: E402,F401
+from app.api.v1.endpoints.documents.processing import (  # noqa: E402,F401
+    proceed_document,
+    reprocess_document,
+)
 from app.api.v1.endpoints.documents.structure import _resolve_cleaning_rule_name  # noqa: E402,F401
 from app.api.v1.endpoints.documents.upload import (  # noqa: E402,F401
     _SUPPORTED_UPLOAD_SUFFIXES,

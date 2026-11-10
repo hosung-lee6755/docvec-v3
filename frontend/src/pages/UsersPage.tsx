@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Users, Loader2, ShieldOff, Trash2 } from 'lucide-react'
 import { useUsers, useUpdateUser, useDeleteUser } from '../hooks/useUsers'
 import { useAuthStore } from '../store/authStore'
+import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../hooks/useAccess'
+import type { SecurityLevel } from '../hooks/useDocumentMetadata'
 
 const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000001'
 
@@ -29,6 +31,10 @@ export default function UsersPage() {
 
   const handleRoleChange = (id: string, role: 'viewer' | 'editor' | 'admin') => {
     updateUser.mutate({ id, payload: { role } })
+  }
+
+  const handleClearanceChange = (id: string, clearance_level: SecurityLevel) => {
+    updateUser.mutate({ id, payload: { clearance_level } })
   }
 
   const handleToggleActive = (id: string, is_active: boolean) => {
@@ -76,11 +82,12 @@ export default function UsersPage() {
           <table className="tbl col data">
             <caption>사용자 목록</caption>
             <colgroup>
-              <col style={{ width: '25%' }} />
-              <col style={{ width: '15%' }} />
-              <col style={{ width: '15%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '18%' }} />
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '14%' }} />
               <col />
             </colgroup>
             <thead>
@@ -88,6 +95,7 @@ export default function UsersPage() {
                 <th scope="col">이메일</th>
                 <th scope="col">이름</th>
                 <th scope="col">역할</th>
+                <th scope="col" title="볼 수 있는 문서 보안등급의 상한">열람등급</th>
                 <th scope="col">활성</th>
                 <th scope="col">가입일</th>
                 <th scope="col">작업</th>
@@ -121,6 +129,19 @@ export default function UsersPage() {
                         <option value="viewer">{ROLE_LABELS.viewer}</option>
                         <option value="editor">{ROLE_LABELS.editor}</option>
                         <option value="admin">{ROLE_LABELS.admin}</option>
+                      </select>
+                    </td>
+                    <td>
+                      <select
+                        value={u.clearance_level}
+                        disabled={isSystem || updateUser.isPending}
+                        onChange={(e) => handleClearanceChange(u.id, e.target.value as SecurityLevel)}
+                        className="krds-form-select small"
+                        aria-label={`${u.email} 열람등급`}
+                      >
+                        {SECURITY_LEVELS.map((level) => (
+                          <option key={level} value={level}>{SECURITY_LEVEL_LABELS[level]}</option>
+                        ))}
                       </select>
                     </td>
                     <td>

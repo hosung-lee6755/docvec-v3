@@ -14,10 +14,22 @@ logger = logging.getLogger(__name__)
 _ANSWER_CACHE_TTL_SECONDS = 3600
 
 
-def _answer_cache_key(query: str, collection_id: str | None, project_id: str | None, model_key: str) -> str:
+def _answer_cache_key(
+    query: str,
+    collection_id: str | None,
+    project_id: str | None,
+    model_key: str,
+    access_fingerprint: str,
+) -> str:
+    """access_fingerprint(AccessContext.fingerprint)를 반드시 포함한다 — 빠지면 높은
+    등급 사용자가 받은 답변(과 인용)이 같은 질문을 한 낮은 등급 사용자에게 캐시로
+    나간다(v3 권한 모델의 누출 경로). 같은 권한 조합끼리만 캐시를 공유한다."""
     normalized = query.strip().lower()
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    return f"rag_answer:{model_key}:{collection_id or 'all'}:{project_id or 'none'}:{digest}"
+    return (
+        f"rag_answer:{model_key}:{collection_id or 'all'}:{project_id or 'none'}:"
+        f"{access_fingerprint}:{digest}"
+    )
 
 _SYSTEM_PROMPT = (
     "당신은 문서 검색 결과를 바탕으로 답변하는 어시스턴트입니다. "
@@ -156,43 +168,36 @@ _HYBRID_CANDIDATE_MULTIPLIER = 4
 
 
 def _accessible_collection_ids(db, user_id: str, project_id: str | None = None) -> list[str]:
-    from app.db.models.collection import Collection
-    from app.db.models.collection_member import CollectionMember
-    from app.db.models.project import Project
-    from app.db.models.project_member import ProjectMember
+    """API의 permissions.accessible_collection_ids와 같은 문(access_policy)을 sync 세션으로
+    실행한다 — 규칙을 여기서 따로 구현하지 않는다(v2에서는 두 벌이라 어긋날 위험이 있었다)."""
+    from app.services.access_policy import accessible_collection_ids_stmt
 
-    owned_q = db.query(Collection.id).filter(Collection.created_by == user_id)
-    member_q = db.query(CollectionMember.collection_id).filter(CollectionMember.user_id == user_id)
+    stmt = accessible_collection_ids_stmt(str(user_id), str(project_id) if project_id else None)
+    return list({str(cid) for cid in db.scalars(stmt).all()})
 
-    owned_project_rows = db.query(Project.id).filter(Project.created_by == user_id).all()
-    member_project_rows = (
-        db.query(ProjectMember.project_id).filter(ProjectMember.user_id == user_id).all()
-    )
-    user_project_ids = [str(row[0]) for row in [*owned_project_rows, *member_project_rows]]
 
-    if project_id is not None:
-        owned_q = owned_q.filter(Collection.project_id == project_id)
-        member_q = member_q.join(Collection, Collection.id == CollectionMember.collection_id).filter(
-            Collection.project_id == project_id
-        )
-        project_ids = [project_id] if project_id in user_project_ids else []
-    else:
-        project_ids = user_project_ids
+def _cited_documents_still_visible(db, access_ctx, cached_payload: dict) -> bool:
+    """캐시 키의 권한 지문은 사용자 쪽(열람등급·그룹·컬렉션)만 담는다. 문서 쪽 권한(등급·ACL)이
+    캐시 이후 바뀌면 같은 키로 낡은 답변·인용이 나가므로, 적중할 때마다 인용 문서를 Postgres로
+    다시 판정한다. 인용은 답변 생성에 쓴 컨텍스트 전체(chunks)이므로 이것으로 충분하다."""
+    from app.services.access_policy import load_document_facts_sync, visible_document_ids
 
-    owned = [str(row[0]) for row in owned_q.all()]
-    member_of = [str(row[0]) for row in member_q.all()]
-    via_project = []
-    if project_ids:
-        via_project = [
-            str(row[0])
-            for row in db.query(Collection.id)
-            .filter(
-                Collection.project_id.in_(project_ids),
-                Collection.restrict_to_members.is_(False),
-            )
-            .all()
-        ]
-    return list({*owned, *member_of, *via_project})
+    doc_ids = {c.get("document_id") for c in cached_payload.get("citations") or []}
+    doc_ids.discard(None)
+    if not doc_ids:
+        return True
+    facts = load_document_facts_sync(db, doc_ids)
+    return doc_ids <= visible_document_ids(access_ctx, facts)
+
+
+def _scope_collection_ids(
+    db, user_id: str, collection_id: str | None, project_id: str | None
+) -> list[str]:
+    """이번 질의의 컬렉션 범위. 단일 컬렉션은 대화 생성 시 접근 확인을 마쳤다(endpoints/chat.py).
+    범위 없이 검색하면 물리 Qdrant 컬렉션을 공유하는 다른 사용자의 문서가 나오므로 반드시 좁힌다."""
+    if collection_id:
+        return [str(collection_id)]
+    return _accessible_collection_ids(db, user_id, project_id=project_id)
 
 
 def _retrieve_chunks(
@@ -208,27 +213,32 @@ def _retrieve_chunks(
     from app.services.embedding import get_embedding_provider
     from app.services.qdrant_service import qdrant_service
 
-    # A single collection_id was already access-checked when the conversation was
-    # created (see endpoints/chat.py). With no collection_id ("search all my
-    # documents", or "search this whole project" when project_id is set), every
-    # collection shares one physical Qdrant collection, so an unscoped query must
-    # be restricted to the user's accessible collections (optionally narrowed to
-    # one project) or it would surface other users' private document text.
-    collection_ids = None
-    if not collection_id:
-        collection_ids = _accessible_collection_ids(db, user_id, project_id=project_id)
-        if not collection_ids:
-            return []
+    from app.services.access_policy import (
+        build_access_context_sync,
+        load_document_facts_sync,
+        qdrant_access_filter,
+        visible_document_ids,
+    )
 
+    scope = _scope_collection_ids(db, user_id, collection_id, project_id)
+    if not scope:
+        return []
+
+    # v3 권한: 검색 단계에서 보안등급·ACL로 거르고, 리랭킹·LLM에 넣기 전에 Postgres
+    # 기준으로 다시 확인한다(페이로드 동기화가 늦어도 근거·인용으로 새지 않게 — fail-closed).
+    ctx = build_access_context_sync(db, user_id)
     provider = get_embedding_provider()
     vector = provider.embed([query])[0]
     hits = qdrant_service.search(
         collection=settings.qdrant_collection_name,
         vector=vector,
         limit=limit * _HYBRID_CANDIDATE_MULTIPLIER,
-        collection_id=collection_id,
-        collection_ids=collection_ids,
+        query_filter=qdrant_access_filter(ctx, scope),
     )
+    if hits:
+        facts = load_document_facts_sync(db, {h["payload"].get("document_id") for h in hits})
+        allowed = visible_document_ids(ctx, facts)
+        hits = [h for h in hits if h["payload"].get("document_id") in allowed]
 
     if hits:
         from app.services.chunk_stats import record_hits
@@ -288,17 +298,20 @@ def _accessible_documents(db, user_id: str, collection_id: str | None, project_i
     retrieval paths, which read structured fields on Document rather than
     embedded chunk text."""
     from app.db.models.document import Document
+    from app.services.access_policy import build_access_context_sync, document_visibility_clause
 
-    if collection_id:
-        collection_ids = [collection_id]
-    else:
-        collection_ids = _accessible_collection_ids(db, user_id, project_id=project_id)
-        if not collection_ids:
-            return []
+    collection_ids = _scope_collection_ids(db, user_id, collection_id, project_id)
+    if not collection_ids:
+        return []
 
+    ctx = build_access_context_sync(db, user_id)
     return (
         db.query(Document)
-        .filter(Document.collection_id.in_(collection_ids), Document.status == "INDEXED")
+        .filter(
+            Document.collection_id.in_(collection_ids),
+            Document.status == "INDEXED",
+            document_visibility_clause(ctx),
+        )
         .all()
     )
 
@@ -414,16 +427,24 @@ def generate_answer(self, chat_message_id: str) -> dict:
 
         import redis
 
+        from app.services.access_policy import build_access_context_sync
+
         redis_client = redis.from_url(settings.redis_url)
+        access_ctx = build_access_context_sync(db, str(conversation.user_id))
         cache_key = _answer_cache_key(
             msg.query,
             str(conversation.collection_id) if conversation.collection_id else None,
             str(conversation.project_id) if conversation.project_id else None,
             conversation.model_key,
+            access_ctx.fingerprint(),
         )
         cached = redis_client.get(cache_key)
-        if cached:
-            cached_payload = json.loads(cached)
+        cached_payload = json.loads(cached) if cached else None
+        if cached_payload and not _cited_documents_still_visible(db, access_ctx, cached_payload):
+            # 캐시 이후 인용 문서의 등급·ACL이 바뀌었다 — 낡은 답변을 버리고 새로 만든다.
+            redis_client.delete(cache_key)
+            cached_payload = None
+        if cached_payload:
             msg.answer = cached_payload["answer"]
             msg.citations = cached_payload["citations"]
             msg.status = "DONE"

@@ -206,9 +206,13 @@ class OutputBlock(BaseBlock):
                     # 실패시키면 안 됨).
                     if "summary" in saved_fields:
                         try:
+                            from app.services.access_payload import access_payload_sync
                             from app.services.summary_index import index_document_summary
 
-                            index_document_summary(str(doc.id), doc.summary)
+                            index_document_summary(
+                                str(doc.id), doc.summary,
+                                access_fields=access_payload_sync(db, str(doc.id)),
+                            )
                         except Exception:
                             logger.exception(
                                 "summary index upsert failed", extra={"document_id": str(doc.id)}

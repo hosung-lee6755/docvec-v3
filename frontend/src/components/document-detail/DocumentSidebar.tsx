@@ -9,6 +9,7 @@ import type { useAcceptTagSuggestion, useDismissTagSuggestion, useUpdateDocument
 import type { MetadataResettableField, useUpdateDocumentMetadata } from '../../hooks/useDocumentMetadata'
 import type { Document } from '../../hooks/useDocuments'
 import type { DocumentRunItem, QualityReport } from '../../hooks/useDocumentRuns'
+import AccessPanel from './AccessPanel'
 
 interface DocumentSidebarProps {
   doc: Document
@@ -134,6 +135,7 @@ export default function DocumentSidebar({
           value={doc.security_level}
           onSave={(value) => updateMetadata.mutate({ documentId: doc.id, security_level: value || null })}
         />
+        <AccessPanel documentId={doc.id} collectionId={doc.collection_id} securityLevel={doc.security_level} />
         <EditableMetaField
           label="출처 시스템"
           value={doc.source_system}

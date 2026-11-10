@@ -63,6 +63,9 @@ class Collection(Base):
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True
     )
     restrict_to_members: Mapped[bool] = mapped_column(Boolean, default=False)
+    # v3 권한 모델: 문서에 security_level이 없을 때 적용할 기본 보안등급. 둘 다 없으면
+    # Public으로 본다(v2 문서의 기존 동작 보존) — app/services/access_policy.py.
+    default_security_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # The preprocessing workflow run automatically against every document
     # uploaded into this collection. Null means "use the system default
     # workflow" (seeded, always ACTIVE — see workflow_service). Null version

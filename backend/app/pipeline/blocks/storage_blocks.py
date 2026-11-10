@@ -402,7 +402,11 @@ class RagStoreBlock(BaseBlock):
         # 원문이 아니라 구조적 문맥(+옵션 LLM 문맥)을 앞에 붙인 문자열이다.
         # DocumentChunk.context_header도 새로 채운다 — 캐시된 pre-1.3.0 결과는
         # 원문만으로 임베딩됐으므로 재사용하면 안 된다.
-        return "1.3.0"
+        #
+        # 1.4.0: v3 권한 모델 — 포인트 페이로드에 sec_rank/acl/owner_id를 싣는다
+        # (app/services/access_payload.py). 이 필드가 없는 포인트는 권한 필터에
+        # 걸려 검색되지 않으므로 pre-1.4.0 캐시 결과를 재사용하면 안 된다.
+        return "1.4.0"
 
     @property
     def category(self) -> str:
@@ -485,6 +489,9 @@ class RagStoreBlock(BaseBlock):
 
             vectors = provider.embed(indexed_texts)
 
+            from app.services.access_payload import access_payload_sync
+
+            access_fields = access_payload_sync(db, str(doc.id))
             points = [
                 {
                     "id": str(chunk.id),
@@ -502,6 +509,8 @@ class RagStoreBlock(BaseBlock):
                         "tags": doc.tags or [],
                         "chunk_id": str(chunk.id),
                         "workflow_run_id": context.run_id,
+                        # v3 권한 사본(sec_rank/acl/owner_id/collection_id) — 정본은 Postgres.
+                        **access_fields,
                     },
                 }
                 for chunk, vec, indexed_text in zip(chunks, vectors, indexed_texts, strict=True)

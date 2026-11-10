@@ -20,6 +20,8 @@ import { getBlockMeta } from '../lib/workflowBlocks'
 import { apiClient } from '../lib/apiClient'
 import GoldenEvalModal from '../components/GoldenEvalModal'
 import VectorStatsModal from '../components/VectorStatsModal'
+import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../hooks/useAccess'
+import type { SecurityLevel } from '../hooks/useDocumentMetadata'
 
 // 그래프의 블록 체인을 진입 블록에서부터 첫 번째 나가는 에지를 따라가며 한 줄로
 // 요약 — 컬렉션 설정 화면의 "문서 처리" 섹션이 보여줄 미리보기용 단순화(분기가
@@ -82,6 +84,7 @@ export default function CollectionsPage() {
   const [editId, setEditId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editDescription, setEditDescription] = useState('')
+  const [editSecurityLevel, setEditSecurityLevel] = useState<'' | SecurityLevel>('')
   const [editProjectId, setEditProjectId] = useState('')
   const [shareId, setShareId] = useState<string | null>(null)
   const [shareName, setShareName] = useState('')
@@ -255,6 +258,7 @@ export default function CollectionsPage() {
         name: editName.trim(),
         description: editDescription.trim() || undefined,
         project_id: editProjectId || undefined,
+        default_security_level: editSecurityLevel || null,
         ...(editWorkflowId
           ? { default_workflow_id: editWorkflowId, default_workflow_version: editVersionMode === 'pinned' ? editVersionNumber : null }
           : { clear_default_workflow: true }),
@@ -421,6 +425,7 @@ export default function CollectionsPage() {
                             setEditId(col.id)
                             setEditName(col.name)
                             setEditDescription(col.description ?? '')
+                            setEditSecurityLevel(col.default_security_level ?? '')
                             setEditProjectId(col.project_id ?? '')
                             setEditDocCount(col.document_count)
                             setEditWorkflowId(col.default_workflow_id ?? '')
@@ -530,6 +535,28 @@ export default function CollectionsPage() {
                               rows={3}
                             />
                           </div>
+                        </div>
+                      </div>
+
+                      <div className="form-group">
+                        <div className="form-tit">
+                          <label htmlFor="edit_security_level">기본 보안등급</label>
+                        </div>
+                        <div className="form-conts">
+                          <select
+                            id="edit_security_level"
+                            className="krds-form-select"
+                            value={editSecurityLevel}
+                            onChange={(e) => setEditSecurityLevel(e.target.value as '' | SecurityLevel)}
+                          >
+                            <option value="">지정 안 함 (공개)</option>
+                            {SECURITY_LEVELS.map((level) => (
+                              <option key={level} value={level}>{SECURITY_LEVEL_LABELS[level]}</option>
+                            ))}
+                          </select>
+                          <p className="form-hint" style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>
+                            문서에 보안등급을 따로 지정하지 않으면 이 등급이 적용됩니다. 사용자의 열람등급보다 높은 문서는 검색·채팅·목록에 나오지 않습니다.
+                          </p>
                         </div>
                       </div>
 

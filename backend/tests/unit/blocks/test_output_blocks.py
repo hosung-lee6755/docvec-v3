@@ -92,7 +92,9 @@ def test_output_writes_summary_tags_category_and_indexes():
     assert fields == ["summary", "suggested_tags"]
     db.commit.assert_called_once()
     db.close.assert_called_once()
-    index.assert_called_once_with("doc-1", "요약")
+    index.assert_called_once()
+    assert index.call_args.args == ("doc-1", "요약")
+    assert {"sec_rank", "acl", "owner_id"} <= set(index.call_args.kwargs["access_fields"])
 
 
 def test_output_does_not_overwrite_user_edited_category():

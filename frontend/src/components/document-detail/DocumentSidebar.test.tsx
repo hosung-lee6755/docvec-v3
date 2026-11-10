@@ -5,6 +5,9 @@ import DocumentSidebar from './DocumentSidebar'
 import { DOCUMENT_LANGUAGE_OPTIONS, documentLanguageLabel } from './documentDetailHelpers'
 import type { Document } from '../../hooks/useDocuments'
 
+// 접근 허용 패널은 자체 쿼리를 쓰므로 AccessPanel.test.tsx에서 따로 검증한다.
+vi.mock('./AccessPanel', () => ({ default: () => null }))
+
 type SidebarProps = ComponentProps<typeof DocumentSidebar>
 
 const createDocument = (overrides: Partial<Document> = {}): Document => ({

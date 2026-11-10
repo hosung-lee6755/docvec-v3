@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
+import type { SecurityLevel } from './useDocumentMetadata'
 
 export interface User {
   id: string
@@ -7,6 +8,8 @@ export interface User {
   username: string
   role: string
   is_active: boolean
+  // v3 데이터 열람등급 — 시스템 역할(role)과 별개
+  clearance_level: SecurityLevel
   created_at: string
 }
 
@@ -17,6 +20,7 @@ interface UserListResponse {
 interface UpdateUserPayload {
   role?: 'viewer' | 'editor' | 'admin'
   is_active?: boolean
+  clearance_level?: SecurityLevel
 }
 
 export function useUsers() {

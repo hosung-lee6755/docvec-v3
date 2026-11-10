@@ -2,6 +2,11 @@ import asyncio
 import logging
 from uuid import UUID
 
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.v1.access_sync import sync_access_or_502
 from app.api.v1.deps import get_current_user
 from app.api.v1.permissions import (
     check_document_access,
@@ -19,9 +24,7 @@ from app.schemas.document import (
     DocumentTagSuggestionRequest,
     DocumentTagsUpdateRequest,
 )
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.audit import log_audit
 
 router = APIRouter()
 
@@ -90,6 +93,7 @@ async def update_document_metadata(
 
     updates = body.model_dump(exclude_unset=True)
     resets = set(updates.pop("reset_fields", None) or [])
+    previous_level = doc.security_level
     edited = list(doc.user_edited_fields or [])
     for field, value in updates.items():
         if field in _AUTO_FIELDS:
@@ -109,8 +113,17 @@ async def update_document_metadata(
         await db.execute(
             update(DocumentChunk).where(DocumentChunk.document_id == doc.id).values(language=doc.language)
         )
+    level_changed = doc.security_level != previous_level
+    if level_changed:
+        # v3: 보안등급은 열람 권한을 바꾸므로 감사 대상이다.
+        log_audit(
+            db, str(current_user.id), "document.security_level_update", "document", str(doc.id),
+            detail={"from": previous_level, "to": doc.security_level},
+        )
     await db.commit()
     await db.refresh(doc)
+    if level_changed:
+        await sync_access_or_502(db, [doc.id], "보안등급")
     return doc
 
 

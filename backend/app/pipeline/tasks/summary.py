@@ -91,9 +91,12 @@ def generate_summary(document_id: str) -> dict:
         # 요약 자체는 이미 저장됐으므로 이 문서의 처리 결과를 되돌리지 않는다
         # (best-effort, Qdrant 장애가 요약 생성 자체를 실패시키면 안 됨).
         try:
+            from app.services.access_payload import access_payload_sync
             from app.services.summary_index import index_document_summary
 
-            index_document_summary(document_id, doc.summary)
+            index_document_summary(
+                document_id, doc.summary, access_fields=access_payload_sync(db, document_id)
+            )
         except Exception:
             logger.exception("summary index upsert failed", extra={"document_id": document_id})
 

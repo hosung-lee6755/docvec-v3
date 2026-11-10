@@ -18,6 +18,8 @@ export interface Collection {
   default_workflow_version: number | null
   default_analysis_workflow_id: string | null
   default_analysis_workflow_version: number | null
+  // v3: 자체 등급이 없는 문서에 적용할 기본 보안등급(null = 공개)
+  default_security_level: 'Public' | 'Internal' | 'Confidential' | null
   reembed_status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | null
   reembed_progress: string | null
   created_at: string
@@ -79,6 +81,8 @@ export interface UpdateCollectionInput {
   default_analysis_workflow_id?: string | null
   default_analysis_workflow_version?: number | null
   clear_default_analysis_workflow?: boolean
+  // 보내면 반영(null = 해제). 생략하면 그대로 둔다.
+  default_security_level?: 'Public' | 'Internal' | 'Confidential' | null
 }
 
 export function useEmbeddingModels() {

@@ -35,20 +35,22 @@ SYNC_URL = TEST_DATABASE_URL.replace("+asyncpg", "+psycopg2")
 
 
 def test_answer_cache_key_normalizes_case_and_whitespace():
-    a = chat._answer_cache_key("  Hello World ", "c1", "p1", "m")
-    b = chat._answer_cache_key("hello world", "c1", "p1", "m")
+    a = chat._answer_cache_key("  Hello World ", "c1", "p1", "m", "fp")
+    b = chat._answer_cache_key("hello world", "c1", "p1", "m", "fp")
 
     assert a == b
-    assert a.startswith("rag_answer:m:c1:p1:")
+    assert a.startswith("rag_answer:m:c1:p1:fp:")
 
 
-def test_answer_cache_key_scopes_by_collection_project_and_model():
-    base = chat._answer_cache_key("q", None, None, "m")
+def test_answer_cache_key_scopes_by_collection_project_model_and_access():
+    base = chat._answer_cache_key("q", None, None, "m", "fp")
 
     assert "rag_answer:m:all:none:" in base
-    assert chat._answer_cache_key("q", "c", None, "m") != base
-    assert chat._answer_cache_key("q", None, "p", "m") != base
-    assert chat._answer_cache_key("q", None, None, "other") != base
+    assert chat._answer_cache_key("q", "c", None, "m", "fp") != base
+    assert chat._answer_cache_key("q", None, "p", "m", "fp") != base
+    assert chat._answer_cache_key("q", None, None, "other", "fp") != base
+    # v3: 권한 조합이 다르면 같은 질문이라도 캐시를 공유하지 않는다(답변·인용 누출 방지)
+    assert chat._answer_cache_key("q", None, None, "m", "other-fp") != base
 
 
 @pytest.mark.parametrize(
@@ -293,12 +295,17 @@ def test_retrieve_summary_chunks_empty_when_nothing_summarised(world):
 # ------------------------------------------------------------ _retrieve_chunks
 
 
-def _hit(point_id, text, coll_id=None, **payload):
+def _hit(point_id, text, coll_id=None, document_id="doc", **payload):
     return {
         "id": point_id, "score": 0.5,
-        "payload": {"text": text, "document_id": "doc", "filename": "f.pdf",
+        "payload": {"text": text, "document_id": document_id, "filename": "f.pdf",
                     "collection_id": coll_id, **payload},
     }
+
+
+def _filter_scope(query_filter) -> set[str]:
+    """qdrant_access_filter가 만든 필터의 컬렉션 범위(첫 must 조건)."""
+    return set(query_filter.must[0].match.any)
 
 
 def _retrieve(db, hits, *, collection_id=None, user_id="u", limit=2):
@@ -327,24 +334,26 @@ def test_retrieve_chunks_restricts_unscoped_search_to_accessible_collections(wor
     out, qdrant, _r, _rec = _retrieve(world.db, [], user_id=str(world.alice.id))
 
     kwargs = qdrant.search.call_args.kwargs
-    assert kwargs["collection_id"] is None
-    assert set(kwargs["collection_ids"]) == _ids(world.c_own, world.c_member, world.c_open)
+    assert _filter_scope(kwargs["query_filter"]) == _ids(world.c_own, world.c_member, world.c_open)
     assert kwargs["limit"] == 2 * chat._HYBRID_CANDIDATE_MULTIPLIER
     assert out == []
 
 
 def test_retrieve_chunks_rerank_trim_names_and_hit_recording(world):
     cid = str(world.c_own.id)
+    doc_id = str(_document(world.db, world.alice, world.c_own).id)
+    world.db.commit()
     hits = [
-        _hit("p1", "질문 키워드 관련 본문", cid, page_number=4),
-        _hit("p2", "무관한 내용", cid, index_text="질문 키워드 문맥"),
-        _hit("p3", "또 다른 내용", cid),
+        _hit("p1", "질문 키워드 관련 본문", cid, doc_id, page_number=4),
+        _hit("p2", "무관한 내용", cid, doc_id, index_text="질문 키워드 문맥"),
+        _hit("p3", "또 다른 내용", cid, doc_id),
     ]
 
-    out, qdrant, rerank, recorded = _retrieve(world.db, hits, collection_id=cid, limit=2)
+    out, qdrant, rerank, recorded = _retrieve(
+        world.db, hits, collection_id=cid, user_id=str(world.alice.id), limit=2
+    )
 
-    assert qdrant.search.call_args.kwargs["collection_id"] == cid
-    assert qdrant.search.call_args.kwargs["collection_ids"] is None
+    assert _filter_scope(qdrant.search.call_args.kwargs["query_filter"]) == {cid}
     assert len(out) == 2
     assert out[0]["collection_name"] == "own"
     assert {o["text"] for o in out} <= {h["payload"]["text"] for h in hits}
@@ -354,7 +363,9 @@ def test_retrieve_chunks_rerank_trim_names_and_hit_recording(world):
 
 
 def test_retrieve_chunks_no_hits_skips_rerank_and_stats(world):
-    out, _q, rerank, recorded = _retrieve(world.db, [], collection_id=str(world.c_own.id))
+    out, _q, rerank, recorded = _retrieve(
+        world.db, [], collection_id=str(world.c_own.id), user_id=str(world.alice.id)
+    )
 
     assert out == []
     rerank.assert_not_called()

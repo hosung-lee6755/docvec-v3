@@ -11,6 +11,7 @@ import CollectionsPage from './pages/CollectionsPage'
 import SearchPage from './pages/SearchPage'
 import DocumentDetailPage from './pages/DocumentDetailPage'
 import UsersPage from './pages/UsersPage'
+import GroupsPage from './pages/GroupsPage'
 import ChatPage from './pages/ChatPage'
 import SettingsPage from './pages/SettingsPage'
 import AuditLogPage from './pages/AuditLogPage'
@@ -67,6 +68,7 @@ export default function App() {
         <Route path="workflows/:id/runs" element={<WorkflowRunsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="users" element={<UsersPage />} />
+        <Route path="groups" element={<GroupsPage />} />
         <Route path="audit-logs" element={<AuditLogPage />} />
         <Route path="usage" element={<UsageDashboardPage />} />
         <Route path="dictionary" element={<DictionaryPage />} />

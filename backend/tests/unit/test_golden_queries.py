@@ -13,6 +13,23 @@ from app.api.v1.endpoints.golden_queries import _DOC_DEDUP_MULTIPLIER, run_golde
 from app.schemas.golden_query import GoldenEvalRunRequest
 
 
+class _AllowAll:
+    def __contains__(self, _item) -> bool:
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _stub_access_policy():
+    """권한 판정은 test_access_policy*.py가 검증한다 — 여기선 precision/recall 계산만 본다."""
+    with (
+        patch("app.services.access_policy.build_access_context", new=AsyncMock(return_value=MagicMock())),
+        patch("app.services.access_policy.qdrant_access_filter", return_value=None),
+        patch("app.services.access_policy.load_document_facts", new=AsyncMock(return_value=[])),
+        patch("app.services.access_policy.visible_document_ids", return_value=_AllowAll()),
+    ):
+        yield
+
+
 def _hit(document_id: str) -> dict:
     return {"payload": {"document_id": document_id}}
 

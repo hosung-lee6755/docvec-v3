@@ -32,6 +32,8 @@ from app.db.models.pii_detection import PiiDetection
 from app.db.models.quality_report import QualityReport
 from app.db.models.dictionary_revision import DictionaryRevision
 from app.db.models.block_execution_cache import BlockExecutionCache
+from app.db.models.user_group import UserGroup, UserGroupMember
+from app.db.models.document_acl import DocumentAclEntry
 
 __all__ = [
     "User",
@@ -68,4 +70,7 @@ __all__ = [
     "QualityReport",
     "DictionaryRevision",
     "BlockExecutionCache",
+    "UserGroup",
+    "UserGroupMember",
+    "DocumentAclEntry",
 ]

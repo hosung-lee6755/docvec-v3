@@ -9,6 +9,12 @@ from app.core.config import settings
 from app.db.models.search_history import SearchHistory
 from app.db.models.user import User
 from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
+from app.services.access_policy import (
+    build_access_context,
+    load_document_facts,
+    qdrant_access_filter,
+    visible_document_ids,
+)
 from app.services.bm25_service import bm25_rerank
 from app.services.chunk_stats import record_hits
 from app.services.dictionary_service import expand_query
@@ -55,27 +61,30 @@ async def perform_search(
     if request.diversify:
         fetch_limit = max(fetch_limit, request.limit * _MMR_CANDIDATE_MULTIPLIER)
 
-    # With no collection_id ("search all my documents"), every collection shares one
-    # physical Qdrant collection, so an unscoped query must be restricted to this
-    # user's own accessible collections or it would return every user's private
-    # document text (see chat.py's _retrieve_chunks, which already does this).
-    collection_ids = None
-    if not request.collection_id:
-        collection_ids = await accessible_collection_ids(
-            db, user, project_id=request.project_id
-        )
-        if not collection_ids:
+    # 범위: 단일 컬렉션(엔드포인트가 이미 접근 확인) 또는 접근 가능한 컬렉션 전체(프로젝트로
+    # 좁힐 수 있음). 모든 컬렉션이 물리 Qdrant 컬렉션 하나를 공유하므로 범위 없이 검색하면
+    # 다른 사용자의 비공개 문서가 나온다.
+    if request.collection_id:
+        scope = [str(request.collection_id)]
+    else:
+        scope = await accessible_collection_ids(db, user, project_id=request.project_id)
+        if not scope:
             return []
 
+    # v3 권한: 검색 단계에서 보안등급·ACL로 거르고(qdrant_access_filter), 결과는 Postgres
+    # 기준으로 한 번 더 확인한다(페이로드 동기화가 늦어도 누출되지 않게 — fail-closed).
+    ctx = await build_access_context(db, user)
     hits = qdrant_service.search(
         collection=settings.qdrant_collection_name,
         vector=query_vector,
         limit=fetch_limit,
-        collection_id=str(request.collection_id) if request.collection_id else None,
-        collection_ids=collection_ids,
-        filters=request.filters,
         with_vectors=request.diversify,
+        query_filter=qdrant_access_filter(ctx, scope, extra=request.filters),
     )
+    if hits:
+        facts = await load_document_facts(db, {h["payload"].get("document_id") for h in hits})
+        allowed = visible_document_ids(ctx, facts)
+        hits = [h for h in hits if h["payload"].get("document_id") in allowed]
     if hits:
         await asyncio.to_thread(record_hits, [h["id"] for h in hits])
 

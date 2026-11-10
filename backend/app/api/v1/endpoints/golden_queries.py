@@ -129,14 +129,29 @@ async def run_golden_eval(
     results = []
     precision_sum = 0.0
     recall_sum = 0.0
+    # v3: 평가는 요청자 권한으로 검색한다 — 평가 결과(검색된 문서 id)도 정보이므로
+    # 요청자가 볼 수 없는 문서가 섞이면 안 된다. 같은 이유로 Postgres로 재확인한다.
+    from app.services.access_policy import (
+        build_access_context,
+        load_document_facts,
+        qdrant_access_filter,
+        visible_document_ids,
+    )
+
+    ctx = await build_access_context(db, current_user)
+    access_filter = qdrant_access_filter(ctx, [str(collection_id)])
     for gq in golden_queries:
         vector = await asyncio.to_thread(_embed_query, gq.query)
         hits = qdrant_service.search(
             collection=settings.qdrant_collection_name,
             vector=vector,
             limit=data.top_k * _DOC_DEDUP_MULTIPLIER,
-            collection_id=str(collection_id),
+            query_filter=access_filter,
         )
+        if hits:
+            facts = await load_document_facts(db, {h["payload"].get("document_id") for h in hits})
+            allowed = visible_document_ids(ctx, facts)
+            hits = [h for h in hits if h["payload"].get("document_id") in allowed]
 
         retrieved_ids: list[str] = []
         for h in hits:

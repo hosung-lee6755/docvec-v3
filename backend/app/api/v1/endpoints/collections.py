@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.access_sync import sync_access_or_502
 from app.api.v1.deps import get_current_user
 from app.api.v1.permissions import accessible_project_ids, check_collection_access, check_project_access
 from app.core.config import settings
@@ -24,6 +25,9 @@ from app.db.models.project_member import ProjectMember
 from app.db.models.user import User
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 from app.db.session import get_db
+from app.schemas.access import SecurityLevel
+from app.services.access_policy import build_access_context, document_visibility_clause
+from app.services.audit import log_audit
 from app.services.document_state import claim_document_status
 from app.services.document_storage import release_original
 from app.services.embedding import EMBEDDING_MODEL_REGISTRY
@@ -62,6 +66,8 @@ class CollectionCreate(BaseModel):
     default_workflow_version: int | None = None
     default_analysis_workflow_id: UUID | None = None
     default_analysis_workflow_version: int | None = None
+    # v3: 등급이 없는 문서에 적용할 기본 보안등급. null이면 Public.
+    default_security_level: SecurityLevel | None = None
 
     _validate_model = field_validator("embedding_model")(_validate_embedding_model)
 
@@ -86,6 +92,9 @@ class CollectionUpdate(BaseModel):
     default_analysis_workflow_id: UUID | None = None
     default_analysis_workflow_version: int | None = None
     clear_default_analysis_workflow: bool = False
+    # v3: 필드를 보내면 반영한다 — null을 보내면 기본 등급을 해제(Public)한다.
+    # 보내지 않은 것과 null은 model_fields_set으로 구분한다.
+    default_security_level: SecurityLevel | None = None
 
     _validate_model = field_validator("embedding_model")(
         lambda v: _validate_embedding_model(v) if v is not None else v
@@ -113,6 +122,7 @@ class CollectionResponse(BaseModel):
     default_workflow_version: int | None = None
     default_analysis_workflow_id: UUID | None = None
     default_analysis_workflow_version: int | None = None
+    default_security_level: str | None = None
     reembed_status: str | None = None
     reembed_progress: str | None = None
     created_at: datetime
@@ -170,6 +180,7 @@ async def create_collection(
             str(data.default_analysis_workflow_id) if data.default_analysis_workflow_id else None
         ),
         default_analysis_workflow_version=data.default_analysis_workflow_version,
+        default_security_level=data.default_security_level,
         created_by=str(current_user.id),
     )
     db.add(collection)
@@ -244,8 +255,12 @@ async def list_collections(
             return project_member_roles.get(c.project_id)
         return None
 
+    # v3: 숨겨진(등급·ACL) 문서는 개수에도 넣지 않는다 — 존재 자체가 정보다.
+    count_ctx = await build_access_context(db, current_user)
     counts_result = await db.execute(
-        select(Document.collection_id, func.count(Document.id)).group_by(Document.collection_id)
+        select(Document.collection_id, func.count(Document.id))
+        .where(document_visibility_clause(count_ctx))
+        .group_by(Document.collection_id)
     )
     counts = dict(counts_result.all())
     items = [
@@ -267,6 +282,7 @@ async def list_collections(
             "default_workflow_version": c.default_workflow_version,
             "default_analysis_workflow_id": c.default_analysis_workflow_id,
             "default_analysis_workflow_version": c.default_analysis_workflow_version,
+            "default_security_level": c.default_security_level,
             "created_at": c.created_at,
             "document_count": counts.get(c.id, 0),
             "is_owner": str(c.created_by) == str(current_user.id),
@@ -396,8 +412,30 @@ async def update_collection(
         collection.default_analysis_workflow_id = str(data.default_analysis_workflow_id)
         collection.default_analysis_workflow_version = data.default_analysis_workflow_version
 
+    previous_level = collection.default_security_level
+    level_changed = (
+        "default_security_level" in data.model_fields_set
+        and data.default_security_level != previous_level
+    )
+    if level_changed:
+        collection.default_security_level = data.default_security_level
+        log_audit(
+            db, str(current_user.id), "collection.security_level_update", "collection",
+            str(collection.id), detail={"from": previous_level, "to": data.default_security_level},
+        )
+
     await db.commit()
     await db.refresh(collection)
+    if level_changed:
+        # 자체 등급이 없는 문서만 컬렉션 기본 등급을 따른다 — 그 문서들의 사본만 갱신.
+        inheriting = (
+            await db.scalars(
+                select(Document.id).where(
+                    Document.collection_id == collection.id, Document.security_level.is_(None)
+                )
+            )
+        ).all()
+        await sync_access_or_502(db, inheriting, "컬렉션 기본 보안등급")
     return collection
 
 
@@ -533,8 +571,14 @@ async def export_collection(
         raise HTTPException(status_code=404, detail="Collection not found")
     await check_collection_access(db, collection_id, current_user, min_role="viewer")
 
+    # v3: 내보내기는 본문 전체를 돌려주므로 요청자가 볼 수 있는 문서(등급·ACL)만 담는다.
+    ctx = await build_access_context(db, current_user)
     docs = (
-        await db.scalars(select(Document).where(Document.collection_id == collection_id))
+        await db.scalars(
+            select(Document).where(
+                Document.collection_id == collection_id, document_visibility_clause(ctx)
+            )
+        )
     ).all()
 
     exported_docs = []

@@ -67,7 +67,7 @@ def test_search_document_summaries_embeds_query_and_limits_results():
 
     provider.embed.assert_called_once_with(["질의"])
     qdrant.search.assert_called_once_with(
-        summary_index.SUMMARY_COLLECTION_NAME, [0.1] * 4, limit=3
+        summary_index.SUMMARY_COLLECTION_NAME, [0.1] * 4, limit=3, query_filter=None
     )
     assert out == [{"id": "d1"}]
 

@@ -197,7 +197,10 @@ def test_summary_stores_stripped_text_and_indexes_it():
     assert out.result == {"document_id": "doc-1", "status": "DONE"}
     assert doc.summary == "요약 결과입니다."
     assert doc.summary_status == "DONE"
-    out.index.assert_called_once_with("doc-1", "요약 결과입니다.")
+    out.index.assert_called_once()
+    assert out.index.call_args.args == ("doc-1", "요약 결과입니다.")
+    # v3: 요약 포인트에도 권한 사본을 싣는다(없으면 권한 필터에 걸려 검색되지 않음)
+    assert {"sec_rank", "acl", "owner_id"} <= set(out.index.call_args.kwargs["access_fields"])
     out.getter.assert_called_once_with(summary._SUMMARY_MODEL_KEY)
 
 

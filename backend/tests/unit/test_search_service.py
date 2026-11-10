@@ -5,6 +5,26 @@ import pytest
 
 from app.schemas.search import SearchRequest
 from app.services import search_service
+from app.services.access_policy import AccessContext
+
+
+class _AllowAll:
+    def __contains__(self, _item) -> bool:
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _stub_access_policy():
+    """이 파일은 DB를 목으로 쓰는 검색 파이프라인(임베딩·BM25·MMR·이력) 테스트다.
+    v3 권한 판정 자체는 test_access_policy*.py, test_access_qdrant_filter.py,
+    test_access_leak_matrix.py가 실제 DB·Qdrant로 검증하므로 여기서는 통과시킨다."""
+    ctx = AccessContext.create("u", ["col-1"], "Internal")
+    with (
+        patch.object(search_service, "build_access_context", new=AsyncMock(return_value=ctx)),
+        patch.object(search_service, "load_document_facts", new=AsyncMock(return_value={})),
+        patch.object(search_service, "visible_document_ids", return_value=_AllowAll()),
+    ):
+        yield
 
 
 def _make_hit(chunk_id: str, score: float, document_id: str, text: str) -> dict:

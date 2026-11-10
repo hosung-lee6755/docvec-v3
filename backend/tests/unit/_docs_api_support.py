@@ -15,7 +15,7 @@ from tests.unit.test_documents_storage_release import OWNER_ID, _doc, db_session
 
 def owner_user(role: str = "viewer") -> SimpleNamespace:
     """_doc()이 만드는 문서의 소유자 — check_document_access를 그대로 통과한다."""
-    return SimpleNamespace(id=OWNER_ID, role=role, email="owner@example.com")
+    return SimpleNamespace(id=OWNER_ID, role=role, email="owner@example.com", clearance_level="Internal")
 
 
 def admin_user() -> SimpleNamespace:
@@ -24,7 +24,7 @@ def admin_user() -> SimpleNamespace:
 
 def stranger_user() -> SimpleNamespace:
     """문서 소유자도, 컬렉션 멤버도 아닌 사용자."""
-    return SimpleNamespace(id=str(uuid4()), role="viewer", email="stranger@example.com")
+    return SimpleNamespace(id=str(uuid4()), role="viewer", email="stranger@example.com", clearance_level="Internal")
 
 
 async def add_doc(db, key: str, **overrides):

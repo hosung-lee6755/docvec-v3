@@ -5,12 +5,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user
 from app.api.v1.permissions import (
-    accessible_collection_ids,
     check_collection_access,
     check_document_access,
 )
@@ -79,13 +78,20 @@ async def _points_at_other_live_run(db: AsyncSession, doc: Document, run: Workfl
 
 
 async def _restrict_to_accessible_runs(db: AsyncSession, query, user: User):
-    """문서 목록과 같은 기준: 내가 올린 문서이거나 접근 가능한 컬렉션의 문서/실행."""
-    shared_ids = await accessible_collection_ids(db, user)
-    visible = [Document.created_by == str(user.id)]
-    if shared_ids:
-        visible.append(Document.collection_id.in_(shared_ids))
-        visible.append(WorkflowRun.collection_id.in_(shared_ids))
-    return query.outerjoin(Document, Document.id == WorkflowRun.document_id).where(or_(*visible))
+    """문서 목록과 같은 기준(v3): 문서 실행은 그 문서를 볼 수 있을 때(업로더·등급·ACL),
+    문서 없는 컬렉션 단위 실행은 그 컬렉션에 접근할 수 있을 때만 보인다 — 실행 기록에는
+    문서 파일명이 실리므로 숨겨진 문서의 존재가 새지 않게 한다."""
+    from app.services.access_policy import build_access_context, document_visibility_clause
+
+    ctx = await build_access_context(db, user)
+    visible = or_(
+        and_(WorkflowRun.document_id.is_not(None), document_visibility_clause(ctx)),
+        and_(
+            WorkflowRun.document_id.is_(None),
+            WorkflowRun.collection_id.in_(sorted(ctx.collection_ids)),
+        ),
+    )
+    return query.outerjoin(Document, Document.id == WorkflowRun.document_id).where(visible)
 
 
 @router.post("/{workflow_id}/run")

@@ -21,6 +21,7 @@ from app.db.models.project_member import ProjectMember
 from app.db.models.user import User
 from app.db.models.user_api_key import UserApiKey
 from app.db.session import get_db
+from app.schemas.access import SecurityLevel
 from app.services.audit import log_audit
 
 SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000001"
@@ -35,6 +36,8 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     system_prompt: str | None
+    # v3: 데이터 열람등급(Public < Internal < Confidential). 시스템 역할(role)과 별개.
+    clearance_level: str = "Internal"
     created_at: datetime
 
     class Config:
@@ -44,6 +47,7 @@ class UserResponse(BaseModel):
 class UserUpdate(BaseModel):
     role: Literal["viewer", "editor", "admin"] | None = None
     is_active: bool | None = None
+    clearance_level: SecurityLevel | None = None
 
 
 @router.get("")
@@ -135,6 +139,14 @@ async def update_user(
         user.role = data.role
     if data.is_active is not None:
         user.is_active = data.is_active
+    if data.clearance_level is not None and data.clearance_level != user.clearance_level:
+        # 열람등급은 볼 수 있는 문서 범위를 바꾸므로 별도 감사 행으로 남긴다. 검색 페이로드는
+        # 문서 쪽 등급만 담으므로 동기화할 것은 없다(요청마다 컨텍스트를 새로 만든다).
+        log_audit(
+            db, str(current_user.id), "user.clearance_update", "user", str(user.id),
+            detail={"from": user.clearance_level, "to": data.clearance_level},
+        )
+        user.clearance_level = data.clearance_level
     log_audit(
         db, str(current_user.id), "user.update", "user", str(user.id),
         detail={"role": data.role, "is_active": data.is_active},

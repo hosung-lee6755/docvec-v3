@@ -714,6 +714,20 @@ Reranker: Cross-Encoder (BAAI/bge-reranker-v2-m3)
 - 다운로드·조회·질의·답변 감사 로그
 - 로그 내 민감정보 최소화
 
+### 15.4 구현 현황 (v3 마일스톤 1, 2026-11-10)
+
+| 15.2 항목 | 상태 | 구현 |
+|---|---|---|
+| RBAC | 구현(v2) | 시스템 역할 viewer/editor/admin, 컬렉션·프로젝트 역할 |
+| ABAC — 보안등급 | 구현 | 문서 `security_level` → 컬렉션 `default_security_level` → Public, 사용자 `clearance_level`과 순위 비교 |
+| 문서별 ACL | 구현 | `document_acl_entries`(사용자·그룹), 사용자 그룹 `user_groups` |
+| Tenant Isolation | 미구현 | 단일 테넌트. 물리 Qdrant 컬렉션 하나를 공유하고 페이로드 필터로 격리 |
+| ABAC — 조직 속성 | 미구현 | 마일스톤 3(사내 계정 연동)에서 조직 정보를 받아 그룹으로 매핑 예정 |
+
+15.1의 "검색 요청에 ACL Filter 적용 → 허용된 청크만 Reranking·LLM 전달"은 Qdrant 페이로드 필터 + Postgres 재확인의 2단계로 구현했다.
+판정 규칙의 단일 출처는 `backend/app/services/access_policy.py`이고, 알고리즘·검증 방법은 `docs/기술문서_시스템_아키텍처.md` §11.4,
+운영 절차(배포 후 권한 사본 백필 포함)는 `docs/유지보수_가이드.md` 1.11절에 있다. 관리자도 문서 열람 우회가 없다.
+
 ---
 
 ## 16. Hybrid Retrieval
