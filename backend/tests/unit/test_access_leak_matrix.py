@@ -256,3 +256,84 @@ async def test_answer_cache_is_partitioned_by_access(world):
     key_a = chat_task._answer_cache_key("q", None, None, "m", fingerprints["public_reader"])
     key_b = chat_task._answer_cache_key("q", None, None, "m", fingerprints["confidential_reader"])
     assert key_a != key_b
+
+
+# -- 외부 에이전트(MCP) 도구 경로(v3 마일스톤 4) ---------------------------------------
+# 토큰 주인의 권한으로 움직이므로 웹과 같은 기대값을 따라야 한다.
+
+async def _mcp_ctx(world, who):
+    from app.mcp.tools import ToolContext
+
+    return ToolContext(db=world.db, user=world.users[who], token=SimpleNamespace(id=uuid4()))
+
+
+@pytest.fixture
+async def chunks(world):
+    """문서마다 전처리 run 하나와 청크 하나를 만든다(read_chunk·read_document용)."""
+    from app.db.models.document_chunk import DocumentChunk
+    from app.db.models.workflow_run import WorkflowRun
+    from tests.unit.api_pg_helpers import make_version, make_workflow
+
+    owner = world.users["owner"]
+    workflow = await make_workflow(world.db, owner, None, kind="PREPROCESS", name=f"pre-{uuid4().hex[:6]}")
+    version = await make_version(world.db, workflow, owner)
+    out = {}
+    for key, doc in world.docs.items():
+        run = WorkflowRun(id=str(uuid4()), version_id=str(version.id), document_id=str(doc.id),
+                          collection_id=str(doc.collection_id), status="COMPLETED")
+        world.db.add(run)
+        await world.db.flush()
+        chunk = DocumentChunk(id=str(uuid4()), document_id=str(doc.id), run_id=str(run.id), chunk_order=0,
+                              chunk_text=f"{key} 본문", original_text=f"{key} 가리기 전 원문")
+        world.db.add(chunk)
+        out[key] = chunk
+    await world.db.flush()
+    return out
+
+
+@_per_user()
+async def test_mcp_search_tool(world, who):
+    from app.mcp.tools import SearchArgs, search_documents
+
+    ctx = await _mcp_ctx(world, who)
+    result = await search_documents(ctx, SearchArgs(query="q", limit=20))
+    assert _keys(world, [r["document_id"] for r in result["results"]]) == EXPECTED[who]
+    assert result["untrusted_content"] is True
+    # 검색 페이로드의 권한 사본(sec_rank, acl, owner_id)은 결과에 내보내지 않는다
+    assert all(set(r) == {"chunk_id", "document_id", "filename", "page_number", "score", "excerpt"}
+               for r in result["results"])
+
+
+@_per_user()
+async def test_mcp_read_tools(world, chunks, who):
+    from app.mcp.tools import ReadChunkArgs, ReadDocumentArgs, ToolError, read_chunk, read_document
+
+    ctx = await _mcp_ctx(world, who)
+    by_chunk, by_doc = set(), set()
+    for key, chunk in chunks.items():
+        try:
+            out = await read_chunk(ctx, ReadChunkArgs(chunk_id=chunk.id))
+            assert "가리기 전" not in str(out)  # original_text는 내보내지 않는다
+            by_chunk.add(key)
+        except ToolError as exc:
+            assert "볼 권한이 없습니다" in str(exc)
+        try:
+            out = await read_document(ctx, ReadDocumentArgs(document_id=world.docs[key].id))
+            assert [c["text"] for c in out["chunks"]] == [f"{key} 본문"]
+            by_doc.add(key)
+        except ToolError as exc:
+            assert "볼 권한이 없습니다" in str(exc)
+    assert by_chunk == EXPECTED[who] and by_doc == EXPECTED[who]
+
+
+@_per_user()
+async def test_mcp_scope_and_collection_listing(world, who):
+    from app.mcp.tools import NoArgs, SearchArgs, ToolError, list_collections, search_documents
+
+    ctx = await _mcp_ctx(world, who)
+    listed = {c["collection_id"] for c in (await list_collections(ctx, NoArgs()))["collections"]}
+    mine = {str(world.col.id), str(world.conf_col.id)}
+    assert listed & mine == (set() if who == "outsider" else mine)
+    if who == "outsider":
+        with pytest.raises(ToolError):
+            await search_documents(ctx, SearchArgs(query="q", collection_id=world.col.id))

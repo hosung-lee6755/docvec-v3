@@ -110,6 +110,8 @@ def record_answer_trace(
     system_prompt: str | None = None,
     usage: dict | None = None,
     latency_ms: int | None = None,
+    channel: str = "web",
+    access_token_id: str | None = None,
 ) -> None:
     """답변 한 건의 추적 기록을 세션에 더한다. 커밋은 호출자가 한다. 예외를 던지지 않는다."""
     try:
@@ -138,6 +140,8 @@ def record_answer_trace(
                 input_tokens=(usage or {}).get("input_tokens"),
                 output_tokens=(usage or {}).get("output_tokens"),
                 latency_ms=latency_ms,
+                channel=channel,
+                access_token_id=access_token_id,
                 query=query,
                 answer=answer,
                 status=status,

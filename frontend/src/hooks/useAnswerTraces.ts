@@ -15,6 +15,8 @@ export interface AnswerTraceItem {
   broadened: boolean
   cache_hit: boolean
   model_key: string | null
+  // 'web'은 채팅 화면, 'mcp'는 외부 에이전트의 ask 도구
+  channel: string
   source_count: number
   cited_count: number
 }
@@ -51,6 +53,8 @@ export interface AnswerTraceDetail {
   grounding: Grounding | null
   cache_hit: boolean
   model_key: string | null
+  channel: string
+  access_token_id: string | null
   provider: string | null
   verifier_model: string | null
   system_prompt_source: string | null

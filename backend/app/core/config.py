@@ -92,6 +92,14 @@ class Settings(BaseSettings):
     # 평문 LDAP 허용. 개발용이며 운영(production)에서는 켤 수 없다.
     ldap_allow_insecure: bool = False
 
+    # v3 마일스톤 4 — 외부 에이전트 연동(MCP). 직원이 발급한 개인 접근 토큰으로만 접속한다.
+    mcp_enabled: bool = False
+    mcp_answer_model: str = "qwen2.5-3b"
+    mcp_answer_timeout_seconds: int = 180
+    mcp_token_default_days: int = 90
+    mcp_token_max_days: int = 365
+    mcp_tokens_per_user: int = 10
+
     @field_validator("environment")
     @classmethod
     def validate_environment(cls, v: str) -> str:

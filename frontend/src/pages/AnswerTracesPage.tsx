@@ -75,6 +75,7 @@ function TraceDetail({ traceId, onClose }: { traceId: string; onClose: () => voi
   const facts: [string, string][] = [
     ['질문한 사람', `${data.username ?? '(삭제된 사용자)'} · 역할 ${data.user_role ?? '-'} · 열람등급 ${data.clearance_level ?? '-'}`],
     ['권한 맥락', `소속 그룹 ${data.group_ids.length}개 · 접근 가능 컬렉션 ${data.accessible_collection_count}개`],
+    ['질문 경로', data.channel === 'mcp' ? `외부 에이전트(토큰 ${data.access_token_id ?? '삭제됨'})` : '채팅 화면'],
     ['모델', `${data.model_key ?? '-'} (${data.provider ?? '-'}) · 검증 모델 ${data.verifier_model ?? '-'}`],
     ['근거 검증', `${data.grounding ? GROUNDING_LABELS[data.grounding] : '-'}${data.broadened ? ' · 재검색함' : ''}${data.cache_hit ? ' · 캐시 재사용' : ''}`],
     ['시스템 프롬프트', PROMPT_SOURCE_LABELS[data.system_prompt_source ?? ''] ?? '-'],
@@ -193,7 +194,10 @@ export default function AnswerTracesPage() {
               {items.map((t) => (
                 <tr key={t.id} style={{ background: selected === t.id ? '#eff6ff' : undefined }}>
                   <td style={{ whiteSpace: 'nowrap', ...muted }}>{formatTime(t.created_at)}</td>
-                  <td>{t.username ?? '(삭제된 사용자)'}</td>
+                  <td>
+                    {t.username ?? '(삭제된 사용자)'}
+                    {t.channel === 'mcp' && <> <span className="krds-badge xsmall bg-information">외부 에이전트</span></>}
+                  </td>
                   <td>
                     <button type="button" className="krds-btn text small" onClick={() => setSelected(t.id)}>
                       {t.query}

@@ -30,6 +30,10 @@ PUBLIC_ROUTES = {
     ("POST", "/api/v1/auth/refresh"),
     # 리프레시 쿠키만 지운다 — 액세스 토큰이 만료된 사용자도 로그아웃할 수 있어야 한다.
     ("POST", "/api/v1/auth/logout"),
+    # MCP 무상태 서버는 GET(서버 발신 스트림)과 DELETE(세션 종료)를 지원하지 않아 항상 405만 돌려준다.
+    # 데이터를 내지 않으므로 인증 전에 답해도 된다. 실제 요청(POST)은 개인 접근 토큰을 요구한다.
+    ("GET", "/api/v1/mcp"),
+    ("DELETE", "/api/v1/mcp"),
 }
 FRAMEWORK_PATHS = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
 

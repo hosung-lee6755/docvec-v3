@@ -475,6 +475,8 @@ def generate_answer(self, chat_message_id: str) -> dict:
             scope_collection_id=collection_id_str,
             scope_project_id=project_id_str,
             model_key=conversation.model_key,
+            channel=conversation.channel or "web",
+            access_token_id=str(conversation.access_token_id) if conversation.access_token_id else None,
         )
 
         redis_client = redis.from_url(settings.redis_url)

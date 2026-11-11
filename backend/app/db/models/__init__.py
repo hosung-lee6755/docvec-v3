@@ -36,6 +36,7 @@ from app.db.models.user_group import UserGroup, UserGroupMember
 from app.db.models.document_acl import DocumentAclEntry
 from app.db.models.answer_trace import AnswerTrace, AnswerTraceSource
 from app.db.models.source_connector import ConnectorRun, SourceConnector, SourceItem
+from app.db.models.access_token import PersonalAccessToken
 
 __all__ = [
     "User",
@@ -77,6 +78,7 @@ __all__ = [
     "DocumentAclEntry",
     "AnswerTrace",
     "AnswerTraceSource",
+    "PersonalAccessToken",
     "SourceConnector",
     "SourceItem",
     "ConnectorRun",

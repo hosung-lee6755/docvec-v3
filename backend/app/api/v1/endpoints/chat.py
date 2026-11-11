@@ -282,7 +282,8 @@ async def list_conversations(
     if project_id is not None:
         await check_project_access(db, project_id, current_user, min_role="viewer")
 
-    filters = [ChatConversation.user_id == str(current_user.id)]
+    # 외부 에이전트(MCP)의 ask 대화는 웹 채팅 목록에 넣지 않는다(답변 추적 기록에서 본다)
+    filters = [ChatConversation.user_id == str(current_user.id), ChatConversation.channel == "web"]
     # Personal ("전체" 채팅 메뉴) and project-scoped chat history are kept separate:
     # omit project_id to see only personal conversations, pass it to see only that
     # project's — never a mix of both.

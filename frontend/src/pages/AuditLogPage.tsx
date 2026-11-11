@@ -37,6 +37,9 @@ const ACTION_LABELS: Record<string, string> = {
   'connector.sync': '원천 동기화 실행',
   'directory.sync': 'AD 동기화',
   'directory.sync_failed': 'AD 동기화 실패',
+  'access_token.create': '외부 에이전트 토큰 발급',
+  'access_token.revoke': '외부 에이전트 토큰 회수',
+  'mcp.tool_call': '외부 에이전트 도구 호출',
 }
 
 export default function AuditLogPage() {

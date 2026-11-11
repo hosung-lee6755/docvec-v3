@@ -25,6 +25,7 @@ import WorkflowEditorPage from './pages/WorkflowEditorPage'
 import WorkflowRunsPage from './pages/WorkflowRunsPage'
 import ProcessingStatusPage from './pages/ProcessingStatusPage'
 import CleaningRulesPage from './pages/CleaningRulesPage'
+import AccessTokensPage from './pages/AccessTokensPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -73,6 +74,7 @@ export default function App() {
         <Route path="users" element={<UsersPage />} />
         <Route path="groups" element={<GroupsPage />} />
         <Route path="connectors" element={<ConnectorsPage />} />
+        <Route path="access-tokens" element={<AccessTokensPage />} />
         <Route path="audit-logs" element={<AuditLogPage />} />
         <Route path="answer-traces" element={<AnswerTracesPage />} />
         <Route path="governance-report" element={<GovernanceReportPage />} />

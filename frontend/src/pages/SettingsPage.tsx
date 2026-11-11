@@ -4,6 +4,7 @@ import { useApiKeys, useSetApiKey, useDeleteApiKey } from '../hooks/useApiKeys'
 import { useProfile, useUpdateProfile, useChangePassword, useSetSystemPrompt } from '../hooks/useProfile'
 import { useChatModels } from '../hooks/useChat'
 import { useAuthStore } from '../store/authStore'
+import AccessTokenSection from '../components/settings/AccessTokenSection'
 
 const PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
@@ -338,11 +339,12 @@ function ApiKeySection() {
   )
 }
 
-type SettingsTab = 'ai' | 'account'
+type SettingsTab = 'ai' | 'account' | 'agent'
 
 const TABS: { key: SettingsTab; label: string }[] = [
   { key: 'account', label: '계정관리' },
   { key: 'ai', label: 'AI 관리' },
+  { key: 'agent', label: '외부 에이전트' },
 ]
 
 export default function SettingsPage() {
@@ -383,6 +385,7 @@ export default function SettingsPage() {
               <ApiKeySection />
             </>
           )}
+          {tab === 'agent' && <AccessTokenSection />}
           {tab === 'account' && (
             <>
               <ProfileSection />
