@@ -1,0 +1,33 @@
+# 개발·테스트 전용 AD DC(Samba). LDAP 로그인과 SMB 커넥터를 실제 프로토콜로 확인할 때만 띄운다.
+#   docker compose -f docker-compose.yml -f docker-compose.dev-directory.yml --profile dev-directory up -d ad-dc
+# 운영 배포에는 포함하지 않는다. 호스트 포트는 127.0.0.1에만 연다.
+services:
+  ad-dc:
+    profiles: ["dev-directory"]
+    build:
+      context: ./dev/directory
+    hostname: dc1
+    domainname: docvec.local
+    environment:
+      - DEV_AD_PASSWORD=${DEV_AD_PASSWORD?set DEV_AD_PASSWORD in .env}
+    # NTFS ACL을 security.* 확장 속성에 저장하려면 필요하다(개발 컨테이너에만 준다).
+    cap_add:
+      - SYS_ADMIN
+    volumes:
+      - ad_dc_state:/var/lib/samba
+      - ad_dc_etc:/etc/samba
+      - ad_dc_docs:/srv/docs
+    # LDAPS 인증서의 CN(DC1.docvec.local)과 같은 이름으로 접속해야 인증서 검증을 켤 수 있다.
+    networks:
+      default:
+        aliases:
+          - dc1.docvec.local
+    ports:
+      - "127.0.0.1:10389:389"
+      - "127.0.0.1:10636:636"
+      - "127.0.0.1:10445:445"
+
+volumes:
+  ad_dc_state:
+  ad_dc_etc:
+  ad_dc_docs:

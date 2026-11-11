@@ -30,6 +30,7 @@ from app.services.access_policy import (
     load_document_facts,
 )
 from app.services.audit import log_audit
+from app.services.source_locks import ensure_not_connector_document, is_connector_document
 
 router = APIRouter()
 
@@ -77,6 +78,7 @@ async def _acl_response(db: AsyncSession, doc: Document, user: User) -> Document
         effective_security_level=SECURITY_LEVELS[effective_level_rank(facts)],
         restricted=bool(entries),
         can_relax=await can_relax_document(db, user, doc),
+        source_managed=await is_connector_document(db, doc.id),
         entries=[
             AclEntryOut(
                 principal_type=e.principal_type,
@@ -125,6 +127,7 @@ async def replace_document_acl(
 ):
     """허용 목록 전체 교체. 빈 목록을 보내면 제한을 해제한다."""
     doc = await _get_editable_document(db, document_id, current_user)
+    await ensure_not_connector_document(db, doc.id)
 
     new_keys = {(e.principal_type, str(e.principal_id)) for e in body.entries}
     await _validate_principals(db, new_keys)

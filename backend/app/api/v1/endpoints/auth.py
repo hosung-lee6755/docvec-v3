@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 from uuid import uuid4
 
@@ -15,10 +16,13 @@ from app.core.security import (
     verify_password,
     verify_token,
 )
-from app.db.models.user import User
+from app.db.models.user import AUTH_SOURCE_LDAP, AUTH_SOURCE_LOCAL, User
 from app.db.session import get_db
 from app.schemas.auth import LoginRequest, LoginResponse, TokenResponse, UserCreate, UserResponse
 from app.services.audit import log_audit
+from app.services.directory import get_directory_client
+from app.services.directory.ldap_client import DirectoryUnavailable
+from app.services.directory.provisioning import DirectoryConflict, provision_login
 
 router = APIRouter()
 _bearer = HTTPBearer()
@@ -45,6 +49,10 @@ async def register(
     # Rate limit by IP and by email (per-account throttle prevents lockout when
     # one attacker floods from behind a shared proxy IP).
     enforce_rate_limit(http_request, "register", limit=5, window_seconds=60, email=request.email)
+    if settings.ldap_enabled:
+        # 사내 AD를 쓰면 자가 가입을 막는다. 열어 두면 아직 로그인하지 않은 직원의 이메일로 로컬 계정을
+        # 먼저 만들어, 그 직원의 AD 로그인을 가로막거나 그 이름으로 행세할 수 있다.
+        raise HTTPException(status_code=403, detail="사내 계정(AD)으로 로그인하세요. 별도 회원가입은 받지 않습니다.")
 
     result = await db.execute(select(User).where(User.email == request.email))
     if result.scalar_one_or_none():
@@ -69,6 +77,7 @@ async def register(
         hashed_password=get_password_hash(request.password),
         role="admin" if granted_admin else "viewer",
         is_active=True,
+        auth_source=AUTH_SOURCE_LOCAL,
     )
     db.add(user)
     await db.flush()
@@ -92,18 +101,32 @@ async def login(
 ):
     # Rate limit by IP and by email (per-account throttle prevents lockout when
     # one attacker floods from behind a shared proxy IP).
-    enforce_rate_limit(http_request, "login", limit=5, window_seconds=60, email=request.email)
+    login_id = request.email.strip()
+    # 대소문자·공백만 바꿔 계정별 제한을 피하지 못하게 정규화한 값으로 센다(AD 잠금 정책 보호)
+    enforce_rate_limit(http_request, "login", limit=5, window_seconds=60, email=login_id.lower())
+    ip = http_request.client.host
 
-    result = await db.execute(select(User).where(User.email == request.email))
-    user = result.scalar_one_or_none()
-
-    if not user or not verify_password(request.password, user.hashed_password):
-        log_audit(
-            db, None, "auth.login_failed", "user", None,
-            detail={"email": request.email}, ip_address=http_request.client.host,
-        )
+    async def _fail(status: int, detail: str, reason: str | None = None, user_id: str | None = None):
+        audit_detail = {"email": login_id} if user_id is None else {}
+        if reason:
+            audit_detail["reason"] = reason
+        log_audit(db, user_id, "auth.login_failed", "user", user_id, detail=audit_detail, ip_address=ip)
         await db.commit()
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(status_code=status, detail=detail)
+
+    result = await db.execute(select(User).where(User.email == login_id.lower()))
+    user = result.scalar_one_or_none() or await db.scalar(select(User).where(User.email == login_id))
+    source = AUTH_SOURCE_LOCAL
+
+    if user is not None and user.auth_source == AUTH_SOURCE_LOCAL:
+        if not verify_password(request.password, user.hashed_password):
+            await _fail(401, "Invalid credentials")
+    elif user is None or user.auth_source == AUTH_SOURCE_LDAP:
+        # 로컬 계정이 아니면 AD로 확인한다. 시스템 계정(커넥터)은 어떤 경로로도 로그인할 수 없다.
+        user = await _directory_login(db, login_id, request.password, _fail)
+        source = AUTH_SOURCE_LDAP
+    else:
+        await _fail(401, "Invalid credentials")
     if not user.is_active:
         log_audit(
             db, str(user.id), "auth.login_failed", "user", str(user.id),
@@ -116,7 +139,10 @@ async def login(
     refresh_token = create_refresh_token({"sub": str(user.id)})
     _set_refresh_cookie(response, refresh_token)
 
-    log_audit(db, str(user.id), "auth.login", "user", str(user.id), ip_address=http_request.client.host)
+    log_audit(
+        db, str(user.id), "auth.login", "user", str(user.id),
+        detail={"source": source} if source != AUTH_SOURCE_LOCAL else None, ip_address=ip,
+    )
     await db.commit()
     await db.refresh(user)
 
@@ -124,6 +150,25 @@ async def login(
         user=UserResponse.model_validate(user),
         access_token=access_token,
     )
+
+
+async def _directory_login(db: AsyncSession, login_id: str, password: str, fail) -> User:
+    """AD로 자격 증명을 확인하고 계정을 만들거나 갱신한다. 실패는 fail()이 감사 후 예외로 바꾼다."""
+    client = get_directory_client()
+    if client is None:
+        await fail(401, "Invalid credentials")
+    try:
+        duser = await asyncio.to_thread(client.authenticate, login_id, password)
+        groups = await asyncio.to_thread(client.user_groups, duser.dn) if duser else []
+    except DirectoryUnavailable:
+        await fail(503, "사내 계정 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.", reason="directory_unavailable")
+    if duser is None:
+        await fail(401, "Invalid credentials")
+    try:
+        return await db.run_sync(lambda s: provision_login(s, duser, groups, settings.ldap_admin_group_dn))
+    except DirectoryConflict:
+        await db.rollback()
+        await fail(409, "같은 이메일을 쓰는 로컬 계정이 있습니다. 관리자에게 문의하세요.", reason="email_conflict")
 
 
 @router.post("/refresh", response_model=TokenResponse)

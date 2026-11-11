@@ -27,6 +27,7 @@ from app.schemas.document import (
 )
 from app.services.access_policy import RELAX_FORBIDDEN_DETAIL, can_relax_document, is_relaxing_level
 from app.services.audit import log_audit
+from app.services.source_locks import ensure_not_connector_document
 
 router = APIRouter()
 
@@ -95,6 +96,8 @@ async def update_document_metadata(
 
     updates = body.model_dump(exclude_unset=True)
     resets = set(updates.pop("reset_fields", None) or [])
+    if "security_level" in updates or "security_level" in resets:
+        await ensure_not_connector_document(db, doc.id)
     previous_level = doc.security_level
     collection_default = (
         await db.scalar(select(Collection.default_security_level).where(Collection.id == doc.collection_id))

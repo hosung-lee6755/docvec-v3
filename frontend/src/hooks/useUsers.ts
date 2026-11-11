@@ -10,8 +10,12 @@ export interface User {
   is_active: boolean
   // v3 데이터 열람등급 — 시스템 역할(role)과 별개
   clearance_level: SecurityLevel
+  // local=자체 계정, ldap=사내 AD 계정, system=원천 연결용 내부 계정
+  auth_source?: AuthSource
   created_at: string
 }
+
+export type AuthSource = "local" | "ldap" | "system"
 
 interface UserListResponse {
   items: User[]

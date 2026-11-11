@@ -19,6 +19,8 @@ export interface Group {
   description: string | null
   member_count: number
   created_at: string
+  // local=화면에서 관리, ldap=AD에서 동기화(이름·구성원 수정 불가)
+  source?: "local" | "ldap"
 }
 
 export interface GroupMember {
@@ -48,6 +50,8 @@ export interface DocumentAcl {
   restricted: boolean
   // 등급을 낮추거나 제한을 풀 수 있는지(업로더·컬렉션 소유자만)
   can_relax?: boolean
+  // 파일 서버에서 가져온 문서면 true. 권한과 등급은 원천에서 바꾼다.
+  source_managed?: boolean
   entries: AclEntry[]
 }
 

@@ -73,6 +73,8 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
   if (isLoading) return <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
   if (isError || !group) return <div style={ERROR_BOX}>그룹 정보를 불러오지 못했습니다.</div>
 
+  // AD에서 동기화되는 그룹은 이름과 구성원을 AD에서 바꾼다(서버도 409로 막는다)
+  const isDirectory = group.source === 'ldap'
   const memberIds = new Set(group.members.map((m) => m.user_id))
   const candidates = (users?.items ?? []).filter((u) => !memberIds.has(u.id) && u.is_active)
   const mutationError = [updateGroup, addMember, removeMember, deleteGroup].find((m) => m.isError)
@@ -107,10 +109,13 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
       ) : (
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
           <div>
-            <h2 style={{ fontSize: 18, fontWeight: 700 }}>{group.name}</h2>
+            <h2 style={{ fontSize: 18, fontWeight: 700 }}>
+              {group.name}
+              {isDirectory && <span className="krds-badge xsmall bg-information" style={{ marginLeft: 8 }}>AD</span>}
+            </h2>
             <p style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{group.description || '설명 없음'}</p>
           </div>
-          <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
+          {isDirectory ? null : <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
             <button
               className="krds-btn xsmall secondary"
               onClick={() => setDraft({ name: group.name, description: group.description ?? '' })}
@@ -129,8 +134,13 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
                 <Trash2 size={14} />
               </button>
             )}
-          </div>
+          </div>}
         </div>
+      )}
+      {isDirectory && (
+        <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 'var(--space-3)' }}>
+          사내 AD에서 동기화되는 그룹입니다. 이름과 구성원은 AD에서 바꾸면 다음 동기화 때 반영됩니다.
+        </p>
       )}
       {confirmDelete && (
         <p style={{ fontSize: 12, color: '#b45309', marginBottom: 'var(--space-3)' }}>
@@ -138,7 +148,7 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
         </p>
       )}
 
-      <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-3)' }}>
+      {!isDirectory && <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-3)' }}>
         <select
           value={candidate} onChange={(e) => setCandidate(e.target.value)}
           className="krds-form-select small" style={{ flex: 1 }} aria-label="추가할 사용자"
@@ -155,7 +165,7 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
         >
           <UserPlus size={14} /> 추가
         </button>
-      </div>
+      </div>}
 
       {group.members.length === 0 ? (
         <p style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>멤버가 없습니다.</p>
@@ -180,14 +190,14 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
                     {m.added_at ? new Date(m.added_at).toLocaleDateString('ko-KR') : '-'}
                   </td>
                   <td>
-                    <button
+                    {!isDirectory && <button
                       className="krds-btn text xsmall icon-btn danger"
                       aria-label={`${m.username} 그룹에서 제거`}
                       disabled={removeMember.isPending}
                       onClick={() => removeMember.mutate({ groupId: group.id, userId: m.user_id })}
                     >
                       <X size={14} />
-                    </button>
+                    </button>}
                   </td>
                 </tr>
               ))}
@@ -230,7 +240,10 @@ function GroupList({ groups, selectedId, onSelect }: {
                 display: 'flex', justifyContent: 'space-between', gap: 'var(--space-2)',
               }}
             >
-              <span style={{ fontWeight: 600 }}>{g.name}</span>
+              <span style={{ fontWeight: 600 }}>
+                {g.name}
+                {g.source === 'ldap' && <span className="krds-badge xsmall bg-information" style={{ marginLeft: 6 }}>AD</span>}
+              </span>
               <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{g.member_count}명</span>
             </button>
           </li>

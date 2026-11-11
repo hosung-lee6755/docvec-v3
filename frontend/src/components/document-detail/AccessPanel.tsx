@@ -66,6 +66,8 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
   const canRelax = acl.data.can_relax ?? true
   const canAdd = canRelax || !acl.data.restricted
   const canRemove = canRelax || entries.length > 1
+  // 파일 서버에서 가져온 문서는 원천의 권한을 그대로 따르므로 여기서 고치지 않는다
+  const isSourceManaged = acl.data.source_managed === true
 
   return (
     <Row label="접근 허용">
@@ -80,12 +82,18 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
           {!acl.data.security_level && ' (컬렉션 기본값)'}
         </span>
 
+        {isSourceManaged && (
+          <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+            원천에서 관리됨. 접근 권한과 보안등급은 파일 서버와 원천 연결 설정에서 바꾸면 다음 동기화 때 반영됩니다.
+          </span>
+        )}
+
         {entries.length > 0 && (
           <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6 }}>
             {entries.map((e) => (
               <span key={entryKey(e)} className="krds-badge small bg-information" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 {PRINCIPAL_LABEL[e.principal_type]} · {e.display_name ?? `삭제된 ${PRINCIPAL_LABEL[e.principal_type]}`}
-                <button
+                {!isSourceManaged && <button
                   type="button"
                   aria-label={`${e.display_name ?? e.principal_id} 허용 해제`}
                   disabled={replaceAcl.isPending || !canRemove}
@@ -93,13 +101,13 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
                   style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit', lineHeight: 1 }}
                 >
                   <X size={12} />
-                </button>
+                </button>}
               </span>
             ))}
           </span>
         )}
 
-        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        {!isSourceManaged && <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
           <select
             value={candidate}
             onChange={(e) => setCandidate(e.target.value)}
@@ -126,8 +134,8 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
               제한 해제
             </button>
           )}
-        </span>
-        {!canRelax && (
+        </span>}
+        {!canRelax && !isSourceManaged && (
           <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
             허용 대상을 늘리거나 제한을 푸는 일은 업로더나 컬렉션 소유자만 할 수 있습니다.
           </span>

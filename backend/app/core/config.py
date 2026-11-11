@@ -75,6 +75,23 @@ class Settings(BaseSettings):
     # entirely — there is no other UI to promote a user to admin.
     admin_signup_code: str = ""
 
+    # v3 마일스톤 3: 사내 Active Directory(LDAP) 로그인. 비밀번호는 환경변수로만 받는다.
+    # LDAP_URL은 ldaps://host:636 이거나 LDAP_START_TLS=true와 함께 ldap://host:389 를 쓴다.
+    ldap_enabled: bool = False
+    ldap_url: str = ""
+    ldap_start_tls: bool = False
+    ldap_tls_verify: bool = True
+    ldap_ca_cert_file: str = ""
+    ldap_bind_dn: str = ""
+    ldap_bind_password: str = ""
+    ldap_base_dn: str = ""
+    ldap_group_base_dn: str = ""
+    # 이 그룹의 구성원은 admin 역할을 받는다(빈 값이면 AD로 관리자를 정하지 않는다).
+    ldap_admin_group_dn: str = ""
+    ldap_sync_interval_minutes: int = 15
+    # 평문 LDAP 허용. 개발용이며 운영(production)에서는 켤 수 없다.
+    ldap_allow_insecure: bool = False
+
     @field_validator("environment")
     @classmethod
     def validate_environment(cls, v: str) -> str:
@@ -112,6 +129,21 @@ class Settings(BaseSettings):
             if len(self.secret_key) < 32:
                 raise ValueError(
                     "SECRET_KEY must be at least 32 characters (256 bits) in production."
+                )
+            if self.ldap_enabled:
+                # 빈 바인드 DN·비밀번호는 익명 바인드가 되고, 빈 base DN은 엉뚱한 범위를 동기화한다
+                missing = [
+                    name for name in ("ldap_url", "ldap_bind_dn", "ldap_bind_password", "ldap_base_dn")
+                    if not getattr(self, name)
+                ]
+                if missing:
+                    raise ValueError(f"LDAP_ENABLED requires {', '.join(m.upper() for m in missing)}.")
+            if self.ldap_enabled and self.ldap_allow_insecure:
+                raise ValueError("LDAP_ALLOW_INSECURE cannot be enabled in production.")
+            # 인증서 검증을 끄면 중간자가 AD 비밀번호를 그대로 받아 간다
+            if self.ldap_enabled and not self.ldap_tls_verify:
+                raise ValueError(
+                    "LDAP_TLS_VERIFY cannot be disabled in production; set LDAP_CA_CERT_FILE to trust a private CA."
                 )
             # ENCRYPTION_KEY: BYOK Fernet key is required (do not fall back to SECRET_KEY)
             if not self.encryption_key:

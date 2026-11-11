@@ -44,6 +44,23 @@ describe('AccessPanel', () => {
     expect(screen.getByText(/컬렉션 기본값/)).toBeInTheDocument()
   })
 
+  it('hides editing controls for documents managed by the file server', () => {
+    aclState = {
+      isError: false,
+      data: {
+        document_id: 'doc-1', security_level: 'Internal', effective_security_level: 'Internal', restricted: true,
+        source_managed: true, can_relax: true,
+        entries: [{ principal_type: 'group', principal_id: 'g-1', display_name: '품질팀' }],
+      },
+    }
+    renderPanel()
+    expect(screen.getByText(/원천에서 관리됨/)).toBeInTheDocument()
+    expect(screen.getByText(/품질팀/)).toBeInTheDocument()
+    expect(screen.queryByLabelText('허용 목록에 추가할 사용자 또는 그룹')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /허용 해제/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '제한 해제' })).not.toBeInTheDocument()
+  })
+
   it('adds a group by replacing the whole list', () => {
     aclState = {
       isError: false,

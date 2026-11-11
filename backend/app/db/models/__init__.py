@@ -35,6 +35,7 @@ from app.db.models.block_execution_cache import BlockExecutionCache
 from app.db.models.user_group import UserGroup, UserGroupMember
 from app.db.models.document_acl import DocumentAclEntry
 from app.db.models.answer_trace import AnswerTrace, AnswerTraceSource
+from app.db.models.source_connector import ConnectorRun, SourceConnector, SourceItem
 
 __all__ = [
     "User",
@@ -76,4 +77,7 @@ __all__ = [
     "DocumentAclEntry",
     "AnswerTrace",
     "AnswerTraceSource",
+    "SourceConnector",
+    "SourceItem",
+    "ConnectorRun",
 ]

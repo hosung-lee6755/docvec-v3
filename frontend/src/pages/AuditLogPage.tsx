@@ -30,6 +30,13 @@ const ACTION_LABELS: Record<string, string> = {
   'collection.export': '컬렉션 내보내기',
   'answer_trace.view': '답변 추적 열람',
   'governance.report_download': 'AI 기본법 근거 자료 내려받기',
+  'connector.create': '원천 연결 추가',
+  'connector.update': '원천 연결 수정',
+  'connector.delete': '원천 연결 삭제',
+  'connector.sync_request': '원천 동기화 요청',
+  'connector.sync': '원천 동기화 실행',
+  'directory.sync': 'AD 동기화',
+  'directory.sync_failed': 'AD 동기화 실패',
 }
 
 export default function AuditLogPage() {

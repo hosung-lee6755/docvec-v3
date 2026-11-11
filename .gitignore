@@ -40,3 +40,6 @@ node_modules/
 
 # Internal network notes (internal IPs/ports — never commit)
 docs/참고/*섹션정보.txt
+
+# 개발용 AD DC의 CA 인증서 같은 로컬 전용 인증서(유지보수 가이드 개발용 AD DC 절 참고)
+backend/.dev-certs/

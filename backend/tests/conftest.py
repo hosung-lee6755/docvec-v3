@@ -22,3 +22,12 @@ async def db_session(engine):
         async with session.begin():
             yield session
             await session.rollback()
+
+
+@pytest.fixture(autouse=True)
+def _directory_login_off_by_default(monkeypatch):
+    """개발 컨테이너의 .env에 LDAP_ENABLED=true가 있어도 테스트는 꺼진 상태에서 시작한다.
+    AD 로그인을 시험하는 테스트는 각자 켠다."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ldap_enabled", False)

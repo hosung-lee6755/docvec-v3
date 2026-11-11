@@ -6,6 +6,9 @@
 
 "stale" 문서는 Postgres에서 Confidential로 올렸지만 Qdrant 사본은 Public으로 남은 상황
 (동기화 실패)을 흉내 낸다 — 검색 경로의 Postgres 재확인이 막아야 한다.
+
+"smb_*" 문서는 파일 서버 커넥터가 가져온 문서다(v3 마일스톤 3). 업로더가 사람 대신 커넥터 전용
+시스템 계정이므로, "업로더는 다 본다" 규칙으로 사람이 원천의 제한을 우회하지 못해야 한다.
 """
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -46,15 +49,15 @@ pytestmark = pytest.mark.asyncio
 
 DIM = 4
 VECTOR = [1.0, 0.0, 0.0, 0.0]
-ALL_DOCS = {"pub", "int", "conf", "acl_user", "acl_group", "col_default", "stale"}
+ALL_DOCS = {"pub", "int", "conf", "acl_user", "acl_group", "col_default", "stale", "smb_open", "smb_group"}
 
 # 손으로 쓴 기대값. 업로더(owner)는 전부 본다.
 EXPECTED = {
-    "owner": ALL_DOCS,
-    "public_reader": {"pub"},
-    "internal_reader": {"pub", "int", "acl_user"},     # acl_user는 이 사용자를 지정
-    "confidential_reader": {"pub", "int", "conf", "col_default", "stale"},
-    "group_member": {"pub", "int", "acl_group"},       # Internal + 그룹 A
+    "owner": ALL_DOCS - {"smb_group"},                 # 커넥터 문서의 업로더가 아니다
+    "public_reader": {"pub", "smb_open"},
+    "internal_reader": {"pub", "int", "acl_user", "smb_open"},     # acl_user는 이 사용자를 지정
+    "confidential_reader": {"pub", "int", "conf", "col_default", "stale", "smb_open"},
+    "group_member": {"pub", "int", "acl_group", "smb_open", "smb_group"},       # Internal + 그룹 A
     "outsider": set(),                                 # Confidential이지만 프로젝트 비회원
 }
 
@@ -86,6 +89,10 @@ async def world(db_session):  # noqa: F811
     await db.flush()
     db.add(UserGroupMember(group_id=str(group.id), user_id=str(users["group_member"].id)))
 
+    # 커넥터 전용 시스템 계정(registry.new_service_user와 같은 모양)
+    connector_user = await make_user(db, "viewer")
+    connector_user.auth_source, connector_user.is_active = "system", False
+
     col = await make_collection(db, owner, project, "c")
     conf_col = await make_collection(db, owner, project, "d", default_security_level="Confidential")
     docs = {
@@ -96,6 +103,8 @@ async def world(db_session):  # noqa: F811
         "acl_group": await make_document(db, owner, col, tags=["acl_group"]),
         "col_default": await make_document(db, owner, conf_col, tags=["col_default"]),
         "stale": await make_document(db, owner, col, security_level="Confidential", tags=["stale"]),
+        "smb_open": await make_document(db, connector_user, col, security_level="Public", tags=["smb_open"]),
+        "smb_group": await make_document(db, connector_user, col, security_level="Internal", tags=["smb_group"]),
     }
     db.add(DocumentAclEntry(
         document_id=str(docs["acl_user"].id), principal_type="user",
@@ -103,6 +112,9 @@ async def world(db_session):  # noqa: F811
     ))
     db.add(DocumentAclEntry(
         document_id=str(docs["acl_group"].id), principal_type="group", principal_id=str(group.id),
+    ))
+    db.add(DocumentAclEntry(
+        document_id=str(docs["smb_group"].id), principal_type="group", principal_id=str(group.id),
     ))
     await db.flush()
 

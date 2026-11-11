@@ -32,3 +32,25 @@ def test_is_production_flag():
 def test_qdrant_url_property():
     s = Settings(qdrant_host="qdrant-host", qdrant_port=6333)
     assert s.qdrant_url == "http://qdrant-host:6333"
+
+
+def _production(**ldap):
+    return Settings(
+        environment="production", secret_key="k" * 32, encryption_key="e" * 32,
+        database_url="postgresql+asyncpg://x:x@x/x", ldap_enabled=True, ldap_url="ldaps://dc:636",
+        **{"ldap_bind_dn": "svc@corp", "ldap_bind_password": "pw", "ldap_base_dn": "DC=corp", **ldap},
+    )
+
+
+def test_production_rejects_insecure_ldap():
+    # 평문 LDAP 허용과 인증서 검증 끄기는 운영에서 AD 비밀번호 노출로 이어진다
+    import pytest
+
+    with pytest.raises(ValueError, match="LDAP_ALLOW_INSECURE"):
+        _production(ldap_allow_insecure=True)
+    with pytest.raises(ValueError, match="LDAP_TLS_VERIFY"):
+        _production(ldap_tls_verify=False)
+    assert _production(ldap_ca_cert_file="/certs/ca.pem").ldap_tls_verify is True
+    # 빈 바인드 비밀번호는 익명 바인드가 된다
+    with pytest.raises(ValueError, match="LDAP_BIND_PASSWORD"):
+        _production(ldap_bind_password="")

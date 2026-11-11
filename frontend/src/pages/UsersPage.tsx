@@ -103,16 +103,29 @@ export default function UsersPage() {
             </thead>
             <tbody>
               {data?.items.map((u) => {
-                const isSystem = u.id === SYSTEM_USER_ID
+                // 원천 연결용 내부 계정(auth_source=system)도 시스템 계정처럼 고칠 수 없다
+                const isSystem = u.id === SYSTEM_USER_ID || u.auth_source === 'system'
+                const isDirectory = u.auth_source === 'ldap'
                 const isSelf = u.id === currentUser?.id
                 const isProtected = isSystem || isSelf
+                // AD 계정의 사용 여부와 관리자 지정은 AD가 정한다(서버도 409로 막는다)
+                const isAdminLocked = isDirectory && u.role === 'admin'
 
                 return (
                   <tr key={u.id} style={{ opacity: u.is_active ? 1 : 0.6 }}>
                     <td style={{ fontWeight: 500 }}>
                       {u.email}
                       {isSystem && (
-                        <span className="krds-badge xsmall bg-gray" style={{ marginLeft: 'var(--space-2)' }}>SYSTEM</span>
+                        <span className="krds-badge xsmall bg-gray" style={{ marginLeft: 'var(--space-2)' }}>
+                          {u.auth_source === 'system' ? '원천 연결' : 'SYSTEM'}
+                        </span>
+                      )}
+                      {isDirectory && (
+                        <span
+                          className="krds-badge xsmall bg-information"
+                          style={{ marginLeft: 'var(--space-2)' }}
+                          title="사내 AD 계정입니다. 비밀번호, 소속 그룹, 퇴사 처리는 AD를 따릅니다."
+                        >AD</span>
                       )}
                       {isSelf && (
                         <span className="krds-badge xsmall bg-primary" style={{ marginLeft: 'var(--space-2)' }}>나</span>
@@ -122,13 +135,14 @@ export default function UsersPage() {
                     <td>
                       <select
                         value={u.role}
-                        disabled={isProtected || updateUser.isPending}
+                        disabled={isProtected || isAdminLocked || updateUser.isPending}
+                        title={isDirectory ? '관리자 지정은 AD 관리자 그룹 구성원으로 정합니다.' : undefined}
                         onChange={(e) => handleRoleChange(u.id, e.target.value as 'viewer' | 'editor' | 'admin')}
                         className="krds-form-select small"
                       >
                         <option value="viewer">{ROLE_LABELS.viewer}</option>
                         <option value="editor">{ROLE_LABELS.editor}</option>
-                        <option value="admin">{ROLE_LABELS.admin}</option>
+                        <option value="admin" disabled={isDirectory && !isAdminLocked}>{ROLE_LABELS.admin}</option>
                       </select>
                     </td>
                     <td>
@@ -146,10 +160,11 @@ export default function UsersPage() {
                     </td>
                     <td>
                       <button
-                        disabled={isProtected || updateUser.isPending}
+                        disabled={isProtected || isDirectory || updateUser.isPending}
+                        title={isDirectory ? 'AD 계정의 사용 중지는 AD에서 합니다.' : undefined}
                         onClick={() => handleToggleActive(u.id, !u.is_active)}
                         className={`krds-badge xsmall ${u.is_active ? 'bg-success' : 'bg-gray'}`}
-                        style={{ border: 'none', cursor: isProtected ? 'not-allowed' : 'pointer' }}
+                        style={{ border: 'none', cursor: isProtected || isDirectory ? 'not-allowed' : 'pointer' }}
                       >
                         {u.is_active ? '활성' : '비활성'}
                       </button>

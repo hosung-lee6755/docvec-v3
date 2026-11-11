@@ -31,6 +31,8 @@ class GroupResponse(BaseModel):
     description: str | None
     member_count: int = 0
     created_at: datetime
+    # v3 마일스톤 3: local=화면에서 관리, ldap=AD에서 동기화(수정 불가)
+    source: str = "local"
 
 
 class GroupMemberAdd(BaseModel):
@@ -74,4 +76,6 @@ class DocumentAclResponse(BaseModel):
     restricted: bool
     # 요청자가 등급을 낮추거나 제한을 풀 수 있는지(업로더·컬렉션 소유자). 화면의 버튼 활성화에 쓴다.
     can_relax: bool = False
+    # v3 마일스톤 3: 파일 서버에서 가져온 문서면 true. 권한과 등급은 원천에서 바꾼다.
+    source_managed: bool = False
     entries: list[AclEntryOut]

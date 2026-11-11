@@ -9,6 +9,10 @@ from app.db.base import Base
 from app.db.types import UTCDateTime
 
 
+GROUP_SOURCE_LOCAL = "local"
+GROUP_SOURCE_LDAP = "ldap"
+
+
 class UserGroup(Base):
     """데이터 접근 권한을 묶어서 주기 위한 사용자 그룹(v3 권한 모델).
 
@@ -21,6 +25,12 @@ class UserGroup(Base):
     id: Mapped[str] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # v3 마일스톤 3: local=화면에서 관리, ldap=AD에서 동기화(이름·구성원을 화면에서 고칠 수 없다).
+    source: Mapped[str] = mapped_column(
+        String(10), default=GROUP_SOURCE_LOCAL, server_default=GROUP_SOURCE_LOCAL, nullable=False
+    )
+    external_id: Mapped[str | None] = mapped_column(String(184), unique=True, nullable=True)
+    external_dn: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_by: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

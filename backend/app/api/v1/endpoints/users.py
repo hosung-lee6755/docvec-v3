@@ -23,6 +23,11 @@ from app.db.models.user_api_key import UserApiKey
 from app.db.session import get_db
 from app.schemas.access import SecurityLevel
 from app.services.audit import log_audit
+from app.services.source_locks import (
+    ensure_directory_fields_unchanged,
+    ensure_local_password,
+    ensure_not_system_account,
+)
 
 SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -38,6 +43,8 @@ class UserResponse(BaseModel):
     system_prompt: str | None
     # v3: 데이터 열람등급(Public < Internal < Confidential). 시스템 역할(role)과 별개.
     clearance_level: str = "Internal"
+    # v3 마일스톤 3: local, ldap(사내 AD), system(원천 연결용 내부 계정)
+    auth_source: str = "local"
     created_at: datetime
 
     class Config:
@@ -98,6 +105,7 @@ async def change_my_password(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    ensure_local_password(current_user)
     if not verify_password(data.current_password, current_user.hashed_password):
         raise HTTPException(status_code=403, detail="현재 비밀번호가 일치하지 않습니다")
     current_user.hashed_password = get_password_hash(data.new_password)
@@ -135,6 +143,8 @@ async def update_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    ensure_not_system_account(user)
+    ensure_directory_fields_unchanged(user, role=data.role, is_active=data.is_active)
     if data.role is not None:
         user.role = data.role
     if data.is_active is not None:
@@ -169,6 +179,7 @@ async def delete_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    ensure_not_system_account(user)
 
     # 계정이 소유한 프로젝트/컬렉션/문서는 users.id를 참조하는 FK에
     # ON DELETE CASCADE가 하나도 없어 그냥 db.delete(user)만 하면 항상

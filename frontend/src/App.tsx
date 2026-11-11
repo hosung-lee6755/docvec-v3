@@ -12,6 +12,7 @@ import SearchPage from './pages/SearchPage'
 import DocumentDetailPage from './pages/DocumentDetailPage'
 import UsersPage from './pages/UsersPage'
 import GroupsPage from './pages/GroupsPage'
+import ConnectorsPage from './pages/ConnectorsPage'
 import ChatPage from './pages/ChatPage'
 import SettingsPage from './pages/SettingsPage'
 import AuditLogPage from './pages/AuditLogPage'
@@ -71,6 +72,7 @@ export default function App() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="groups" element={<GroupsPage />} />
+        <Route path="connectors" element={<ConnectorsPage />} />
         <Route path="audit-logs" element={<AuditLogPage />} />
         <Route path="answer-traces" element={<AnswerTracesPage />} />
         <Route path="governance-report" element={<GovernanceReportPage />} />

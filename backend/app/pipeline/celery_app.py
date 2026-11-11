@@ -33,6 +33,8 @@ celery_app.conf.include = [
     "app.pipeline.tasks.chunks",
     "app.pipeline.tasks.reembed",
     "app.pipeline.tasks.workflow",
+    "app.pipeline.tasks.directory",
+    "app.pipeline.tasks.connectors",
 ]
 
 default_exchange = Exchange("celery", type="direct")
@@ -57,5 +59,15 @@ celery_app.conf.beat_schedule = {
     "sweep-stuck-workflow-runs": {
         "task": "tasks.sweep_stuck_workflow_runs",
         "schedule": 30.0,
+    },
+    # v3 마일스톤 3: AD 그룹·퇴사자 동기화(LDAP 로그인이 꺼져 있으면 작업이 바로 끝난다).
+    "sync-directory": {
+        "task": "tasks.sync_directory",
+        "schedule": max(60, settings.ldap_sync_interval_minutes * 60),
+    },
+    # 주기가 된 커넥터를 골라 동기화를 시작한다(커넥터별 주기는 source_connectors에 있다).
+    "dispatch-due-connectors": {
+        "task": "tasks.dispatch_due_connectors",
+        "schedule": 60.0,
     },
 }

@@ -4,6 +4,17 @@ import { useMutation } from '@tanstack/react-query'
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
 
+const GENERIC_LOGIN_ERROR = "로그인하지 못했습니다. 아이디(이메일)와 비밀번호를 확인하세요."
+
+// 사내 계정 서버 장애(503)와 같은 이메일의 로컬 계정 충돌(409)은 서버 안내를 그대로 보여 준다.
+function loginErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error) && [409, 503].includes(error.response?.status ?? 0)) {
+    const detail = error.response?.data?.detail
+    if (typeof detail === "string") return detail
+  }
+  return GENERIC_LOGIN_ERROR
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -33,13 +44,13 @@ export default function LoginPage() {
         <form onSubmit={(e) => { e.preventDefault(); loginMutation.mutate() }}>
           <div className="form-group" style={{ marginBottom: 'var(--space-4)' }}>
             <div className="form-tit" style={{ color: 'var(--color-text-muted)' }}>
-              <label htmlFor="login_email">이메일</label>
+              <label htmlFor="login_email">아이디 또는 이메일</label>
             </div>
             <div className="form-conts">
               <input
                 id="login_email"
-                type="email" value={email} onChange={(e) => setEmail(e.target.value)} required
-                placeholder="user@example.com"
+                type="text" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required
+                placeholder="사내 계정 아이디 또는 user@example.com"
                 className="krds-input"
                 style={{ width: '100%', boxSizing: 'border-box' }}
               />
@@ -59,8 +70,8 @@ export default function LoginPage() {
             </div>
           </div>
           {loginMutation.isError && (
-            <p style={{ color: 'var(--color-danger)', fontSize: 12, marginBottom: 'var(--space-4)' }}>
-              로그인 실패. 이메일/비밀번호를 확인하세요.
+            <p role="alert" style={{ color: 'var(--color-danger)', fontSize: 12, marginBottom: 'var(--space-4)' }}>
+              {loginErrorMessage(loginMutation.error)}
             </p>
           )}
           <button

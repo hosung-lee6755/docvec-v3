@@ -111,6 +111,7 @@ async def test_login_rejects_deactivated_user():
 async def test_login_succeeds_for_active_user():
     user = MagicMock(
         is_active=True,
+        auth_source="local",
         hashed_password="hash",
         id=uuid4(),
         email="user@test.com",

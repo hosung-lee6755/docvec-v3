@@ -4,8 +4,10 @@ from pydantic import BaseModel, EmailStr, Field
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
+    # 로컬 계정은 이메일, AD 계정은 아이디(sAMAccountName)나 이메일을 받는다(v3 마일스톤 3).
+    # 필드 이름은 기존 클라이언트와 맞추려고 email로 둔다.
+    email: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=128)
 
 
 class TokenResponse(BaseModel):
@@ -19,6 +21,8 @@ class UserResponse(BaseModel):
     username: str
     role: str
     is_active: bool
+    # v3 마일스톤 3: local, ldap(사내 AD), system(원천 연결용 내부 계정)
+    auth_source: str = "local"
 
     class Config:
         from_attributes = True

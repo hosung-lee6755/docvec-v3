@@ -28,6 +28,7 @@ from app.schemas.access import (
     GroupUpdate,
 )
 from app.services.audit import log_audit
+from app.services.source_locks import ensure_local_group
 
 router = APIRouter()
 
@@ -66,7 +67,7 @@ async def _members(db: AsyncSession, group_id) -> list[GroupMemberResponse]:
 def _group_response(group: UserGroup, member_count: int) -> GroupResponse:
     return GroupResponse(
         id=group.id, name=group.name, description=group.description,
-        member_count=member_count, created_at=group.created_at,
+        member_count=member_count, created_at=group.created_at, source=group.source or "local",
     )
 
 
@@ -145,6 +146,7 @@ async def update_group(
 ):
     require_admin(current_user)
     group = await _get_group(db, group_id)
+    ensure_local_group(group)
     changes = data.model_dump(exclude_unset=True)
     if changes.get("name") is not None:
         changes["name"] = changes["name"].strip()
@@ -170,6 +172,7 @@ async def delete_group(
 ):
     require_admin(current_user)
     group = await _get_group(db, group_id)
+    ensure_local_group(group)
     log_audit(
         db, str(current_user.id), "group.delete", "group", str(group.id),
         detail={"name": group.name},
@@ -200,6 +203,7 @@ async def add_group_member(
 ):
     require_admin(current_user)
     group = await _get_group(db, group_id)
+    ensure_local_group(group)
     user = await db.get(User, data.user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
@@ -231,6 +235,7 @@ async def remove_group_member(
 ):
     require_admin(current_user)
     group = await _get_group(db, group_id)
+    ensure_local_group(group)
     member = await db.get(UserGroupMember, (group.id, user_id))
     if member is None:
         raise HTTPException(status_code=404, detail="Group member not found")
