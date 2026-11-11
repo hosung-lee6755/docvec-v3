@@ -7,16 +7,47 @@ import type { AgentSteps, DeepProgress } from '../../hooks/useChat'
 
 const MUTED: React.CSSProperties = { fontSize: 12, color: 'var(--color-text-muted)' }
 
+// KRDS가 기본 체크박스를 다시 그려 켜짐과 꺼짐이 구분되지 않으므로, 스위치를 직접 그린다.
+// 켜지면 바탕이 강조색으로 차고 손잡이가 오른쪽으로 가며, 글자로도 "켜짐"을 보여 준다.
+const TRACK_WIDTH = 32
+const KNOB_SIZE = 14
+
 export function DeepSearchToggle({ checked, onChange, disabled }: {
   checked: boolean; onChange: (value: boolean) => void; disabled?: boolean
 }) {
+  const accent = 'var(--color-accent)'
   return (
-    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: disabled ? 'default' : 'pointer' }}
-      title="여러 문서와 조건이 얽힌 질문을 하위 질문으로 나눠 따로 찾은 뒤 종합합니다. 일반 질문보다 1~2분 더 걸립니다.">
-      <input type="checkbox" role="switch" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      title="여러 문서와 조건이 얽힌 질문을 하위 질문으로 나눠 따로 찾은 뒤 종합합니다. 일반 질문보다 10~60초 더 걸립니다."
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0,
+        padding: '6px 12px', borderRadius: 999, fontSize: 13, fontWeight: checked ? 700 : 500,
+        border: `1.5px solid ${checked ? accent : 'var(--color-border)'}`,
+        background: checked ? accent : 'transparent',
+        color: checked ? '#fff' : 'var(--color-text-muted)',
+        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1,
+        transition: 'background var(--duration-fast), color var(--duration-fast), border-color var(--duration-fast)',
+      }}
+    >
+      <span aria-hidden="true" style={{
+        position: 'relative', width: TRACK_WIDTH, height: KNOB_SIZE + 4, borderRadius: 999,
+        background: checked ? 'rgba(255,255,255,0.35)' : 'var(--color-border)',
+      }}>
+        <span style={{
+          position: 'absolute', top: 2, left: 2, width: KNOB_SIZE, height: KNOB_SIZE, borderRadius: '50%',
+          background: '#fff', transform: `translateX(${checked ? TRACK_WIDTH - KNOB_SIZE - 4 : 0}px)`,
+          transition: 'transform var(--duration-fast)',
+        }} />
+      </span>
       <Layers size={14} aria-hidden="true" />
       심층 검색
-    </label>
+      <span aria-hidden="true" style={{ fontSize: 12 }}>{checked ? '켜짐' : '꺼짐'}</span>
+    </button>
   )
 }
 

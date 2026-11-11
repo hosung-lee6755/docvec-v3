@@ -17,11 +17,19 @@ const steps: AgentSteps = {
 }
 
 describe('DeepSearch', () => {
-  it('toggles deep search', () => {
+  it('toggles deep search and shows whether it is on', () => {
     const onChange = vi.fn()
-    render(<DeepSearchToggle checked={false} onChange={onChange} />)
-    fireEvent.click(screen.getByRole('switch', { name: /심층 검색/ }))
+    const { rerender } = render(<DeepSearchToggle checked={false} onChange={onChange} />)
+    const toggle = screen.getByRole('switch', { name: /심층 검색/ })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(toggle).toHaveTextContent('꺼짐')
+
+    fireEvent.click(toggle)
     expect(onChange).toHaveBeenCalledWith(true)
+
+    rerender(<DeepSearchToggle checked onChange={onChange} />)
+    expect(screen.getByRole('switch', { name: /심층 검색/ })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('switch', { name: /심층 검색/ })).toHaveTextContent('켜짐')
   })
 
   it('shows which sub-question is being searched', () => {
