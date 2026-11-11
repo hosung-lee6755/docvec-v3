@@ -4,7 +4,8 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import asc, delete, desc, func, select
+from sqlalchemy import asc, cast, delete, desc, func, literal_column, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user
@@ -59,6 +60,8 @@ async def list_documents(
     project_id: UUID | None = None,
     status: str | None = None,
     filename: str | None = None,
+    # v3 마일스톤 6: low_ocr(OCR 신뢰도 기준 미달 쪽이 있음), warning(경고나 일부 실패), failure(품질 실패)
+    quality: Literal["low_ocr", "warning", "failure"] | None = None,
     sort_by: Literal["created_at", "filename", "file_size", "status"] = "created_at",
     order: Literal["asc", "desc"] = "desc",
     db: AsyncSession = Depends(get_db),
@@ -97,6 +100,9 @@ async def list_documents(
         escaped_filename = filename.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         filters.append(Document.original_filename.ilike(f"%{escaped_filename}%", escape="\\"))
 
+    if quality is not None:
+        filters.append(_quality_filter(quality))
+
     count_query = select(func.count(Document.id)).where(*filters)
     total = await db.scalar(count_query) or 0
 
@@ -111,6 +117,18 @@ async def list_documents(
     )
     documents = result.scalars().all()
     return {"total": total, "page": page, "limit": limit, "items": documents}
+
+
+def _quality_filter(quality: str):
+    if quality == "low_ocr":
+        # asyncpg는 jsonpath 매개변수를 보내지 못하므로 SQL 리터럴로 쓴다. 비교값은 설정의 float이라
+        # 사용자 입력이 들어가지 않는다
+        threshold = float(settings.ocr_low_confidence)
+        path = literal_column(f"'$[*] ? (@.confidence < {threshold})'::jsonpath")
+        return cast(Document.ocr_page_confidence, JSONB).op("@?")(path)
+    if quality == "warning":
+        return Document.quality_status.in_(("SUCCESS_WITH_WARNING", "PARTIAL_FAILURE"))
+    return Document.quality_status == "FAILURE"
 
 
 # NOTE: must be declared before the /{document_id} routes below, or "tags"

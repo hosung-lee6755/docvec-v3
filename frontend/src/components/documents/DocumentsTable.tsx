@@ -2,6 +2,14 @@ import { ArrowDown, ArrowUp, Trash2 } from 'lucide-react'
 import { type Document, type DocumentSortBy, type SortOrder } from '../../hooks/useDocuments'
 import { STATUS_BADGE_CLASSES, STATUS_LABELS } from '../../lib/documentStatus'
 
+// 통과(SUCCESS)는 배지를 달지 않는다. 눈여겨볼 판정만 보인다.
+const QUALITY_BADGES: Record<string, { label: string; className: string }> = {
+  SUCCESS_WITH_WARNING: { label: '품질 경고', className: 'bg-warning' },
+  REVIEW_REQUIRED: { label: '검토 필요', className: 'bg-warning' },
+  PARTIAL_FAILURE: { label: '부분 실패', className: 'bg-danger' },
+  FAILURE: { label: '품질 실패', className: 'bg-danger' },
+}
+
 interface DocumentsTableProps {
   documents: Document[] | undefined
   sortBy: DocumentSortBy
@@ -114,6 +122,24 @@ export function DocumentsTable({
                     title="스캔 이미지 페이지를 OCR로 인식한 문서입니다."
                   >
                     OCR
+                  </span>
+                )}
+                {QUALITY_BADGES[doc.quality_status ?? ''] && (
+                  <span
+                    className={`krds-badge xsmall ${QUALITY_BADGES[doc.quality_status ?? ''].className}`}
+                    style={{ marginLeft: 'var(--space-2)' }}
+                    title="최근 처리의 품질 판정입니다. 문서 상세의 품질 탭에서 이유를 볼 수 있습니다."
+                  >
+                    {QUALITY_BADGES[doc.quality_status ?? ''].label}
+                  </span>
+                )}
+                {(doc.low_ocr_pages?.length ?? 0) > 0 && (
+                  <span
+                    className="krds-badge xsmall bg-warning"
+                    style={{ marginLeft: 'var(--space-2)' }}
+                    title={`OCR 신뢰도가 기준보다 낮은 쪽: ${doc.low_ocr_pages?.join(', ')}`}
+                  >
+                    OCR 낮음 {doc.low_ocr_pages?.length}쪽
                   </span>
                 )}
                 {doc.status === 'FAILED' && doc.error_message && (

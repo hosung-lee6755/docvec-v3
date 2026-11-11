@@ -1,6 +1,19 @@
 ﻿import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
 
+// v3 마일스톤 6 — 컬렉션별 검색 설정. 서버 services/search_settings.py와 범위를 맞춘다.
+export interface SearchSettings {
+  mode: 'hybrid' | 'vector'
+  top_k: number
+  rerank: boolean
+  diversify: boolean
+  vector_weight: number
+}
+
+export const DEFAULT_SEARCH_SETTINGS: SearchSettings = {
+  mode: 'hybrid', top_k: 5, rerank: true, diversify: false, vector_weight: 0.6,
+}
+
 export interface Collection {
   id: string
   name: string
@@ -20,6 +33,8 @@ export interface Collection {
   default_analysis_workflow_version: number | null
   // v3: 자체 등급이 없는 문서에 적용할 기본 보안등급(null = 공개)
   default_security_level: 'Public' | 'Internal' | 'Confidential' | null
+  // v3 마일스톤 6: 이 컬렉션의 검색과 채팅이 따르는 검색 방식(서버가 기본값을 채워 보낸다)
+  search_settings?: SearchSettings
   reembed_status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | null
   reembed_progress: string | null
   created_at: string
@@ -71,9 +86,12 @@ export interface CreateCollectionInput {
 
 export interface UpdateCollectionInput {
   id: string
-  name: string
+  // 서버는 보낸 필드만 바꾼다. 검색 설정만 저장할 때는 이름을 보내지 않는다
+  name?: string
   description?: string
   project_id?: string
+  // v3 마일스톤 6: 보내면 반영(null = 기본값으로)
+  search_settings?: SearchSettings | null
   restrict_to_members?: boolean
   default_workflow_id?: string | null
   default_workflow_version?: number | null

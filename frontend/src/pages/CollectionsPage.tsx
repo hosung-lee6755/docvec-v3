@@ -22,6 +22,7 @@ import GoldenEvalModal from '../components/GoldenEvalModal'
 import VectorStatsModal from '../components/VectorStatsModal'
 import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../hooks/useAccess'
 import type { SecurityLevel } from '../hooks/useDocumentMetadata'
+import { SearchSettingsSection } from '../components/collections/SearchSettingsSection'
 
 // 그래프의 블록 체인을 진입 블록에서부터 첫 번째 나가는 에지를 따라가며 한 줄로
 // 요약 — 컬렉션 설정 화면의 "문서 처리" 섹션이 보여줄 미리보기용 단순화(분기가
@@ -908,6 +909,10 @@ export default function CollectionsPage() {
                             </div>
                           </div>
                         </div>
+                      )}
+
+                      {editingCollection && (
+                        <SearchSettingsSection key={editingCollection.id} collection={editingCollection} />
                       )}
 
                       {updateCollection.isError && (

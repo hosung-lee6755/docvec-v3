@@ -219,7 +219,7 @@ def _source_view(source: AnswerTraceSource, existing: set[str], visible: set[str
             "rank": source.rank, "document_id": None, "collection_id": None, "filename": None,
             "security_level": None, "page_number": None, "source_kind": source.source_kind,
             "chunk_ref": None, "score": None, "cited": source.cited, "access": access,
-            "text": None, "text_changed": None,
+            "text": None, "text_changed": None, "evidence": None,
         }
 
     text = None
@@ -237,6 +237,7 @@ def _source_view(source: AnswerTraceSource, existing: set[str], visible: set[str
         "source_kind": source.source_kind,
         "chunk_ref": source.chunk_ref,
         "score": source.score,
+        "evidence": source.evidence,
         "cited": source.cited,
         "access": access,
         "text": text,

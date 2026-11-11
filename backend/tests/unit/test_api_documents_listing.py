@@ -31,7 +31,7 @@ async def _list(db, user=None, **overrides):
     """엔드포인트를 직접 호출할 때는 Query() 기본값이 적용되지 않으므로 모두 명시한다."""
     params = dict(
         page=1, limit=50, collection_id=None, project_id=None, status=None, filename=None,
-        sort_by="created_at", order="desc",
+        quality=None, sort_by="created_at", order="desc",
     )
     params.update(overrides)
     return await ls.list_documents(db=db, current_user=user or owner_user(), **params)
@@ -75,6 +75,46 @@ async def test_list_filters_by_status_list_and_collection(db_session):  # noqa: 
     result = await _list(db_session, collection_id=collection.id, status="FAILED,PARSING,")
 
     assert {d.id for d in result["items"]} == {a.id, b.id}
+
+
+async def test_list_filters_by_quality_and_counts_low_ocr_pages(db_session):  # noqa: F811
+    from app.schemas.document import DocumentResponse
+
+    collection = await _collection(db_session)
+    pages = lambda *c: [{"page_number": i + 1, "confidence": v, "word_count": 5} for i, v in enumerate(c)]  # noqa: E731
+    low = await add_doc(db_session, "l-q-low", collection_id=collection.id, ocr_used=True,
+                        ocr_page_confidence=pages(0.9, 0.31, 0.2), quality_status="PARTIAL_FAILURE")
+    good = await add_doc(db_session, "l-q-good", collection_id=collection.id, ocr_used=True,
+                         ocr_page_confidence=pages(0.9, 0.8), quality_status="SUCCESS")
+    failed = await add_doc(db_session, "l-q-fail", collection_id=collection.id, quality_status="FAILURE")
+
+    async def ids(quality):
+        return {d.id for d in (await _list(db_session, collection_id=collection.id, quality=quality))["items"]}
+
+    assert await ids("low_ocr") == {low.id}
+    assert await ids("warning") == {low.id}
+    assert await ids("failure") == {failed.id}
+    assert await ids(None) == {low.id, good.id, failed.id}
+    dumped = DocumentResponse.model_validate(low).model_dump()
+    assert dumped["low_ocr_pages"] == 2 and "ocr_page_confidence" not in dumped
+    assert dumped["quality_status"] == "PARTIAL_FAILURE"
+
+
+async def test_ocr_confidence_endpoint_lists_pages_and_flags_low_ones(db_session):  # noqa: F811
+    from app.api.v1.endpoints.documents import processing
+
+    doc = await add_doc(db_session, "l-ocr", ocr_used=True, page_count=3, ocr_page_confidence=[
+        {"page_number": 2, "confidence": 0.42, "word_count": 7},
+        {"page_number": 1, "confidence": 0.88, "word_count": 30},
+    ])
+
+    out = await processing.get_document_ocr_confidence(doc.id, db=db_session, current_user=owner_user())
+
+    assert [p.page_number for p in out.pages] == [1, 2]
+    assert out.low_pages == [2] and out.threshold == 0.5 and out.mean_confidence == 0.65
+    with pytest.raises(Exception) as denied:
+        await processing.get_document_ocr_confidence(doc.id, db=db_session, current_user=stranger_user())
+    assert getattr(denied.value, "status_code", None) in (403, 404)
 
 
 async def test_list_filename_search_escapes_like_wildcards(db_session):  # noqa: F811

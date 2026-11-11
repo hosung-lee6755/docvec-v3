@@ -23,6 +23,8 @@ def _stub_access_policy():
         patch.object(search_service, "build_access_context", new=AsyncMock(return_value=ctx)),
         patch.object(search_service, "load_document_facts", new=AsyncMock(return_value={})),
         patch.object(search_service, "visible_document_ids", return_value=_AllowAll()),
+        # 쪽별 OCR 신뢰도 조회(v3 마일스톤 6)는 실제 DB 테스트가 맡는다
+        patch.object(search_service, "page_confidences", new=AsyncMock(return_value={})),
     ):
         yield
 
@@ -189,3 +191,107 @@ async def test_list_search_history_queries_by_user_id():
 
     assert result == []
     db.execute.assert_awaited_once()
+
+
+# -- 컬렉션 검색 설정과 근거(v3 마일스톤 6) --------------------------------------
+
+@pytest.mark.asyncio
+async def test_perform_search_follows_collection_settings_when_request_leaves_them_out():
+    from app.services.search_settings import SearchSettings
+
+    user = MagicMock(id=uuid4())
+    document_id = str(uuid4())
+    db = AsyncMock()
+    db.add = MagicMock()
+    collection_settings = SearchSettings(mode="hybrid", vector_weight=0.2, diversify=False, rerank=False)
+
+    with (
+        patch("app.services.search_service.get_embedding_provider") as mock_provider,
+        patch("app.services.search_service.qdrant_service") as mock_qdrant,
+        patch.object(search_service, "stored_collection_search_settings", new=AsyncMock(return_value=collection_settings)),
+        patch.object(search_service, "page_confidences", new=AsyncMock(
+            return_value={(document_id, 3): 0.2})),
+    ):
+        mock_provider.return_value.embed.return_value = [[0.1, 0.2, 0.3]]
+        mock_qdrant.search.return_value = [
+            {**_make_hit("c1", 0.5, document_id, "연차 휴가 규정"), "payload": {
+                "document_id": document_id, "text": "연차 휴가 규정", "page_number": 3}},
+        ]
+
+        response = await search_service.perform_search(
+            db, user, SearchRequest(query="연차 규정", limit=5, collection_id=uuid4())
+        )
+
+    item = response.items[0]
+    # 하이브리드이고, 벡터 비중 0.2가 융합 점수에 쓰였다
+    assert item.final_score == pytest.approx(0.2 * 0.5 + 0.8 * item.bm25_score)
+    assert response.applied.mode == "hybrid" and response.applied.from_collection is True
+    assert response.applied.rerank_in_chat is False
+    assert "연차" in item.evidence["matched_terms"]
+    assert item.evidence["low_ocr"] is True and item.evidence["ocr_confidence"] == 0.2
+    assert db.add.call_args[0][0].search_mode == "hybrid"
+
+
+@pytest.mark.asyncio
+async def test_perform_search_request_overrides_collection_mode():
+    user = MagicMock(id=uuid4())
+    db = AsyncMock()
+    db.add = MagicMock()
+
+    with (
+        patch("app.services.search_service.get_embedding_provider") as mock_provider,
+        patch("app.services.search_service.qdrant_service") as mock_qdrant,
+        patch("app.services.search_service.accessible_collection_ids", new=AsyncMock(return_value=["col-1"])),
+    ):
+        mock_provider.return_value.embed.return_value = [[0.1]]
+        mock_qdrant.search.return_value = [_make_hit("c1", 0.9, str(uuid4()), "본문")]
+
+        response = await search_service.perform_search(db, user, SearchRequest(query="q", mode="vector"))
+
+    assert response.applied.mode == "vector" and response.applied.from_collection is False
+    assert response.items[0].final_score is None
+
+
+
+@pytest.mark.asyncio
+async def test_perform_search_without_mode_or_saved_settings_stays_vector():
+    # MCP나 스크립트처럼 방식을 빼먹은 호출은 마일스톤 6 이전처럼 의미 검색이다
+    user = MagicMock(id=uuid4())
+    db = AsyncMock()
+    db.add = MagicMock()
+
+    with (
+        patch("app.services.search_service.get_embedding_provider") as mock_provider,
+        patch("app.services.search_service.qdrant_service") as mock_qdrant,
+        patch("app.services.search_service.accessible_collection_ids", new=AsyncMock(return_value=["col-1"])),
+        patch.object(search_service, "stored_collection_search_settings", new=AsyncMock(return_value=None)),
+    ):
+        mock_provider.return_value.embed.return_value = [[0.1]]
+        mock_qdrant.search.return_value = [_make_hit("c1", 0.9, str(uuid4()), "본문")]
+
+        response = await search_service.perform_search(db, user, SearchRequest(query="q"))
+
+    assert response.applied.mode == "vector" and response.applied.from_collection is False
+
+
+@pytest.mark.asyncio
+async def test_applied_settings_are_not_labelled_as_collection_settings_when_overridden():
+    from app.services.search_settings import SearchSettings
+
+    user = MagicMock(id=uuid4())
+    db = AsyncMock()
+    db.add = MagicMock()
+
+    with (
+        patch("app.services.search_service.get_embedding_provider") as mock_provider,
+        patch("app.services.search_service.qdrant_service") as mock_qdrant,
+        patch.object(search_service, "stored_collection_search_settings",
+                     new=AsyncMock(return_value=SearchSettings(mode="hybrid"))),
+    ):
+        mock_provider.return_value.embed.return_value = [[0.1]]
+        mock_qdrant.search.return_value = [_make_hit("c1", 0.9, str(uuid4()), "본문")]
+
+        response = await search_service.perform_search(
+            db, user, SearchRequest(query="q", mode="vector", collection_id=uuid4()))
+
+    assert response.applied.mode == "vector" and response.applied.from_collection is False

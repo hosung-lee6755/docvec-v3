@@ -19,6 +19,8 @@ from app.schemas.document import (
     DocumentRunsResponse,
     ElementCorrectionRequest,
     NodeCorrectionRequest,
+    OcrConfidenceResponse,
+    OcrPageConfidence,
     QualityReportResponse,
     ReprocessImpactResponse,
 )
@@ -232,6 +234,40 @@ async def get_document_quality(
             .limit(1)
         )
     return report
+
+
+@router.get("/{document_id}/ocr-confidence", response_model=OcrConfidenceResponse)
+async def get_document_ocr_confidence(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """쪽별 OCR 신뢰도(v3 마일스톤 6). 기준(OCR_LOW_CONFIDENCE) 미만인 쪽을 표시한다."""
+    from app.core.config import settings
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+
+    threshold = settings.ocr_low_confidence
+    pages = sorted(
+        (
+            OcrPageConfidence(
+                page_number=p["page_number"], confidence=round(float(p["confidence"]), 3),
+                word_count=p.get("word_count"), low=float(p["confidence"]) < threshold,
+            )
+            for p in doc.ocr_page_confidence or []
+            if isinstance(p, dict) and isinstance(p.get("page_number"), int)
+            and isinstance(p.get("confidence"), int | float)
+        ),
+        key=lambda p: p.page_number,
+    )
+    mean = round(sum(p.confidence for p in pages) / len(pages), 3) if pages else None
+    return OcrConfidenceResponse(
+        ocr_used=bool(doc.ocr_used), threshold=threshold, page_count=doc.page_count, pages=pages,
+        low_pages=[p.page_number for p in pages if p.low], mean_confidence=mean,
+    )
 
 
 @router.get("/{document_id}/reprocess/impact", response_model=ReprocessImpactResponse)

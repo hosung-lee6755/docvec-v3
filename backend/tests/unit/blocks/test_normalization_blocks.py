@@ -393,3 +393,52 @@ def test_text_clean_config_defaults():
     assert cfg.collapse_whitespace and not cfg.fix_ocr_errors
     with pytest.raises(Exception):
         nb.TextCleanConfig(collapse_whitespace="maybe")
+
+
+# ---- v3 마일스톤 6: 문맥 기록, 문서별 끄기, 되돌리기 반영 ----
+def _run_with_skips(block, ctx, entries, excluded=(), reverted=()):
+    with patch.object(nb, "_document_dictionary_skips", return_value=(set(excluded), set(reverted))):
+        return _run_dict(block, ctx, entries)
+
+
+def test_applications_record_surrounding_context():
+    text = "가" * 50 + " 그리고 " + "나" * 50
+    _result, db = _run_dict(nb.StopwordBlock, _ctx(text), [_entry("그리고")])
+    app = _added(db)[0]
+    assert app.context_before == "가" * 39 + " " and app.context_after == " " + "나" * 39
+
+
+@pytest.mark.parametrize("block, entry", [
+    (nb.StopwordBlock, _entry("그리고", id="off")),
+    (nb.SynonymBlock, _entry("인공지능", id="off", variants=[_variant("AI")])),
+    (nb.UserDictBlock, _entry("인공지능", id="off", variants=[_variant("AI")])),
+])
+def test_entries_turned_off_for_the_document_are_skipped(block, entry):
+    result, db = _run_with_skips(block, _ctx("그리고 AI 인공지능"), [entry], excluded={"off"})
+    assert result.output["text"] == "그리고 AI 인공지능"
+    assert _added(db) == []
+
+
+def test_reverted_synonym_is_no_longer_replaced_but_others_are():
+    entry = _entry("인공지능", id="e1", variants=[_variant("AI"), _variant("에이아이")])
+    result, db = _run_with_skips(nb.SynonymBlock, _ctx("AI 와 에이아이"), [entry], reverted={("e1", "AI")})
+    assert result.output["text"] == "AI 와 인공지능"
+    assert [a.original_text for a in _added(db)] == ["에이아이"]
+
+
+def test_reverted_stopword_occurrence_is_skipped():
+    result, _db = _run_with_skips(nb.StopwordBlock, _ctx("그리고 본문 그리고"), [_entry("그리고", id="e1")],
+                                  reverted={("e1", "그리고")})
+    assert result.metrics["stopword_matches"] == 0
+
+
+
+def test_application_context_masks_personal_data_even_across_the_window_edge():
+    # 전화번호가 문맥 경계(앞 40자)에 걸쳐 있어도, 이메일이 뒤 문맥에 있어도 가린다
+    text = "연락처 010-1234-5678 " + "가" * 30 + " 그리고 " + "이메일 hong@example.com 입니다"
+    _result, db = _run_dict(nb.StopwordBlock, _ctx(text), [_entry("그리고")])
+    app = _added(db)[0]
+    assert "5678" not in app.context_before and "1234" not in app.context_before
+    assert "hong@example.com" not in app.context_after and "*" in app.context_after
+    # 가려도 길이는 그대로라 위치가 어긋나지 않는다
+    assert len(app.context_before) == 40

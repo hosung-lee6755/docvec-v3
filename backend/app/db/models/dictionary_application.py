@@ -46,5 +46,8 @@ class DictionaryApplication(Base):
     )
     start_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # v3 마일스톤 6: 적용 자리의 앞뒤 문맥(각 40자). 이전 기록은 비어 있다
+    context_before: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_after: Mapped[str | None] = mapped_column(Text, nullable=True)
     reverted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)

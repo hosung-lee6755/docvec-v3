@@ -37,8 +37,10 @@ from app.db.models.document_acl import DocumentAclEntry
 from app.db.models.answer_trace import AnswerTrace, AnswerTraceSource
 from app.db.models.source_connector import ConnectorRun, SourceConnector, SourceItem
 from app.db.models.access_token import PersonalAccessToken
+from app.db.models.document_dictionary_exclusion import DocumentDictionaryExclusion
 
 __all__ = [
+    "DocumentDictionaryExclusion",
     "User",
     "Document",
     "Project",

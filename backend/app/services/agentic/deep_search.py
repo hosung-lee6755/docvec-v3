@@ -19,9 +19,10 @@ PER_QUESTION_LIMIT = 4
 SUPPLEMENT_LIMIT = 8
 MAX_EVIDENCE = 10
 # 이보다 적게 찾았거나 최고 점수가 이보다 낮으면 근거가 약하다고 보고 한 번 더 찾는다.
-# 점수는 bge-reranker-v2-m3의 로짓이다(0 미만이면 관련도가 낮은 쪽). 재순위가 없을 때는 융합 점수다.
+# 점수는 bge-reranker-v2-m3를 normalize=True로 부른 재순위 점수라 0~1(시그모이드)이고, 0.5가 로짓 0이다.
+# 재순위를 끈 컬렉션은 코사인이나 융합 점수만 있어 같은 기준을 쓸 수 없으므로 결과 수로만 판단한다.
 MIN_HITS = 2
-MIN_TOP_SCORE = 0.0
+MIN_TOP_SCORE = 0.5
 
 RetrieveFn = Callable[[str, int], list[dict]]
 ProgressFn = Callable[[dict], None]
@@ -45,8 +46,17 @@ def _elapsed_ms(started: float) -> int:
 def _is_weak(hits: list[dict]) -> bool:
     if len(hits) < MIN_HITS:
         return True
-    top = max((h.get("score") for h in hits if isinstance(h.get("score"), (int, float))), default=None)
+    scores = [_relevance(h) for h in hits]
+    top = max((s for s in scores if isinstance(s, (int, float))), default=None)
     return top is not None and top < MIN_TOP_SCORE
+
+
+def _relevance(hit: dict) -> float | None:
+    """재순위 점수. 검색 결과에 근거 설명(evidence)이 있으면 그 안의 재순위 점수만 쓴다."""
+    evidence = hit.get("evidence")
+    if isinstance(evidence, dict):
+        return (evidence.get("scores") or {}).get("rerank")
+    return hit.get("score")
 
 
 def _chunk_key(chunk: dict) -> str:

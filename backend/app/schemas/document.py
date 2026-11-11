@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 
 class DocumentUploadResponse(BaseModel):
@@ -62,9 +62,41 @@ class DocumentResponse(BaseModel):
     # 문서 자체의 작성일(파일 내부 메타데이터에서 추출) — DB 저장 시각인 created_at과는
     # 별개 개념(메타 정보 생성.txt: created_at=작성일 vs ingestion_time=DB 저장 시각).
     document_created_at: datetime | None = None
+    # v3 마일스톤 6: 최근 품질 검사 결과(SUCCESS, SUCCESS_WITH_WARNING, PARTIAL_FAILURE, FAILURE)
+    quality_status: str | None = None
+    # 쪽별 OCR 신뢰도는 응답에 싣지 않고, 기준 미달 쪽 수만 계산해 보낸다(목록 배지용)
+    ocr_page_confidence: list | None = Field(default=None, exclude=True)
 
     class Config:
         from_attributes = True
+
+    @computed_field
+    @property
+    def low_ocr_pages(self) -> int:
+        from app.core.config import settings
+
+        return sum(
+            1 for p in self.ocr_page_confidence or []
+            if isinstance(p, dict) and isinstance(p.get("confidence"), int | float)
+            and p["confidence"] < settings.ocr_low_confidence
+        )
+
+
+class OcrPageConfidence(BaseModel):
+    page_number: int
+    confidence: float
+    word_count: int | None = None
+    low: bool
+
+
+class OcrConfidenceResponse(BaseModel):
+    """문서의 쪽별 OCR 신뢰도(v3 마일스톤 6). OCR로 읽은 쪽만 나온다."""
+    ocr_used: bool
+    threshold: float
+    page_count: int | None
+    pages: list[OcrPageConfidence]
+    low_pages: list[int]
+    mean_confidence: float | None
 
 
 class DocumentProceedRequest(BaseModel):
@@ -411,6 +443,10 @@ class DictionaryApplicationItem(BaseModel):
     end_offset: int | None
     reverted: bool
     created_at: datetime
+    # v3 마일스톤 6: 적용 자리의 앞뒤 문맥(이전 기록은 없음)과 사전 항목 이름
+    context_before: str | None = None
+    context_after: str | None = None
+    entry_term: str | None = None
 
 
 class DictionaryApplicationsResponse(BaseModel):
@@ -418,6 +454,21 @@ class DictionaryApplicationsResponse(BaseModel):
     run_id: str | None
     pending_revert_count: int
     applications: list[DictionaryApplicationItem]
+    # 이 문서에서 끈 사전 항목 id(v3 마일스톤 6)
+    excluded_entry_ids: list[str] = []
+
+
+class DictionaryExclusionItem(BaseModel):
+    entry_id: str
+    term: str | None
+    entry_type: str | None
+    created_at: datetime
+
+
+class DictionaryExclusionsResponse(BaseModel):
+    """문서에서 끈 사전 항목(v3 마일스톤 6). 다음 처리부터 이 문서에는 적용하지 않는다."""
+    document_id: str
+    entries: list[DictionaryExclusionItem]
 
 
 class PiiDetectionItem(BaseModel):

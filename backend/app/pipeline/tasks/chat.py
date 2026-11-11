@@ -6,6 +6,7 @@ import time
 
 from app.core.config import settings
 from app.pipeline.celery_app import celery_app
+from app.services.retrieval_evidence import matched_terms, ocr_evidence, page_confidences_sync, score_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ def _answer_cache_key(
     model_key: str,
     access_fingerprint: str,
     mode: str = "standard",
+    variant: str = "",
 ) -> str:
     """access_fingerprint(AccessContext.fingerprint)를 반드시 포함한다 — 빠지면 높은
     등급 사용자가 받은 답변(과 인용)이 같은 질문을 한 낮은 등급 사용자에게 캐시로
@@ -30,10 +32,26 @@ def _answer_cache_key(
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     # 심층 검색은 같은 질문이라도 근거와 답이 달라 캐시를 따로 둔다. 일반 답변의 키는 그대로다
     prefix = "rag_answer" if mode == "standard" else f"rag_answer_{mode}"
-    return (
+    key = (
         f"{prefix}:{model_key}:{collection_id or 'all'}:{project_id or 'none'}:"
         f"{access_fingerprint}:{digest}"
     )
+    # variant: 검색 결과를 바꾸는 설정(컬렉션 검색 설정, 사전 리비전). 바뀌면 예전 답을 다시 쓰지 않는다
+    return f"{key}:{variant}" if variant else key
+
+
+def _retrieval_variant(db, collection_id: str | None) -> str:
+    """답변 캐시 키에 넣을 검색 조건 요약. 설정이나 사전이 바뀌면 값이 달라진다."""
+    from app.services import dictionary_service
+    from app.services.search_settings import collection_search_settings_sync
+
+    search = collection_search_settings_sync(db, collection_id)
+    settings_digest = hashlib.sha256(search.model_dump_json().encode("utf-8")).hexdigest()[:12]
+    try:
+        dictionary_service.ensure_dictionary_cache_sync(db)
+    except Exception:  # noqa: BLE001 - 사전을 못 읽어도 답은 만들고, 캐시만 리비전 없이 나눈다
+        logger.exception("dictionary cache reload failed")
+    return f"s{settings_digest}:d{dictionary_service._loaded_revision}"
 
 _SYSTEM_PROMPT = (
     "당신은 문서 검색 결과를 바탕으로 답변하는 어시스턴트입니다. "
@@ -183,6 +201,10 @@ def _progress_writer(redis_client, chat_message_id: str):
 # Over-fetch this many times the requested limit before BM25 reranking, mirroring
 # search_service.py::perform_search's hybrid-search candidate pool.
 _HYBRID_CANDIDATE_MULTIPLIER = 4
+# 검색 화면(search_service._MMR_LAMBDA)과 같은 관련도 대 다양성 비중
+_MMR_LAMBDA = 0.7
+# 근거 확인에 실패해 넓혀 다시 찾을 때의 근거 수
+_BROADEN_LIMIT = 10
 
 
 def _accessible_collection_ids(db, user_id: str, project_id: str | None = None) -> list[str]:
@@ -227,12 +249,16 @@ def _retrieve_chunks(
     query: str,
     collection_id: str | None,
     project_id: str | None = None,
-    limit: int = 5,
+    limit: int | None = None,
 ) -> list[dict]:
+    """권한 범위 안에서 질문에 맞는 청크를 찾는다. 범위가 컬렉션 하나면 그 컬렉션의 검색 설정
+    (방식, 근거 수, MMR, 재순위, 벡터 비중)을 따른다(v3 마일스톤 6). limit을 넘기면 근거 수만 바꾼다."""
     from app.db.models.collection import Collection
     from app.services.bm25_service import bm25_rerank
+    from app.services.dictionary_service import ensure_dictionary_cache_sync, expand_query
     from app.services.embedding import get_embedding_provider
     from app.services.qdrant_service import qdrant_service
+    from app.services.search_settings import collection_search_settings_sync
 
     from app.services.access_policy import (
         build_access_context_sync,
@@ -248,12 +274,23 @@ def _retrieve_chunks(
     # v3 권한: 검색 단계에서 보안등급·ACL로 거르고, 리랭킹·LLM에 넣기 전에 Postgres
     # 기준으로 다시 확인한다(페이로드 동기화가 늦어도 근거·인용으로 새지 않게 — fail-closed).
     ctx = build_access_context_sync(db, user_id)
+    search = collection_search_settings_sync(db, collection_id)
+    limit = limit or search.top_k
+    # 사전의 검색어 확장(SEARCH_EXPAND)을 검색 화면과 똑같이 쓴다. 재순위는 원래 질문으로 판단한다.
+    # 사전을 읽지 못해도 검색은 원래 질문으로 계속한다(마일스톤 6 이전에는 사전 없이 찾았다)
+    try:
+        ensure_dictionary_cache_sync(db)
+        search_query, _added = expand_query(query)
+    except Exception:  # noqa: BLE001
+        logger.exception("query expansion failed; searching with the original query")
+        search_query = query
     provider = get_embedding_provider()
-    vector = provider.embed([query])[0]
+    vector = provider.embed([search_query])[0]
     hits = qdrant_service.search(
         collection=settings.qdrant_collection_name,
         vector=vector,
         limit=limit * _HYBRID_CANDIDATE_MULTIPLIER,
+        with_vectors=search.diversify,
         query_filter=qdrant_access_filter(ctx, scope),
     )
     if hits:
@@ -273,23 +310,23 @@ def _retrieve_chunks(
                 # before this field existed (see rag_store's storage_blocks.py).
                 "bm25_text": h["payload"].get("index_text") or h["payload"].get("text", ""),
                 "score": h["score"],
+                "vector": h.get("vector"),
                 "payload": h["payload"],
             }
             for h in hits
         ]
-        # Stage 1 (recall): vector + BM25 hybrid fusion narrows to 2×limit.
-        # Stage 2 (precision): cross-encoder reads each (query, chunk) pair
-        # jointly and picks the final top-limit — falls back to the hybrid
-        # ordering if the reranker is unavailable. Reranking scores the plain
-        # "text" (not bm25_text) — a cross-encoder judges the actual passage
-        # against the query, not a context-prefixed variant meant for recall.
-        fused = bm25_rerank(query, candidates, text_field="bm25_text")[: limit * 2]
-        reranked = cross_encoder_rerank(query, fused, text_field="text", top_k=limit)
+        ranked = _rank_candidates(query, search_query, candidates, search, limit, bm25_rerank, cross_encoder_rerank)
         hits = [
-            {"id": c["id"], "score": c.get("rerank_score", c["final_score"]), "payload": c["payload"]}
-            for c in reranked
+            {
+                "id": c["id"],
+                "score": c.get("rerank_score", c.get("final_score", c["score"])),
+                "payload": c["payload"],
+                "evidence": {"scores": score_evidence(c)},
+            }
+            for c in ranked
         ]
         record_hits([h["id"] for h in hits])
+        _attach_evidence(db, search_query, hits)
 
     hit_collection_ids = {h["payload"].get("collection_id") for h in hits}
     hit_collection_ids.discard(None)
@@ -311,9 +348,46 @@ def _retrieve_chunks(
             "source_kind": "chunk",
             "chunk_ref": str(h["id"]),
             "score": h["score"],
+            "evidence": h.get("evidence"),
         }
         for h in hits
     ]
+
+
+def _rank_candidates(query, search_query, candidates, search, limit, bm25_rerank, cross_encoder_rerank) -> list[dict]:
+    """1단계(재현율): 하이브리드면 벡터와 BM25 점수를 섞고, 벡터 방식이면 벡터 점수 순서다.
+    MMR을 켜면 비슷한 발췌문을 덜 뽑는다. 2단계(정밀도): 재순위를 켜면 교차 인코더가 (질문, 본문)을
+    함께 읽어 최종 근거를 고른다. 모델이 없으면 1단계 순서를 쓴다. 재순위는 맥락을 붙인 bm25_text가
+    아니라 실제 본문(text)을 원래 질문과 비교한다."""
+    from app.services.mmr_service import mmr_rerank
+
+    if search.mode == "hybrid":
+        weight = search.vector_weight
+        ranked = bm25_rerank(search_query, candidates, text_field="bm25_text",
+                             alpha_vector=weight, alpha_bm25=round(1 - weight, 4))
+        relevance = "final_score"
+    else:
+        ranked = sorted(candidates, key=lambda c: c["score"], reverse=True)
+        relevance = "score"
+    pool_size = limit * 2 if search.rerank else limit
+    if search.diversify and all(c.get("vector") for c in ranked):
+        pool = mmr_rerank(ranked, k=pool_size, relevance_field=relevance, lambda_param=_MMR_LAMBDA)
+    else:
+        pool = ranked[:pool_size]
+    if search.rerank:
+        return cross_encoder_rerank(query, pool, text_field="text", top_k=limit)
+    return pool[:limit]
+
+
+def _attach_evidence(db, search_query: str, hits: list[dict]) -> None:
+    """근거마다 질문과 겹친 낱말과 그 쪽의 OCR 신뢰도를 덧붙인다(v3 마일스톤 6)."""
+    terms = matched_terms(search_query, [h["payload"].get("text", "") for h in hits])
+    confidences = page_confidences_sync(db, {h["payload"].get("document_id") for h in hits})
+    for h, matched in zip(hits, terms):
+        h["evidence"].update(
+            {"matched_terms": matched,
+             **ocr_evidence(confidences, h["payload"].get("document_id"), h["payload"].get("page_number"))}
+        )
 
 
 def _accessible_documents(db, user_id: str, collection_id: str | None, project_id: str | None = None) -> list:
@@ -444,6 +518,18 @@ def _verifier_model_key(verifier, generation_provider, generation_model_key: str
     return getattr(verifier, "_model", None)
 
 
+def _expanded_terms(db, query: str) -> list[str] | None:
+    """사전의 검색어 확장으로 질문에 덧붙인 낱말. 화면에 보여 주려고 메시지에 남긴다."""
+    from app.services.dictionary_service import ensure_dictionary_cache_sync, expand_query
+
+    try:
+        ensure_dictionary_cache_sync(db)
+        return expand_query(query)[1] or None
+    except Exception:
+        logger.warning("generate_answer: query expansion lookup failed", exc_info=True)
+        return None
+
+
 def _elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
@@ -511,6 +597,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
             conversation.model_key,
             access_ctx.fingerprint(),
             mode=trace["mode"],
+            variant=_retrieval_variant(db, collection_id_str),
         )
         cached = redis_client.get(cache_key)
         cached_payload = json.loads(cached) if cached else None
@@ -522,6 +609,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
             msg.answer = cached_payload["answer"]
             msg.citations = cached_payload["citations"]
             msg.agent_steps = cached_payload.get("agent_steps")
+            msg.expanded_terms = cached_payload.get("expanded_terms")
             trace["agent_steps"] = msg.agent_steps
             msg.status = "DONE"
             record_answer_trace(
@@ -579,6 +667,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
             chunks = retrieval_fn(
                 db, str(conversation.user_id), msg.query, collection_id_str, project_id=project_id_str
             )
+        msg.expanded_terms = _expanded_terms(db, msg.query)
         answer_started = time.monotonic()
         context = _build_context(chunks)
 
@@ -669,7 +758,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
                 )
                 broadened_chunks = retrieval_fn(
                     db, str(conversation.user_id), msg.query, collection_id_str,
-                    project_id=project_id_str, limit=10,
+                    project_id=project_id_str, limit=_BROADEN_LIMIT,
                 )
                 if broadened_chunks:
                     chunks = broadened_chunks
@@ -707,6 +796,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
                 "filename": c["filename"],
                 "page_number": c.get("page_number"),
                 "text": c["text"],
+                "evidence": c.get("evidence"),
             }
             for i, c in enumerate(chunks)
         ]
@@ -730,7 +820,8 @@ def generate_answer(self, chat_message_id: str) -> dict:
             redis_client.setex(
                 cache_key,
                 _ANSWER_CACHE_TTL_SECONDS,
-                json.dumps({"answer": msg.answer, "citations": msg.citations, "agent_steps": msg.agent_steps}),
+                json.dumps({"answer": msg.answer, "citations": msg.citations, "agent_steps": msg.agent_steps,
+                            "expanded_terms": msg.expanded_terms}),
             )
         except Exception:
             logger.exception("generate_answer: failed to write answer cache")

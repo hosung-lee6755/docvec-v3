@@ -103,6 +103,59 @@ async def test_dictionary_applications_empty_404_403(db_session):  # noqa: F811
     await assert_http_error(st.list_dictionary_applications(doc.id, db_session, stranger_user()), 403)
 
 
+async def _entry(db, term="인공지능"):
+    from app.db.models.dictionary_entry import DictionaryEntry
+    from tests.unit._docs_api_support import OWNER_ID
+
+    entry = DictionaryEntry(id=uuid4(), entry_type="synonym", term=term, created_by=OWNER_ID)
+    db.add(entry)
+    await db.flush()
+    return entry
+
+
+async def test_dictionary_applications_carry_entry_term_context_and_exclusions(db_session):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "s-dict-ctx")
+    step = await add_step(db_session, run)
+    entry = await _entry(db_session)
+    app_row = await _application(db_session, doc, run, step, datetime.utcnow())
+    app_row.entry_id, app_row.context_before, app_row.context_after = entry.id, "생성형 ", " 도입 계획"
+    await db_session.flush()
+    await st.exclude_dictionary_entry(doc.id, entry.id, db_session, owner_user())
+
+    result = await st.list_dictionary_applications(doc.id, db_session, owner_user())
+
+    [item] = result["applications"]
+    assert (item.entry_term, item.context_before, item.context_after) == ("인공지능", "생성형 ", " 도입 계획")
+    assert result["excluded_entry_ids"] == [str(entry.id)]
+
+
+async def test_dictionary_exclusions_add_list_remove_and_audit(db_session):  # noqa: F811
+    doc = await add_doc(db_session, "s-excl")
+    entry = await _entry(db_session, "불용어")
+
+    await st.exclude_dictionary_entry(doc.id, entry.id, db_session, owner_user())
+    await st.exclude_dictionary_entry(doc.id, entry.id, db_session, owner_user())  # 두 번 꺼도 하나만 남는다
+    listed = await st.list_dictionary_exclusions(doc.id, db_session, owner_user())
+    assert [(e["entry_id"], e["term"]) for e in listed["entries"]] == [(str(entry.id), "불용어")]
+
+    await st.include_dictionary_entry(doc.id, entry.id, db_session, owner_user())
+    assert (await st.list_dictionary_exclusions(doc.id, db_session, owner_user()))["entries"] == []
+    actions = (await db_session.scalars(
+        select(AuditLog.action).where(AuditLog.resource_id == str(doc.id)).order_by(AuditLog.created_at)
+    )).all()
+    assert actions == ["document.dictionary_exclude", "document.dictionary_include"]
+
+
+async def test_dictionary_exclusions_need_editor_access_and_a_real_entry(db_session):  # noqa: F811
+    doc = await add_doc(db_session, "s-excl-g")
+    entry = await _entry(db_session)
+
+    await assert_http_error(st.exclude_dictionary_entry(doc.id, entry.id, db_session, stranger_user()), 403)
+    await assert_http_error(st.list_dictionary_exclusions(doc.id, db_session, stranger_user()), 403)
+    await assert_http_error(st.exclude_dictionary_entry(doc.id, uuid4(), db_session, owner_user()), 404)
+    await assert_http_error(st.include_dictionary_entry(uuid4(), entry.id, db_session, owner_user()), 404)
+
+
 async def test_revert_dictionary_application_marks_reverted(db_session):  # noqa: F811
     doc, run = await doc_with_run(db_session, "s-revert")
     app_row = await _application(db_session, doc, run, await add_step(db_session, run), datetime.utcnow())

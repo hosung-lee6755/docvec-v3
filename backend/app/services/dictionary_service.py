@@ -37,14 +37,35 @@ async def refresh_dictionary_cache(db: AsyncSession) -> None:
     Building a Kiwi instance costs several hundred ms, so this runs once at
     API startup and after every dictionary write rather than per search
     request. Disabled entries (enabled=False) are excluded entirely."""
-    entries = (
-        await db.scalars(
-            select(DictionaryEntry)
-            .where(DictionaryEntry.enabled.is_(True))
-            .options(selectinload(DictionaryEntry.variants))
-        )
-    ).all()
+    entries = (await db.scalars(_enabled_entries_stmt())).all()
+    _install_entries(entries)
 
+
+# 채팅 워커는 API 프로세스와 따로 돌아 API 시작 때 채운 캐시를 공유하지 못한다. 워커에서는 사전 개정 번호가
+# 바뀌었을 때만 다시 읽는다(v3 마일스톤 6). -1은 아직 한 번도 읽지 않았다는 뜻이다.
+_loaded_revision: int | None = -1
+
+
+def ensure_dictionary_cache_sync(db) -> None:
+    """동기 세션(Celery 워커)용. 마지막으로 읽은 뒤 사전이 바뀌었으면 캐시를 다시 만든다."""
+    global _loaded_revision
+    revision = db.scalar(select(func.max(DictionaryRevision.version)))
+    if revision == _loaded_revision:
+        return
+    entries = db.scalars(_enabled_entries_stmt()).all()
+    _install_entries(entries)
+    _loaded_revision = revision
+
+
+def _enabled_entries_stmt():
+    return (
+        select(DictionaryEntry)
+        .where(DictionaryEntry.enabled.is_(True))
+        .options(selectinload(DictionaryEntry.variants))
+    )
+
+
+def _install_entries(entries) -> None:
     kiwi = Kiwi()
     stopword_rules: list[tuple[str, str, bool]] = []
     expand_map: dict[str, str] = {}

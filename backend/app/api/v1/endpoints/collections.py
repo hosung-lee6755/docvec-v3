@@ -33,6 +33,7 @@ from app.services.access_policy import (
     is_relaxing_level,
 )
 from app.services.audit import log_audit
+from app.services.search_settings import SearchSettings, resolve_search_settings
 from app.services.document_state import claim_document_status
 from app.services.document_storage import release_original
 from app.services.embedding import EMBEDDING_MODEL_REGISTRY
@@ -79,6 +80,8 @@ class CollectionCreate(BaseModel):
 
 class CollectionUpdate(BaseModel):
     name: str | None = None
+    # v3 마일스톤 6: 이 컬렉션의 검색과 채팅이 따를 검색 방식. null을 보내면 기본값으로 되돌린다
+    search_settings: SearchSettings | None = None
     description: str | None = None
     project_id: UUID | None = None
     restrict_to_members: bool | None = None
@@ -128,12 +131,19 @@ class CollectionResponse(BaseModel):
     default_analysis_workflow_id: UUID | None = None
     default_analysis_workflow_version: int | None = None
     default_security_level: str | None = None
+    # 저장값이 없거나 틀리면 기본값을 돌려준다(검색과 채팅이 실제로 따르는 값)
+    search_settings: SearchSettings = SearchSettings()
     reembed_status: str | None = None
     reembed_progress: str | None = None
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+    @field_validator("search_settings", mode="before")
+    @classmethod
+    def _resolve_search_settings(cls, value):
+        return value if isinstance(value, SearchSettings) else resolve_search_settings(value)
 
 
 @router.get("/embedding-models")
@@ -435,6 +445,15 @@ async def update_collection(
             db, str(current_user.id), "collection.security_level_update", "collection",
             str(collection.id), detail={"from": previous_level, "to": data.default_security_level},
         )
+
+    if "search_settings" in data.model_fields_set:
+        new_settings = data.search_settings.model_dump() if data.search_settings else None
+        if new_settings != collection.search_settings:
+            log_audit(
+                db, str(current_user.id), "collection.search_settings_update", "collection",
+                str(collection.id), detail={"from": collection.search_settings, "to": new_settings},
+            )
+            collection.search_settings = new_settings
 
     await db.commit()
     await db.refresh(collection)

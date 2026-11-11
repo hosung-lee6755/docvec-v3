@@ -1,3 +1,4 @@
+import type { RetrievalEvidence } from '../components/chat/CitationEvidence'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
 
@@ -18,6 +19,8 @@ export interface ChatCitation {
   text: string
   // 지금 볼 수 없는 문서의 인용이면 true다. 서버가 본문·파일명·문서 id를 비워서 보낸다.
   hidden?: boolean
+  // v3 마일스톤 6: 근거가 된 이유(점수, 겹친 낱말, 쪽의 OCR 신뢰도). 가린 인용에는 없다
+  evidence?: RetrievalEvidence | null
 }
 
 // v3 마일스톤 5 심층 검색 — 하위 질문별 검색 과정. 지금 볼 수 없는 문서는 서버가 가려서 보낸다.
@@ -63,6 +66,8 @@ export interface ChatMessage {
   mode?: ChatMode
   agent_steps?: AgentSteps | null
   progress?: DeepProgress | null
+  // 사전의 검색어 확장으로 질문에 덧붙여 찾은 낱말
+  expanded_terms?: string[] | null
 }
 
 export interface ConversationSummary {

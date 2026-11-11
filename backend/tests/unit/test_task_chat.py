@@ -382,6 +382,67 @@ def test_retrieve_chunks_no_hits_skips_rerank_and_stats(world):
     recorded.assert_not_called()
 
 
+# -- 컬렉션 검색 설정과 근거(v3 마일스톤 6) --------------------------------------
+
+def _settings_world(world, settings, **doc_fields):
+    world.c_own.search_settings = settings
+    doc = _document(world.db, world.alice, world.c_own, **doc_fields)
+    world.db.commit()
+    cid = str(world.c_own.id)
+    hits = [
+        {**_hit("p1", "질문 키워드 관련 본문", cid, str(doc.id), page_number=1), "score": 0.4},
+        {**_hit("p2", "전혀 다른 내용", cid, str(doc.id), page_number=2), "score": 0.9},
+        {**_hit("p3", "또 다른 내용", cid, str(doc.id), page_number=3), "score": 0.2},
+        {**_hit("p4", "넷째 내용", cid, str(doc.id), page_number=3), "score": 0.1},
+    ]
+    return cid, hits
+
+
+def test_retrieve_chunks_follows_vector_only_settings_without_rerank(world):
+    cid, hits = _settings_world(world, {"mode": "vector", "top_k": 3, "rerank": False})
+
+    with patch("app.services.bm25_service.bm25_rerank") as bm25:
+        out, qdrant, rerank, _rec = _retrieve(world.db, hits, collection_id=cid,
+                                              user_id=str(world.alice.id), limit=None)
+
+    bm25.assert_not_called()
+    rerank.assert_not_called()
+    # 근거 수는 컬렉션 설정(3)이고, 벡터 점수 순서다
+    assert [o["chunk_ref"] for o in out] == ["p2", "p1", "p3"]
+    assert qdrant.search.call_args.kwargs["limit"] == 3 * chat._HYBRID_CANDIDATE_MULTIPLIER
+    assert out[0]["evidence"]["scores"] == {"vector": 0.9}
+
+
+def test_retrieve_chunks_hybrid_weight_and_evidence(world):
+    cid, hits = _settings_world(
+        world, {"mode": "hybrid", "vector_weight": 0.3},
+        ocr_page_confidence=[{"page_number": 1, "confidence": 0.31, "word_count": 10},
+                             {"page_number": 2, "confidence": 0.95, "word_count": 10}],
+    )
+
+    out, _q, rerank, _rec = _retrieve(world.db, hits, collection_id=cid, user_id=str(world.alice.id), limit=2)
+
+    rerank.assert_called_once()
+    first = next(o for o in out if o["chunk_ref"] == "p1")
+    scores = first["evidence"]["scores"]
+    # 키워드가 겹친 p1이 키워드 비중 0.7 덕분에 앞선다
+    assert out[0]["chunk_ref"] == "p1"
+    assert scores["fused"] == round(0.3 * 0.4 + 0.7 * scores["bm25"], 4)
+    assert "키워드" in first["evidence"]["matched_terms"]
+    assert first["evidence"]["ocr_confidence"] == 0.31 and first["evidence"]["low_ocr"] is True
+    second = next(o for o in out if o["chunk_ref"] == "p2")
+    assert second["evidence"]["low_ocr"] is False
+
+
+def test_retrieve_chunks_ignores_broken_settings(world):
+    cid, hits = _settings_world(world, {"mode": "nope", "top_k": 99})
+
+    out, _q, rerank, _rec = _retrieve(world.db, hits, collection_id=cid, user_id=str(world.alice.id), limit=None)
+
+    # 형식이 틀린 설정은 기본값(하이브리드, 5건, 재순위)으로 돈다
+    assert rerank.call_args.kwargs["top_k"] == 5 and len(out) == 4
+
+
 # ----------------------------------------------------------- api keys / verifier
 
 
@@ -536,7 +597,7 @@ def test_generate_answer_happy_path_persists_answer_citations_and_cache(chat_env
     assert stored.answer == "정답입니다[1]"
     assert stored.citations == [{
         "index": 1, "document_id": "d1", "collection_id": "c1", "collection_name": "Coll",
-        "filename": "a.pdf", "page_number": 2, "text": "본문 발췌",
+        "filename": "a.pdf", "page_number": 2, "text": "본문 발췌", "evidence": None,
     }]
     cache_args = chat_env.redis.setex.call_args_list[-1].args
     assert cache_args[0].startswith("rag_answer:qwen2.5-3b:")
@@ -866,3 +927,41 @@ def test_deep_mode_failure_keeps_the_search_steps_and_clears_progress(chat_env):
     deleted = [k for c in redis_.delete.call_args_list for k in c.args]
     assert f"chat_progress:{msg.id}" in deleted
     db.close()
+
+
+
+def test_answer_cache_key_changes_with_retrieval_variant():
+    base = chat._answer_cache_key("q", "c", None, "m", "fp")
+    with_variant = chat._answer_cache_key("q", "c", None, "m", "fp", variant="s1:d2")
+    assert with_variant != base
+    assert chat._answer_cache_key("q", "c", None, "m", "fp", variant="s1:d3") != with_variant
+
+
+def test_retrieval_variant_follows_collection_settings_and_dictionary_revision():
+    from app.services.search_settings import SearchSettings
+
+    def variant(search, revision):
+        with patch("app.services.search_settings.collection_search_settings_sync", return_value=search),              patch("app.services.dictionary_service.ensure_dictionary_cache_sync"),              patch("app.services.dictionary_service._loaded_revision", revision):
+            return chat._retrieval_variant(MagicMock(), "c")
+
+    base = variant(SearchSettings(), 4)
+    assert variant(SearchSettings(), 4) == base
+    assert variant(SearchSettings(rerank=False), 4) != base
+    assert variant(SearchSettings(), 5) != base
+
+
+def test_retrieval_variant_survives_a_dictionary_failure():
+    from app.services.search_settings import SearchSettings
+
+    with patch("app.services.search_settings.collection_search_settings_sync", return_value=SearchSettings()),          patch("app.services.dictionary_service.ensure_dictionary_cache_sync", side_effect=RuntimeError("kiwi")):
+        assert chat._retrieval_variant(MagicMock(), "c").startswith("s")
+
+
+def test_retrieve_chunks_searches_the_original_query_when_expansion_fails(world):
+    cid, hits = _settings_world(world, {"mode": "vector", "rerank": False})
+
+    with patch("app.services.dictionary_service.expand_query", side_effect=RuntimeError("kiwi")):
+        out, qdrant, _rerank, _rec = _retrieve(world.db, hits, collection_id=cid,
+                                              user_id=str(world.alice.id), limit=None)
+
+    assert qdrant.search.called and out

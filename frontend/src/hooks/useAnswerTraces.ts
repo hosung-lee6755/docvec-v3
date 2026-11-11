@@ -1,4 +1,5 @@
 import type { AgentSteps } from './useChat'
+import type { RetrievalEvidence } from '../components/chat/CitationEvidence'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
 
@@ -38,6 +39,8 @@ export interface AnswerTraceSource {
   access: SourceAccess
   text: string | null
   text_changed: boolean | null
+  // v3 마일스톤 6: 검색 당시 점수·일치 낱말·OCR 신뢰도. 지금 볼 수 없는 문서면 null.
+  evidence?: RetrievalEvidence | null
 }
 
 export interface AnswerTraceDetail {

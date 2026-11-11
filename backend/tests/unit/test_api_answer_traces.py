@@ -148,6 +148,17 @@ async def test_detail_shows_text_only_for_documents_the_admin_can_view(world):
     assert detail["query"] == "근거 질문" and detail["answer"] == "답변[1]"
 
 
+def test_source_view_shows_evidence_only_for_visible_documents():
+    doc_id = str(uuid4())
+    evidence = {"scores": {"rerank": 0.8}, "matched_terms": ["연차"]}
+    source = AnswerTraceSource(rank=1, document_id=doc_id, filename="a.txt", source_kind="chunk",
+                               cited=True, text_sha256=_sha("x"), evidence=evidence)
+    texts = {"chunk": {}, "summary": {}}
+
+    assert traces_api._source_view(source, {doc_id}, {doc_id}, texts)["evidence"] == evidence
+    assert traces_api._source_view(source, {doc_id}, set(), texts)["evidence"] is None
+
+
 def test_source_view_ignores_chunk_text_from_another_document():
     pub_id, other_id, chunk_id = str(uuid4()), str(uuid4()), str(uuid4())
     source = AnswerTraceSource(rank=1, document_id=pub_id, filename="pub.txt", source_kind="chunk",

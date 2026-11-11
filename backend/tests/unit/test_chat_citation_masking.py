@@ -28,6 +28,8 @@ def _citation(index, doc, text):
         "index": index, "document_id": str(doc.id) if doc else str(uuid4()),
         "collection_id": None, "collection_name": "공유", "filename": f"f{index}.txt",
         "page_number": 1, "text": text,
+        # v3 마일스톤 6: 근거 설명의 겹친 낱말은 본문에서 나온 것이라 가린 인용에는 남으면 안 된다
+        "evidence": {"scores": {"vector": 0.9}, "matched_terms": [f"낱말{index}"], "ocr_confidence": 0.4, "low_ocr": True},
     }
 
 
@@ -70,11 +72,13 @@ async def world(db_session):  # noqa: F811
 def _check(citations):
     visible, secret, gone, unknown = citations
     assert (visible.text, visible.filename, visible.hidden) == ("공개 발췌", "f1.txt", False)
+    assert visible.evidence["matched_terms"] == ["낱말1"]
     # 문서 id가 없는 인용은 판정할 수 없으므로 가린다(fail-closed)
     for masked in (secret, gone, unknown):
         assert masked.hidden is True
         assert (masked.text, masked.filename, masked.document_id) == ("", None, None)
         assert masked.collection_name is None and masked.index in (2, 3, 4)
+        assert masked.evidence is None
 
 
 async def test_reopened_conversation_masks_citations_now_hidden(world):

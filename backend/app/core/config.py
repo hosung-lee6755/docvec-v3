@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
 
 class Settings(BaseSettings):
@@ -98,6 +98,8 @@ class Settings(BaseSettings):
     mcp_answer_timeout_seconds: int = 180
     # 심층 검색은 분해, 하위 질문별 검색, 종합을 거쳐 더 오래 걸린다(v3 마일스톤 5)
     mcp_deep_answer_timeout_seconds: int = 300
+    # v3 마일스톤 6: 이보다 낮은 OCR 신뢰도의 쪽에서 나온 검색 결과와 인용에 경고를 붙인다(품질 블록 기본값과 같다)
+    ocr_low_confidence: float = Field(0.5, ge=0.0, le=1.0)
     mcp_token_default_days: int = 90
     mcp_token_max_days: int = 365
     mcp_tokens_per_user: int = 10

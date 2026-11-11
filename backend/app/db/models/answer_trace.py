@@ -97,3 +97,5 @@ class AnswerTraceSource(Base):
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     text_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     cited: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # v3 마일스톤 6: 이 발췌문이 근거가 된 이유(벡터·키워드·융합·재순위 점수, 겹친 낱말, 쪽의 OCR 신뢰도)
+    evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)

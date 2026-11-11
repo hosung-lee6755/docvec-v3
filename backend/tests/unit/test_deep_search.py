@@ -184,3 +184,15 @@ def test_step_documents_the_viewer_cannot_see_are_masked():
     ]
     assert "secret.pdf" not in str(masked) and steps["subquestions"][0]["documents"][1]["filename"] == "secret.pdf"
     assert mask_step_documents(None, set()) is None
+
+
+
+def test_weakness_uses_only_the_rerank_score_from_evidence():
+    from app.services.agentic.deep_search import _is_weak
+
+    reranked_low = [{"score": 0.9, "evidence": {"scores": {"rerank": 0.2}}}] * 2
+    assert _is_weak(reranked_low) is True
+    # 재순위를 끈 컬렉션의 코사인 점수(0.3)로는 약하다고 보지 않는다. 결과 수만 본다
+    cosine_only = [{"score": 0.3, "evidence": {"scores": {"vector": 0.3}}}] * 2
+    assert _is_weak(cosine_only) is False
+    assert _is_weak(cosine_only[:1]) is True

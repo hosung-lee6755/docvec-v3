@@ -469,3 +469,38 @@ async def test_remove_member_deletes_and_guards_owner(world):
     await _expect(400, api.remove_member(cid, U(world["owner"].id), db, world["owner"]))
     await _expect(403, api.remove_member(cid, U(invitee.id), db, world["pmember"]))
     await _expect(404, api.remove_member(uuid4(), U(invitee.id), db, world["owner"]))
+
+
+# ---------- 검색 설정(v3 마일스톤 6) ----------
+
+@pytest.mark.asyncio
+async def test_update_collection_saves_and_resets_search_settings(world):
+    from app.services.search_settings import SearchSettings
+
+    cid = U(world["collection"].id)
+    await api.update_collection(
+        cid, api.CollectionUpdate(search_settings=SearchSettings(mode="vector", top_k=3, rerank=False)),
+        world["db"], world["owner"])
+    stored = await world["db"].get(Collection, world["collection"].id)
+    await world["db"].refresh(stored)
+    assert stored.search_settings["mode"] == "vector" and stored.search_settings["top_k"] == 3
+    assert stored.search_settings["rerank"] is False
+
+    # 이름만 바꾸면 검색 설정은 그대로다
+    await api.update_collection(cid, api.CollectionUpdate(name="renamed"), world["db"], world["owner"])
+    await world["db"].refresh(stored)
+    assert stored.search_settings["mode"] == "vector"
+
+    # null을 보내면 기본값(저장 안 함)으로 되돌린다
+    await api.update_collection(
+        cid, api.CollectionUpdate.model_validate({"search_settings": None}), world["db"], world["owner"])
+    await world["db"].refresh(stored)
+    assert stored.search_settings is None
+
+
+@pytest.mark.asyncio
+async def test_update_collection_rejects_out_of_range_search_settings():
+    with pytest.raises(ValidationError):
+        api.CollectionUpdate.model_validate({"search_settings": {"top_k": 50}})
+    with pytest.raises(ValidationError):
+        api.CollectionUpdate.model_validate({"search_settings": {"mode": "magic"}})

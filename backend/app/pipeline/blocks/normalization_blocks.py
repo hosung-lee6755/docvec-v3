@@ -306,7 +306,6 @@ class StopwordBlock(BaseBlock):
         return StopwordConfig
 
     def run(self, context: BlockContext) -> BlockResult:
-        from app.db.models.dictionary_application import DictionaryApplication
         from app.db.models.workflow_run import WorkflowRun
         from app.db.session import get_sync_db
 
@@ -322,24 +321,23 @@ class StopwordBlock(BaseBlock):
             run = db.get(WorkflowRun, context.run_id)
             cutoff = _dictionary_version_cutoff(db, run.dictionary_version if run else None)
             entries = _load_entries_as_of(db, "stopword", cutoff)
+            excluded, reverted = _document_dictionary_skips(db, context.document_id)
 
             matches: list[tuple[int, int, object]] = []
             for entry in entries:
+                if str(entry.id) in excluded:
+                    continue
                 if cfg.scope_filter and not (set(entry.scope or []) & set(cfg.scope_filter)):
                     continue
                 for start, end in _find_spans(entry.term, entry.match_type or "EXACT", entry.case_sensitive, text):
                     if any(ps <= start < pe or ps < end <= pe for ps, pe in protected):
                         continue
+                    if (str(entry.id), text[start:end]) in reverted:
+                        continue
                     matches.append((start, end, entry))
 
             for start, end, entry in matches:
-                db.add(DictionaryApplication(
-                    run_id=context.run_id, step_id=context.step_id,
-                    document_id=context.document_id, dictionary_type="STOPWORD",
-                    entry_id=entry.id, dictionary_version=run.dictionary_version if run else 0,
-                    original_text=text[start:end], normalized_text=None,
-                    start_offset=start, end_offset=end,
-                ))
+                _record_application(db, context, run, "STOPWORD", entry, text, start, end, None)
             db.commit()
 
             if cfg.action == "remove" and matches:
@@ -372,7 +370,6 @@ class SynonymBlock(BaseBlock):
         return SynonymConfig
 
     def run(self, context: BlockContext) -> BlockResult:
-        from app.db.models.dictionary_application import DictionaryApplication
         from app.db.models.workflow_run import WorkflowRun
         from app.db.session import get_sync_db
 
@@ -387,9 +384,12 @@ class SynonymBlock(BaseBlock):
             run = db.get(WorkflowRun, context.run_id)
             cutoff = _dictionary_version_cutoff(db, run.dictionary_version if run else None)
             entries = _load_entries_as_of(db, "synonym", cutoff)
+            excluded, reverted = _document_dictionary_skips(db, context.document_id)
 
             applied = 0
             for entry in entries:
+                if str(entry.id) in excluded:
+                    continue
                 # 블록 config가 tag_only면 사전 항목의 processing_mode와 무관하게
                 # 마킹만 한다. normalize면 REPLACE/NORMALIZE 항목만 실제 치환.
                 should_replace = cfg.processing_mode == "normalize" and (
@@ -397,15 +397,11 @@ class SynonymBlock(BaseBlock):
                 )
                 for variant in entry.variants:
                     spans = _find_spans(variant.variant_term, "EXACT", entry.case_sensitive, text)
+                    if _is_reverted(reverted, entry, text, spans):
+                        continue
                     for start, end in spans:
-                        db.add(DictionaryApplication(
-                            run_id=context.run_id, step_id=context.step_id,
-                            document_id=context.document_id, dictionary_type="SYNONYM",
-                            entry_id=entry.id, dictionary_version=run.dictionary_version if run else 0,
-                            original_text=text[start:end],
-                            normalized_text=entry.term if should_replace else None,
-                            start_offset=start, end_offset=end,
-                        ))
+                        _record_application(db, context, run, "SYNONYM", entry, text, start, end,
+                                            entry.term if should_replace else None)
                         applied += 1
                     if should_replace and spans:
                         pattern = re.compile(
@@ -442,7 +438,6 @@ class UserDictBlock(BaseBlock):
         return UserDictConfig
 
     def run(self, context: BlockContext) -> BlockResult:
-        from app.db.models.dictionary_application import DictionaryApplication
         from app.db.models.workflow_run import WorkflowRun
         from app.db.session import get_sync_db
 
@@ -457,11 +452,12 @@ class UserDictBlock(BaseBlock):
             run = db.get(WorkflowRun, context.run_id)
             cutoff = _dictionary_version_cutoff(db, run.dictionary_version if run else None)
             entries = _load_entries_as_of(db, "custom_word", cutoff)
+            excluded, reverted = _document_dictionary_skips(db, context.document_id)
 
             applied = 0
             protected_spans: list[tuple[int, int]] = []
             for entry in entries:
-                if entry.processing_rule == "IGNORE":
+                if entry.processing_rule == "IGNORE" or str(entry.id) in excluded:
                     continue
                 if cfg.term_types and entry.term_type not in cfg.term_types:
                     continue
@@ -469,13 +465,7 @@ class UserDictBlock(BaseBlock):
                 own_spans = _find_spans(entry.term, "EXACT", entry.case_sensitive, text)
                 protected_spans.extend(own_spans)
                 for start, end in own_spans:
-                    db.add(DictionaryApplication(
-                        run_id=context.run_id, step_id=context.step_id,
-                        document_id=context.document_id, dictionary_type="USER_DICT",
-                        entry_id=entry.id, dictionary_version=run.dictionary_version if run else 0,
-                        original_text=text[start:end], normalized_text=None,
-                        start_offset=start, end_offset=end,
-                    ))
+                    _record_application(db, context, run, "USER_DICT", entry, text, start, end, None)
                     applied += 1
 
                 # KEEP은 위에서 표준 용어 자체의 등장만 보호 대상으로 등록하고
@@ -484,15 +474,11 @@ class UserDictBlock(BaseBlock):
                     continue
                 for variant in entry.variants:
                     spans = _find_spans(variant.variant_term, "EXACT", entry.case_sensitive, text)
+                    if _is_reverted(reverted, entry, text, spans):
+                        continue
                     for start, end in spans:
-                        db.add(DictionaryApplication(
-                            run_id=context.run_id, step_id=context.step_id,
-                            document_id=context.document_id, dictionary_type="USER_DICT",
-                            entry_id=entry.id, dictionary_version=run.dictionary_version if run else 0,
-                            original_text=text[start:end],
-                            normalized_text=entry.term if should_replace else None,
-                            start_offset=start, end_offset=end,
-                        ))
+                        _record_application(db, context, run, "USER_DICT", entry, text, start, end,
+                                            entry.term if should_replace else None)
                         applied += 1
                     if should_replace and spans:
                         pattern = re.compile(
@@ -513,6 +499,64 @@ class UserDictBlock(BaseBlock):
             return BlockResult(output=output, metrics={"user_dict_applications": applied})
         finally:
             db.close()
+
+
+# 사전 적용 기록에 남기는 앞뒤 문맥 길이(v3 마일스톤 6). 화면이 "…앞 [원문→치환] 뒤…"로 보여 준다
+_CONTEXT_CHARS = 40
+# 문맥 경계에 걸친 개인정보(예: 전화번호의 앞 절반)도 찾도록 더 넓게 본 뒤 자른다
+_CONTEXT_SCAN_MARGIN = 40
+
+
+def _record_application(db, context: BlockContext, run, kind: str, entry, text: str,
+                        start: int, end: int, normalized: str | None) -> None:
+    from app.db.models.dictionary_application import DictionaryApplication
+    from app.pipeline.blocks.pii_blocks import mask_pii_patterns
+
+    # 문맥은 보기 권한만 있으면 사전 탭에서 보인다. 개인정보 블록이 사전 블록보다 뒤에 있거나
+    # 표시만 하는 설정이어도 원문이 새지 않게, 저장하기 전에 정규식으로 찾는 개인정보를 가린다.
+    scan_start = max(0, start - _CONTEXT_CHARS - _CONTEXT_SCAN_MARGIN)
+    scan_end = end + _CONTEXT_CHARS + _CONTEXT_SCAN_MARGIN
+    masked = mask_pii_patterns(text[scan_start:scan_end])
+    before_start = max(0, start - _CONTEXT_CHARS) - scan_start
+    db.add(DictionaryApplication(
+        run_id=context.run_id, step_id=context.step_id,
+        document_id=context.document_id, dictionary_type=kind,
+        entry_id=entry.id, dictionary_version=run.dictionary_version if run else 0,
+        original_text=text[start:end], normalized_text=normalized,
+        start_offset=start, end_offset=end,
+        context_before=masked[before_start:start - scan_start],
+        context_after=masked[end - scan_start:end - scan_start + _CONTEXT_CHARS],
+    ))
+
+
+def _document_dictionary_skips(db, document_id) -> tuple[set[str], set[tuple[str, str]]]:
+    """이 문서에서 건너뛸 사전 항목(문서별 끄기)과 되돌린 (항목, 원문) 쌍(v3 마일스톤 6).
+    되돌리기는 위치가 아니라 원문 표현 단위로 지킨다. 재처리마다 위치가 바뀌기 때문이다."""
+    from sqlalchemy import select
+
+    from app.db.models.dictionary_application import DictionaryApplication
+    from app.db.models.document_dictionary_exclusion import DocumentDictionaryExclusion
+
+    excluded = {
+        str(entry_id) for entry_id in db.scalars(
+            select(DocumentDictionaryExclusion.entry_id)
+            .where(DocumentDictionaryExclusion.document_id == document_id)
+        )
+    }
+    reverted = {
+        (str(entry_id), original) for entry_id, original in db.execute(
+            select(DictionaryApplication.entry_id, DictionaryApplication.original_text).where(
+                DictionaryApplication.document_id == document_id,
+                DictionaryApplication.reverted.is_(True),
+                DictionaryApplication.entry_id.is_not(None),
+            )
+        ).all()
+    }
+    return excluded, reverted
+
+
+def _is_reverted(reverted: set[tuple[str, str]], entry, text: str, spans) -> bool:
+    return any((str(entry.id), text[start:end]) in reverted for start, end in spans)
 
 
 def _merged_protected_spans(context: BlockContext) -> list[tuple[int, int]]:

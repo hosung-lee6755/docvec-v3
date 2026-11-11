@@ -10,6 +10,7 @@ import {
 } from '../hooks/useAnswerTraces'
 import { useAuthStore } from '../store/authStore'
 import { DeepSearchSteps } from '../components/chat/DeepSearch'
+import { CitationEvidence, LowOcrBadge } from '../components/chat/CitationEvidence'
 
 const PAGE_SIZE = 50
 
@@ -50,6 +51,7 @@ function SourceCard({ source }: { source: AnswerTraceSource }) {
           <>
             <span>{source.filename ?? '이름 없음'}</span>
             {source.page_number ? <span>{source.page_number}쪽</span> : null}
+            <LowOcrBadge evidence={source.evidence} />
             <span>등급 {source.security_level ?? '-'}</span>
           </>
         ) : (
@@ -64,6 +66,7 @@ function SourceCard({ source }: { source: AnswerTraceSource }) {
       <p style={{ margin: 'var(--space-2) 0 0', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
         {source.text ?? <span style={muted}>{hiddenText}</span>}
       </p>
+      {source.access === 'visible' && <CitationEvidence evidence={source.evidence} />}
     </li>
   )
 }
@@ -78,7 +81,8 @@ function TraceDetail({ traceId, onClose }: { traceId: string; onClose: () => voi
     ['권한 맥락', `소속 그룹 ${data.group_ids.length}개 · 접근 가능 컬렉션 ${data.accessible_collection_count}개`],
     ['질문 방식', data.mode === 'deep' ? '심층 검색(하위 질문으로 나눠 찾은 뒤 종합)' : '일반'],
     ['질문 경로', data.channel === 'mcp' ? `외부 에이전트(토큰 ${data.access_token_id ?? '삭제됨'})` : '채팅 화면'],
-    ['모델', `${data.model_key ?? '-'} (${data.provider ?? '-'}) · 검증 모델 ${data.verifier_model ?? '-'}`],
+    // 캐시 재사용이면 모델을 부르지 않았으므로 모델 칸이 비어 있다. 빈 칸 대신 그 사실을 적는다.
+    ['모델', data.cache_hit ? '캐시 재사용(모델 호출 없음)' : `${data.model_key ?? '-'} (${data.provider ?? '-'}) · 검증 모델 ${data.verifier_model ?? '-'}`],
     ['근거 검증', `${data.grounding ? GROUNDING_LABELS[data.grounding] : '-'}${data.broadened ? ' · 재검색함' : ''}${data.cache_hit ? ' · 캐시 재사용' : ''}`],
     ['시스템 프롬프트', PROMPT_SOURCE_LABELS[data.system_prompt_source ?? ''] ?? '-'],
     ['토큰·응답 시간', `${data.input_tokens ?? '-'} / ${data.output_tokens ?? '-'} · ${data.latency_ms ?? '-'}ms`],
@@ -213,7 +217,7 @@ export default function AnswerTracesPage() {
                     {t.cache_hit ? ' · 캐시' : ''}
                   </td>
                   <td>{t.source_count}건 중 {t.cited_count}건 인용</td>
-                  <td style={muted}>{t.model_key ?? '-'}</td>
+                  <td style={muted}>{t.cache_hit ? '캐시 재사용' : t.model_key ?? '-'}</td>
                 </tr>
               ))}
             </tbody>

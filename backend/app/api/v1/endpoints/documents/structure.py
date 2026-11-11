@@ -7,6 +7,7 @@ from app.api.v1.permissions import (
     check_document_access,
 )
 from app.db.models.document import Document
+from app.db.models.document_dictionary_exclusion import DocumentDictionaryExclusion
 from app.db.models.processing_job import ProcessingJob
 from app.db.models.user import User
 from app.db.session import get_db
@@ -14,6 +15,7 @@ from app.schemas.document import (
     CleaningChangesResponse,
     DictionaryApplicationItem,
     DictionaryApplicationsResponse,
+    DictionaryExclusionsResponse,
     DocumentContentResponse,
     DocumentTablesResponse,
     PiiDetectionItem,
@@ -126,12 +128,107 @@ async def list_dictionary_applications(
             )
         ).all()
     pending_revert_count = sum(1 for app_row in applications if app_row.reverted)
+    terms = await _entry_terms(db, {a.entry_id for a in applications if a.entry_id})
+    items = [
+        DictionaryApplicationItem.model_validate(a, from_attributes=True).model_copy(
+            update={"entry_term": terms.get(str(a.entry_id))}
+        )
+        for a in applications
+    ]
+    excluded = await db.scalars(
+        select(DocumentDictionaryExclusion.entry_id).where(DocumentDictionaryExclusion.document_id == document_id)
+    )
     return {
         "document_id": str(document_id),
         "run_id": run_id,
         "pending_revert_count": pending_revert_count,
-        "applications": applications,
+        "applications": items,
+        "excluded_entry_ids": sorted(str(e) for e in excluded),
     }
+
+
+async def _entry_terms(db: AsyncSession, entry_ids: set) -> dict[str, str]:
+    from app.db.models.dictionary_entry import DictionaryEntry
+
+    if not entry_ids:
+        return {}
+    rows = await db.execute(select(DictionaryEntry.id, DictionaryEntry.term).where(DictionaryEntry.id.in_(entry_ids)))
+    return {str(i): term for i, term in rows.all()}
+
+
+@router.get("/{document_id}/dictionary-exclusions", response_model=DictionaryExclusionsResponse)
+async def list_dictionary_exclusions(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """이 문서에서 끈 사전 항목(v3 마일스톤 6)."""
+    from app.db.models.dictionary_entry import DictionaryEntry
+
+    doc = await _document_or_404(db, document_id)
+    await check_document_access(db, doc, current_user, min_role="viewer")
+    rows = await db.execute(
+        select(DocumentDictionaryExclusion.entry_id, DictionaryEntry.term, DictionaryEntry.entry_type,
+               DocumentDictionaryExclusion.created_at)
+        .join(DictionaryEntry, DictionaryEntry.id == DocumentDictionaryExclusion.entry_id)
+        .where(DocumentDictionaryExclusion.document_id == document_id)
+        .order_by(DocumentDictionaryExclusion.created_at)
+    )
+    return {
+        "document_id": str(document_id),
+        "entries": [
+            {"entry_id": str(e), "term": term, "entry_type": kind, "created_at": at}
+            for e, term, kind, at in rows.all()
+        ],
+    }
+
+
+@router.put("/{document_id}/dictionary-exclusions/{entry_id}", status_code=204)
+async def exclude_dictionary_entry(
+    document_id: UUID,
+    entry_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """이 문서에서만 사전 항목을 끈다. 다음 처리(재처리)부터 적용하지 않는다. 이미 꺼져 있으면 그대로다."""
+    from app.db.models.dictionary_entry import DictionaryEntry
+
+    doc = await _document_or_404(db, document_id)
+    await check_document_access(db, doc, current_user, min_role="editor")
+    if await db.get(DictionaryEntry, entry_id) is None:
+        raise HTTPException(status_code=404, detail="Dictionary entry not found")
+    exists = await db.get(DocumentDictionaryExclusion, (document_id, entry_id))
+    if exists is None:
+        db.add(DocumentDictionaryExclusion(document_id=document_id, entry_id=entry_id,
+                                           created_by=current_user.id))
+        log_audit(db, str(current_user.id), "document.dictionary_exclude", "document", str(document_id),
+                  detail={"entry_id": str(entry_id)})
+        await db.commit()
+
+
+@router.delete("/{document_id}/dictionary-exclusions/{entry_id}", status_code=204)
+async def include_dictionary_entry(
+    document_id: UUID,
+    entry_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """끈 사전 항목을 이 문서에 다시 적용한다(다음 처리부터)."""
+    doc = await _document_or_404(db, document_id)
+    await check_document_access(db, doc, current_user, min_role="editor")
+    exclusion = await db.get(DocumentDictionaryExclusion, (document_id, entry_id))
+    if exclusion is not None:
+        await db.delete(exclusion)
+        log_audit(db, str(current_user.id), "document.dictionary_include", "document", str(document_id),
+                  detail={"entry_id": str(entry_id)})
+        await db.commit()
+
+
+async def _document_or_404(db: AsyncSession, document_id: UUID) -> Document:
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
 
 
 @router.post(

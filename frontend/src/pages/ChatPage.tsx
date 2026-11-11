@@ -15,6 +15,7 @@ import {
   type ConversationSummary,
 } from '../hooks/useChat'
 import { DeepSearchProgress, DeepSearchSteps, DeepSearchToggle } from '../components/chat/DeepSearch'
+import { CitationEvidence, LowOcrBadge } from '../components/chat/CitationEvidence'
 
 export default function ChatPage() {
   const { conversationId, projectId } = useParams<{ conversationId: string; projectId?: string }>()
@@ -385,6 +386,12 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
             </p>
           </div>
 
+          {!!chat.expanded_terms?.length && (
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>
+              사전의 동의어로 함께 찾은 낱말: {chat.expanded_terms.join(', ')}
+            </p>
+          )}
+
           {chat.agent_steps && <DeepSearchSteps steps={chat.agent_steps} />}
 
           {!!chat.citations?.length && (
@@ -436,6 +443,7 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
                           {c.filename ?? '문서'}
                         </span>
                         {c.page_number ? <span>{c.page_number}쪽</span> : null}
+                        <LowOcrBadge evidence={c.evidence} />
                         <span style={{ flex: 1 }} />
                         {c.document_id && (
                           <button
@@ -449,6 +457,7 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
                         )}
                       </div>
                       <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>{c.text}</p>
+                      <CitationEvidence evidence={c.evidence} />
                     </div>
                   ))}
                 </div>

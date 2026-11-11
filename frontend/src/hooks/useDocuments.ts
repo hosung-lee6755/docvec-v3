@@ -45,7 +45,12 @@ export interface Document {
   // 사용자가 직접 수정한 필드 이름(title/language/category 중 일부). 자동 생성값을
   // 덮어쓴 상태를 표시하고, reset_fields로 되돌릴 수 있는지 판단하는 데 쓴다.
   user_edited_fields?: string[]
+  // v3 마일스톤 6: 최근 처리의 품질 판정과 OCR 신뢰도가 기준보다 낮은 쪽 번호
+  quality_status?: string | null
+  low_ocr_pages?: number[]
 }
+
+export type DocumentQualityFilter = 'low_ocr' | 'warning' | 'failure'
 
 export interface DocumentListResponse {
   items: Document[]
@@ -64,6 +69,7 @@ export interface UseDocumentsOptions {
   projectId?: string
   status?: string
   filename?: string
+  quality?: DocumentQualityFilter | ''
   sortBy?: DocumentSortBy
   order?: SortOrder
 }
@@ -76,12 +82,13 @@ export function useDocuments(options: UseDocumentsOptions = {}) {
     projectId,
     status,
     filename,
+    quality,
     sortBy = 'created_at',
     order = 'desc',
   } = options
 
   return useQuery<DocumentListResponse>({
-    queryKey: ['documents', page, limit, collectionId, projectId, status, filename, sortBy, order],
+    queryKey: ['documents', page, limit, collectionId, projectId, status, filename, quality, sortBy, order],
     queryFn: async () => {
       const { data } = await apiClient.get('/documents', {
         params: {
@@ -91,6 +98,7 @@ export function useDocuments(options: UseDocumentsOptions = {}) {
           project_id: projectId || undefined,
           status: status || undefined,
           filename: filename || undefined,
+          quality: quality || undefined,
           sort_by: sortBy,
           order,
         },

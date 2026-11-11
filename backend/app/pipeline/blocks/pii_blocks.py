@@ -82,6 +82,19 @@ def _detect_regex_matches(text: str, entity_type: str) -> list[tuple[int, int, f
     return []
 
 
+_REGEX_ENTITY_TYPES = ("RRN", "CARD", "PHONE", "ACCOUNT", "EMAIL")
+
+
+def mask_pii_patterns(text: str, mask_char: str = "*") -> str:
+    """정규식으로 찾을 수 있는 개인정보(주민번호, 카드, 전화, 계좌, 이메일)를 같은 길이로 가린다.
+    길이를 지키므로 위치(오프셋)는 그대로다. 이름(NAME)은 사전 기반이라 여기서 가리지 않는다."""
+    chars = list(text)
+    for entity_type in _REGEX_ENTITY_TYPES:
+        for start, end, _confidence in _detect_regex_matches(text, entity_type):
+            chars[start:end] = mask_char * (end - start)
+    return "".join(chars)
+
+
 class PiiDetectConfig(BaseModel):
     entity_types: list[str] | None = None  # None = 전체 6종(RRN/PHONE/EMAIL/ACCOUNT/CARD/NAME)
     action: str = "mask"  # mark_only | mask | tokenize | remove | exclude_from_embedding

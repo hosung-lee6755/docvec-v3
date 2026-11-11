@@ -6,6 +6,7 @@ import { apiClient } from '../lib/apiClient'
 import { useCollections } from '../hooks/useCollections'
 import { useAllTags } from '../hooks/useDocuments'
 import { useSearchHistory } from '../hooks/useSearchHistory'
+import { CitationEvidence, LowOcrBadge, type RetrievalEvidence } from '../components/chat/CitationEvidence'
 
 interface SearchResult {
   chunk_id: string
@@ -15,15 +16,36 @@ interface SearchResult {
   metadata: Record<string, unknown>
   bm25_score: number | null
   final_score: number | null
+  // v3 마일스톤 6: 질문과 겹친 낱말, 그 쪽의 OCR 신뢰도
+  evidence?: RetrievalEvidence | null
+}
+
+interface AppliedSearchSettings {
+  mode: SearchMode
+  diversify: boolean
+  vector_weight: number
+  rerank_in_chat: boolean
+  from_collection: boolean
 }
 
 interface SearchResponse {
   items: SearchResult[]
   expanded_query: string
   added_terms: string[]
+  applied?: AppliedSearchSettings | null
 }
 
 type SearchMode = 'vector' | 'hybrid'
+
+const RESULT_LIMITS = [5, 10, 20, 30]
+
+function appliedSummary(applied: AppliedSearchSettings): string {
+  const how = applied.mode === 'hybrid'
+    ? `하이브리드(의미 ${Math.round(applied.vector_weight * 100)}%, 키워드 ${Math.round((1 - applied.vector_weight) * 100)}%)`
+    : '의미 검색'
+  const origin = applied.from_collection ? '컬렉션 설정 기준' : '이 화면에서 고른 설정'
+  return `${how}${applied.diversify ? ', 다양성 검색' : ''} · ${origin} · 재순위는 채팅에서만 합니다(이 설정: ${applied.rerank_in_chat ? '켬' : '끔'})`
+}
 
 export default function SearchPage() {
   const navigate = useNavigate()
@@ -35,6 +57,7 @@ export default function SearchPage() {
   const [showHistory, setShowHistory] = useState(false)
   const [tagFilter, setTagFilter] = useState('')
   const [showScores, setShowScores] = useState(false)
+  const [limit, setLimit] = useState(10)
   const { data: collectionsData, isLoading: collectionsLoading } = useCollections(projectId)
   const { data: historyData } = useSearchHistory()
   const { data: allTagsData } = useAllTags()
@@ -46,7 +69,7 @@ export default function SearchPage() {
         query: q,
         collection_id: cid || null,
         project_id: projectId || null,
-        limit: 10,
+        limit,
         mode: m,
         diversify,
         filters: tagFilter.trim() ? { tags: tagFilter.trim() } : null,
@@ -82,7 +105,15 @@ export default function SearchPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
             <select
               value={collectionId}
-              onChange={(e) => setCollectionId(e.target.value)}
+              onChange={(e) => {
+                // 컬렉션을 고르면 그 컬렉션의 검색 설정(v3 마일스톤 6)을 기본값으로 가져온다
+                setCollectionId(e.target.value)
+                const picked = collectionsData?.items.find((col) => col.id === e.target.value)
+                if (picked?.search_settings) {
+                  setMode(picked.search_settings.mode)
+                  setDiversify(picked.search_settings.diversify)
+                }
+              }}
               disabled={collectionsLoading}
               className="krds-form-select small"
               style={{ flex: '0 0 180px', width: 180 }}
@@ -114,6 +145,16 @@ export default function SearchPage() {
             >
               다양성 검색
             </button>
+
+            <select
+              value={limit}
+              onChange={(e) => setLimit(Number(e.target.value))}
+              aria-label="결과 수"
+              className="krds-form-select small"
+              style={{ width: 90 }}
+            >
+              {RESULT_LIMITS.map((n) => <option key={n} value={n}>{n}건</option>)}
+            </select>
 
             <input
               value={tagFilter}
@@ -234,6 +275,11 @@ export default function SearchPage() {
               </span>
             )}
           </p>
+          {search.data.applied && (
+            <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>
+              검색 방식: {appliedSummary(search.data.applied)}
+            </p>
+          )}
           {search.data.items.map((result) => (
             <div key={result.chunk_id} style={{
               background: '#fff', border: '1px solid #e2e8f0',
@@ -249,9 +295,12 @@ export default function SearchPage() {
                   <FileText size={12} />
                   {typeof result.metadata.filename === 'string' ? result.metadata.filename : `문서 ${result.document_id.slice(0, 8)}...`}
                 </button>
-                <span className="krds-badge small bg-secondary" style={{ flexShrink: 0 }}>
-                  {((result.final_score ?? result.score) * 100).toFixed(1)}%
-                  {result.bm25_score != null && ' (하이브리드)'}
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  <LowOcrBadge evidence={result.evidence} />
+                  <span className="krds-badge small bg-secondary">
+                    {((result.final_score ?? result.score) * 100).toFixed(1)}%
+                    {result.bm25_score != null && ' (하이브리드)'}
+                  </span>
                 </span>
               </div>
               {showScores && (
@@ -275,6 +324,14 @@ export default function SearchPage() {
                 </div>
               )}
               <p style={{ fontSize: 14, lineHeight: 1.6, margin: 0 }}>{result.content}</p>
+              <CitationEvidence evidence={{
+                ...result.evidence,
+                scores: {
+                  vector: result.score,
+                  ...(result.bm25_score != null ? { bm25: result.bm25_score } : {}),
+                  ...(result.final_score != null ? { fused: result.final_score } : {}),
+                },
+              }} />
             </div>
           ))}
         </div>

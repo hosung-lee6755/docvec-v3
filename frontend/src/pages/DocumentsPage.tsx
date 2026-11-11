@@ -1,11 +1,18 @@
 ﻿import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Upload, Trash2, X, RefreshCw } from 'lucide-react'
-import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, type DocumentSortBy, type SortOrder } from '../hooks/useDocuments'
+import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, type DocumentQualityFilter, type DocumentSortBy, type SortOrder } from '../hooks/useDocuments'
 import { useCollections } from '../hooks/useCollections'
 import { STATUS_LABELS } from '../lib/documentStatus'
 import { DocumentsTable } from '../components/documents/DocumentsTable'
 import { UploadModal } from '../components/documents/UploadModal'
+
+// v3 마일스톤 6: 최근 처리 결과의 품질로 문서를 거른다
+const QUALITY_FILTER_LABELS: Record<DocumentQualityFilter, string> = {
+  low_ocr: 'OCR 신뢰도 낮은 쪽 있음',
+  warning: '경고·부분 실패',
+  failure: '처리 실패',
+}
 
 export default function DocumentsPage() {
   const navigate = useNavigate()
@@ -15,6 +22,7 @@ export default function DocumentsPage() {
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [filterCollectionId, setFilterCollectionId] = useState(() => searchParams.get('collection') ?? '')
   const [filterStatus, setFilterStatus] = useState('')
+  const [filterQuality, setFilterQuality] = useState<DocumentQualityFilter | ''>('')
   const [filenameInput, setFilenameInput] = useState('')
   const [filenameFilter, setFilenameFilter] = useState('')
   const [sortBy, setSortBy] = useState<DocumentSortBy>('created_at')
@@ -57,6 +65,7 @@ export default function DocumentsPage() {
     projectId,
     status: filterStatus,
     filename: filenameFilter,
+    quality: filterQuality,
     sortBy,
     order,
   })
@@ -66,7 +75,7 @@ export default function DocumentsPage() {
   // 있어(예: 3페이지 보다가 필터링하면 결과가 1페이지뿐) 1페이지로 되돌린다.
   useEffect(() => {
     setPage(1)
-  }, [filterCollectionId, filterStatus, filenameFilter, sortBy, order, limit])
+  }, [filterCollectionId, filterStatus, filterQuality, filenameFilter, sortBy, order, limit])
   const deleteDoc = useDeleteDocument()
   const batchDelete = useBatchDeleteDocuments()
   const batchReprocess = useBatchReprocessDocuments()
@@ -85,10 +94,11 @@ export default function DocumentsPage() {
     }
   }
 
-  const hasActiveFilters = !!(filterCollectionId || filterStatus || filenameFilter)
+  const hasActiveFilters = !!(filterCollectionId || filterStatus || filterQuality || filenameFilter)
   const clearFilters = () => {
     setFilterCollectionId('')
     setFilterStatus('')
+    setFilterQuality('')
     setFilenameInput('')
     setFilenameFilter('')
   }
@@ -145,6 +155,19 @@ export default function DocumentsPage() {
         >
           <option value="">전체 상태</option>
           {Object.entries(STATUS_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+
+        <select
+          value={filterQuality}
+          onChange={(e) => setFilterQuality(e.target.value as DocumentQualityFilter | '')}
+          className="krds-form-select small"
+          style={{ flex: '0 0 170px', width: 170 }}
+          aria-label="처리 품질로 거르기"
+        >
+          <option value="">전체 품질</option>
+          {Object.entries(QUALITY_FILTER_LABELS).map(([value, label]) => (
             <option key={value} value={value}>{label}</option>
           ))}
         </select>

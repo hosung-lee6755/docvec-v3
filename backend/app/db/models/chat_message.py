@@ -28,4 +28,6 @@ class ChatMessage(Base):
     # v3 마일스톤 5: standard(일반) 또는 deep(심층 검색). deep이면 하위 질문별 검색 과정을 agent_steps에 남긴다
     mode: Mapped[str] = mapped_column(String(10), default="standard", server_default="standard", nullable=False)
     agent_steps: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # v3 마일스톤 6: 사전의 검색어 확장(SEARCH_EXPAND)으로 질문에 덧붙인 낱말
+    expanded_terms: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)

@@ -39,6 +39,8 @@ class ChatCitation(BaseModel):
     text: str
     # v3: 지금 볼 수 없는 문서의 인용이면 True다. 본문·파일명·문서 id를 비워서 내려보낸다.
     hidden: bool = False
+    # v3 마일스톤 6: 근거가 된 이유(점수, 질문과 겹친 낱말, 쪽의 OCR 신뢰도). 가린 인용에는 없다
+    evidence: dict | None = None
 
 
 class ChatMessageResponse(BaseModel):
@@ -56,6 +58,8 @@ class ChatMessageResponse(BaseModel):
     mode: str = "standard"
     agent_steps: dict | None = None
     progress: dict | None = None
+    # v3 마일스톤 6: 사전의 검색어 확장으로 질문에 덧붙여 찾은 낱말
+    expanded_terms: list[str] | None = None
 
     class Config:
         from_attributes = True
@@ -101,7 +105,7 @@ def _as_uuid(value: str | None) -> str | None:
 def _masked(citation: ChatCitation) -> ChatCitation:
     return citation.model_copy(update={
         "hidden": True, "document_id": None, "collection_id": None, "collection_name": None,
-        "filename": None, "page_number": None, "text": "",
+        "filename": None, "page_number": None, "text": "", "evidence": None,
     })
 
 

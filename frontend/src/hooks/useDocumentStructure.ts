@@ -103,6 +103,10 @@ export interface DictionaryApplicationItem {
   end_offset: number | null
   reverted: boolean
   created_at: string
+  // v3 마일스톤 6: 적용 자리의 앞뒤 문맥(이전 기록은 없음)과 사전 항목 이름
+  context_before?: string | null
+  context_after?: string | null
+  entry_term?: string | null
 }
 
 export interface DictionaryApplicationsResult {
@@ -110,6 +114,41 @@ export interface DictionaryApplicationsResult {
   run_id: string | null
   pending_revert_count: number
   applications: DictionaryApplicationItem[]
+  // 이 문서에서 끈 사전 항목 id
+  excluded_entry_ids?: string[]
+}
+
+export interface DictionaryExclusionItem {
+  entry_id: string
+  term: string | null
+  entry_type: string | null
+  created_at: string
+}
+
+// 이 문서에서 끈 사전 항목. 재처리 뒤에는 적용 기록이 없어지므로 다시 켜려면 이 목록이 필요하다.
+export function useDictionaryExclusions(documentId: string) {
+  return useQuery<{ document_id: string; entries: DictionaryExclusionItem[] }>({
+    queryKey: ['documents', documentId, 'dictionary-applications', 'exclusions'],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/documents/${documentId}/dictionary-exclusions`)
+      return data
+    },
+    enabled: !!documentId,
+  })
+}
+
+// 문서 하나에서만 사전 항목을 끄거나 다시 켠다. 다음 처리(재처리)부터 반영된다.
+export function useToggleDictionaryExclusion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ documentId, entryId, exclude }: { documentId: string; entryId: string; exclude: boolean }) => {
+      const url = `/documents/${documentId}/dictionary-exclusions/${entryId}`
+      await (exclude ? apiClient.put(url) : apiClient.delete(url))
+    },
+    onSuccess: (_data, { documentId }) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', documentId, 'dictionary-applications'] })
+    },
+  })
 }
 
 export function useDictionaryApplications(documentId: string, enabled = true) {

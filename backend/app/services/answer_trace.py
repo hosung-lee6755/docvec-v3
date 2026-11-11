@@ -78,6 +78,7 @@ def build_sources(
             source_kind=chunk.get("source_kind") or default_kind,
             chunk_ref=chunk.get("chunk_ref"),
             score=chunk.get("score"),
+            evidence=chunk.get("evidence"),
             text_sha256=sha256_text(chunk.get("text")),
             cited=rank in cited,
         )
