@@ -96,6 +96,8 @@ class Settings(BaseSettings):
     mcp_enabled: bool = False
     mcp_answer_model: str = "qwen2.5-3b"
     mcp_answer_timeout_seconds: int = 180
+    # 심층 검색은 분해, 하위 질문별 검색, 종합을 거쳐 더 오래 걸린다(v3 마일스톤 5)
+    mcp_deep_answer_timeout_seconds: int = 300
     mcp_token_default_days: int = 90
     mcp_token_max_days: int = 365
     mcp_tokens_per_user: int = 10

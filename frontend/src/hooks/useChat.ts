@@ -20,6 +20,37 @@ export interface ChatCitation {
   hidden?: boolean
 }
 
+// v3 마일스톤 5 심층 검색 — 하위 질문별 검색 과정. 지금 볼 수 없는 문서는 서버가 가려서 보낸다.
+export interface AgentStepDocument {
+  document_id: string | null
+  filename: string | null
+  hidden?: boolean
+}
+
+export interface AgentStepQuestion {
+  question: string
+  searches: number
+  supplemented: boolean
+  hit_count: number
+  documents: AgentStepDocument[]
+}
+
+export interface AgentSteps {
+  subquestions: AgentStepQuestion[]
+  decomposed: boolean
+  fallback_to_original: boolean
+  evidence_count: number
+  timings_ms: { plan?: number; search?: number; answer?: number; verify?: number }
+}
+
+export interface DeepProgress {
+  phase: 'planning' | 'searching' | 'answering' | 'verifying'
+  subquestions?: string[]
+  current?: number
+}
+
+export type ChatMode = 'standard' | 'deep'
+
 export interface ChatMessage {
   id: string
   status: 'PENDING' | 'GENERATING' | 'DONE' | 'FAILED'
@@ -29,6 +60,9 @@ export interface ChatMessage {
   error_message: string | null
   created_at: string
   partial_answer?: string | null
+  mode?: ChatMode
+  agent_steps?: AgentSteps | null
+  progress?: DeepProgress | null
 }
 
 export interface ConversationSummary {
@@ -91,6 +125,7 @@ export function useCreateConversation() {
       project_id?: string
       collection_id?: string
       model_key: string
+      mode?: ChatMode
     }) => {
       const { data } = await apiClient.post('/chat/conversations', input)
       return data as ConversationDetail
@@ -105,9 +140,10 @@ export function useCreateConversation() {
 export function useSendMessage(conversationId: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (query: string) => {
+    mutationFn: async ({ query, mode = 'standard' }: { query: string; mode?: ChatMode }) => {
       const { data } = await apiClient.post(`/chat/conversations/${conversationId}/messages`, {
         query,
+        mode,
       })
       return data as ChatMessage
     },

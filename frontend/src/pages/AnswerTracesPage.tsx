@@ -9,6 +9,7 @@ import {
   type SourceAccess,
 } from '../hooks/useAnswerTraces'
 import { useAuthStore } from '../store/authStore'
+import { DeepSearchSteps } from '../components/chat/DeepSearch'
 
 const PAGE_SIZE = 50
 
@@ -75,6 +76,7 @@ function TraceDetail({ traceId, onClose }: { traceId: string; onClose: () => voi
   const facts: [string, string][] = [
     ['질문한 사람', `${data.username ?? '(삭제된 사용자)'} · 역할 ${data.user_role ?? '-'} · 열람등급 ${data.clearance_level ?? '-'}`],
     ['권한 맥락', `소속 그룹 ${data.group_ids.length}개 · 접근 가능 컬렉션 ${data.accessible_collection_count}개`],
+    ['질문 방식', data.mode === 'deep' ? '심층 검색(하위 질문으로 나눠 찾은 뒤 종합)' : '일반'],
     ['질문 경로', data.channel === 'mcp' ? `외부 에이전트(토큰 ${data.access_token_id ?? '삭제됨'})` : '채팅 화면'],
     ['모델', `${data.model_key ?? '-'} (${data.provider ?? '-'}) · 검증 모델 ${data.verifier_model ?? '-'}`],
     ['근거 검증', `${data.grounding ? GROUNDING_LABELS[data.grounding] : '-'}${data.broadened ? ' · 재검색함' : ''}${data.cache_hit ? ' · 캐시 재사용' : ''}`],
@@ -103,6 +105,8 @@ function TraceDetail({ traceId, onClose }: { traceId: string; onClose: () => voi
       <p style={{ whiteSpace: 'pre-wrap' }}>{data.query}</p>
       <h3 style={{ fontSize: 14 }}>답변 <span className="krds-badge small bg-information">AI가 생성한 답변</span></h3>
       <p style={{ whiteSpace: 'pre-wrap' }}>{data.answer ?? data.error_message ?? '-'}</p>
+
+      {data.agent_steps && <DeepSearchSteps steps={data.agent_steps} defaultOpen />}
 
       <h3 style={{ fontSize: 14 }}>근거로 넣은 발췌문 ({data.sources.length})</h3>
       <p style={{ fontSize: 12, ...muted }}>본문과 파일명은 지금 내가 볼 수 있는 문서만 보입니다. 관리자도 문서 열람 권한을 건너뛰지 않습니다.</p>
@@ -197,6 +201,7 @@ export default function AnswerTracesPage() {
                   <td>
                     {t.username ?? '(삭제된 사용자)'}
                     {t.channel === 'mcp' && <> <span className="krds-badge xsmall bg-information">외부 에이전트</span></>}
+                    {t.mode === 'deep' && <> <span className="krds-badge xsmall bg-secondary">심층 검색</span></>}
                   </td>
                   <td>
                     <button type="button" className="krds-btn text small" onClick={() => setSelected(t.id)}>

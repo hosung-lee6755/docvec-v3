@@ -10,10 +10,11 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
+from app.db.models.answer_trace import AnswerTrace
 from app.db.models.chat_conversation import ChatConversation
 from app.db.models.chat_message import ChatMessage
 from app.db.models.collection import Collection
@@ -26,6 +27,7 @@ from app.db.models.project_member import ProjectMember
 from app.db.models.user import User
 from app.db.models.user_api_key import UserApiKey
 from app.pipeline.tasks import chat
+from app.services.agentic.planner import DECOMPOSE_SYSTEM_PROMPT
 from tests.conftest import TEST_DATABASE_URL
 
 SYNC_URL = TEST_DATABASE_URL.replace("+asyncpg", "+psycopg2")
@@ -51,6 +53,14 @@ def test_answer_cache_key_scopes_by_collection_project_model_and_access():
     assert chat._answer_cache_key("q", None, None, "other", "fp") != base
     # v3: 권한 조합이 다르면 같은 질문이라도 캐시를 공유하지 않는다(답변·인용 누출 방지)
     assert chat._answer_cache_key("q", None, None, "m", "other-fp") != base
+
+
+def test_answer_cache_key_keeps_deep_answers_apart_from_standard_ones():
+    standard = chat._answer_cache_key("q", None, None, "m", "fp")
+    assert chat._answer_cache_key("q", None, None, "m", "fp", mode="standard") == standard
+    assert standard.startswith("rag_answer:")
+    deep = chat._answer_cache_key("q", None, None, "m", "fp", mode="deep")
+    assert deep.startswith("rag_answer_deep:") and deep != standard
 
 
 @pytest.mark.parametrize(
@@ -436,8 +446,9 @@ class ScriptedProvider:
 
     def __init__(self, *, intent="CHUNK_SEARCH", grounded=("SUFFICIENT",),
                  stream_answers=("정답입니다[1]",), generate_answer="재시도 답변입니다[1]",
-                 usage=None):
+                 usage=None, plan="[]"):
         self.intent = intent
+        self.plan = plan
         self.grounded = list(grounded)
         self.stream_answers = list(stream_answers)
         self.generate_answer = generate_answer
@@ -449,6 +460,8 @@ class ScriptedProvider:
         self.generate_calls.append((system_prompt, messages))
         if system_prompt == chat._INTENT_SYSTEM_PROMPT:
             return self.intent
+        if system_prompt == DECOMPOSE_SYSTEM_PROMPT:
+            return self.plan
         if system_prompt == chat._REFLECTION_SYSTEM_PROMPT:
             return self.grounded.pop(0) if len(self.grounded) > 1 else self.grounded[0]
         return self.generate_answer
@@ -469,7 +482,7 @@ CHUNK = {
 @pytest.fixture
 def chat_env(world):
     """conversation + pending message for alice; returns a runner."""
-    def build(*, model_key="qwen2.5-3b", project=None, collection=None, query="질문입니다"):
+    def build(*, model_key="qwen2.5-3b", project=None, collection=None, query="질문입니다", mode="standard"):
         db = world.db
         conv = ChatConversation(
             id=uuid4(), user_id=world.alice.id, project_id=project.id if project else None,
@@ -478,7 +491,7 @@ def chat_env(world):
         )
         db.add(conv)
         db.flush()
-        msg = ChatMessage(id=uuid4(), conversation_id=conv.id, query=query, status="PENDING")
+        msg = ChatMessage(id=uuid4(), conversation_id=conv.id, query=query, status="PENDING", mode=mode)
         db.add(msg)
         db.commit()
         return conv, msg
@@ -529,7 +542,7 @@ def test_generate_answer_happy_path_persists_answer_citations_and_cache(chat_env
     assert cache_args[0].startswith("rag_answer:qwen2.5-3b:")
     assert cache_args[1] == chat._ANSWER_CACHE_TTL_SECONDS
     assert json.loads(cache_args[2])["answer"] == "정답입니다[1]"
-    chat_env.redis.delete.assert_called_once_with(f"chat_partial:{msg.id}")
+    chat_env.redis.delete.assert_called_once_with(f"chat_partial:{msg.id}", f"chat_progress:{msg.id}")
     # the question and retrieved context both reach the model
     sent = provider.stream_calls[0][1][-1]["content"]
     assert "질문입니다" in sent and "[1] a.pdf (2쪽): 본문 발췌" in sent
@@ -753,4 +766,103 @@ def test_generate_answer_survives_redis_write_failures(chat_env):
 
     stored, db = chat_env.reload(msg.id)
     assert result["status"] == "DONE" and stored.status == "DONE"
+    db.close()
+
+
+# -- 심층 검색(v3 마일스톤 5) ----------------------------------------------------
+
+DEEP_PLAN = '["2027년 영업 목표는?", "2026년 영업 실적은?"]'
+
+
+def test_deep_mode_splits_the_question_and_searches_each_part(chat_env):
+    _conv, msg = chat_env.build(mode="deep", query="2027년 목표와 2026년 실적을 비교해 줘")
+    provider = ScriptedProvider(plan=DEEP_PLAN)
+    retrieval = MagicMock(side_effect=[
+        [{**CHUNK, "chunk_ref": "c1", "score": 2.0}, {**CHUNK, "chunk_ref": "c2", "score": 1.0}],
+        [{**CHUNK, "document_id": "d2", "filename": "b.pdf", "chunk_ref": "c3", "score": 2.0},
+         {**CHUNK, "document_id": "d2", "filename": "b.pdf", "chunk_ref": "c4", "score": 1.5}],
+    ])
+
+    result, _ = chat_env.run(msg.id, provider, retrieve=retrieval)
+
+    stored, db = chat_env.reload(msg.id)
+    assert result["status"] == "DONE" and stored.mode == "deep"
+    # 의도 분류 대신 분해를 쓰고, 하위 질문마다 4개씩 찾는다
+    prompts = [c[0] for c in provider.generate_calls]
+    assert chat._INTENT_SYSTEM_PROMPT not in prompts and DECOMPOSE_SYSTEM_PROMPT in prompts
+    assert [(c.args[2], c.kwargs["limit"]) for c in retrieval.call_args_list] == [
+        ("2027년 영업 목표는?", 4), ("2026년 영업 실적은?", 4)]
+    sent = provider.stream_calls[0][1][-1]["content"]
+    assert "1. 2027년 영업 목표는?" in sent and "2. 2026년 영업 실적은?" in sent
+    assert [q["question"] for q in stored.agent_steps["subquestions"]] == ["2027년 영업 목표는?", "2026년 영업 실적은?"]
+    assert {"plan", "search", "answer", "verify"} <= set(stored.agent_steps["timings_ms"])
+    assert len(stored.citations) == 4
+    keys = [c.args[0] for c in chat_env.redis.setex.call_args_list]
+    assert f"chat_progress:{msg.id}" in keys
+    assert any(k.startswith("rag_answer_deep:qwen2.5-3b:") for k in keys)
+    trace = db.scalar(select(AnswerTrace).where(AnswerTrace.chat_message_id == msg.id))
+    assert trace.mode == "deep" and trace.intent == "deep" and trace.agent_steps["decomposed"] is True
+    db.close()
+
+
+def test_deep_mode_does_not_broaden_again_when_grounding_fails(chat_env):
+    _conv, msg = chat_env.build(mode="deep")
+    provider = ScriptedProvider(plan=DEEP_PLAN, grounded=("INSUFFICIENT",))
+    retrieval = MagicMock(return_value=[{**CHUNK, "chunk_ref": "c1", "score": 2.0},
+                                        {**CHUNK, "chunk_ref": "c2", "score": 2.0}])
+
+    chat_env.run(msg.id, provider, retrieve=retrieval)
+
+    stored, db = chat_env.reload(msg.id)
+    assert stored.status == "DONE" and retrieval.call_count == 2 and len(provider.stream_calls) == 1
+    db.close()
+
+
+def test_deep_mode_cache_hit_restores_the_search_steps(chat_env):
+    _conv, msg = chat_env.build(mode="deep")
+    redis_hit = MagicMock()
+    redis_hit.get.return_value = json.dumps({"answer": "캐시 답", "citations": [], "agent_steps": {"subquestions": []}})
+
+    chat_env.run(msg.id, ScriptedProvider(), redis_=redis_hit)
+
+    stored, db = chat_env.reload(msg.id)
+    assert stored.answer == "캐시 답" and stored.agent_steps == {"subquestions": []}
+    assert redis_hit.get.call_args.args[0].startswith("rag_answer_deep:")
+    db.close()
+
+
+def test_deep_mode_cache_is_dropped_when_a_searched_document_is_no_longer_visible(chat_env):
+    # 인용은 없지만 검색 과정에 지금 볼 수 없는 문서가 남은 캐시는 쓰지 않고 새로 만든다
+    _conv, msg = chat_env.build(mode="deep")
+    redis_hit = MagicMock()
+    stale_steps = {"subquestions": [{"question": "q", "documents": [{"document_id": str(uuid4()), "filename": "기밀.pdf"}]}]}
+    redis_hit.get.return_value = json.dumps({"answer": "캐시 답", "citations": [], "agent_steps": stale_steps})
+    retrieval = MagicMock(return_value=[{**CHUNK, "chunk_ref": "c1", "score": 2.0},
+                                        {**CHUNK, "chunk_ref": "c2", "score": 2.0}])
+
+    chat_env.run(msg.id, ScriptedProvider(plan=DEEP_PLAN), retrieve=retrieval, redis_=redis_hit)
+
+    stored, db = chat_env.reload(msg.id)
+    assert stored.answer != "캐시 답" and "기밀.pdf" not in json.dumps(stored.agent_steps, ensure_ascii=False)
+    assert redis_hit.delete.call_args_list[0].args[0].startswith("rag_answer_deep:")
+    db.close()
+
+
+def test_deep_mode_failure_keeps_the_search_steps_and_clears_progress(chat_env):
+    _conv, msg = chat_env.build(mode="deep")
+    provider = ScriptedProvider(plan=DEEP_PLAN)
+    provider.generate_stream = MagicMock(side_effect=RuntimeError("cuda oom"))
+    retrieval = MagicMock(return_value=[{**CHUNK, "chunk_ref": "c1", "score": 2.0},
+                                        {**CHUNK, "chunk_ref": "c2", "score": 2.0}])
+    redis_ = MagicMock()
+    redis_.get.return_value = None
+
+    result, _ = chat_env.run(msg.id, provider, retrieve=retrieval, redis_=redis_)
+
+    stored, db = chat_env.reload(msg.id)
+    assert result["status"] == "FAILED" and stored.status == "FAILED"
+    trace = db.scalar(select(AnswerTrace).where(AnswerTrace.chat_message_id == msg.id))
+    assert trace.status == "FAILED" and len(trace.agent_steps["subquestions"]) == 2
+    deleted = [k for c in redis_.delete.call_args_list for k in c.args]
+    assert f"chat_progress:{msg.id}" in deleted
     db.close()

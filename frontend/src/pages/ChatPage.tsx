@@ -14,6 +14,7 @@ import {
   type ChatMessage,
   type ConversationSummary,
 } from '../hooks/useChat'
+import { DeepSearchProgress, DeepSearchSteps, DeepSearchToggle } from '../components/chat/DeepSearch'
 
 export default function ChatPage() {
   const { conversationId, projectId } = useParams<{ conversationId: string; projectId?: string }>()
@@ -142,6 +143,7 @@ function NewConversationForm({ projectId, onCreated }: { projectId?: string; onC
   const [collectionId, setCollectionId] = useState('')
   const [modelKey, setModelKey] = useState('')
   const [query, setQuery] = useState('')
+  const [isDeep, setIsDeep] = useState(false)
 
   const models = modelsData?.items ?? []
   const selectedModel = models.find((m) => m.key === modelKey) ?? models[0]
@@ -152,7 +154,10 @@ function NewConversationForm({ projectId, onCreated }: { projectId?: string; onC
     const model = modelKey || models[0]?.key
     if (!trimmed || !model) return
     createConversation.mutate(
-      { query: trimmed, project_id: projectId || undefined, collection_id: collectionId || undefined, model_key: model },
+      {
+        query: trimmed, project_id: projectId || undefined, collection_id: collectionId || undefined, model_key: model,
+        mode: isDeep ? 'deep' : 'standard',
+      },
       { onSuccess: (data) => onCreated(data.id) }
     )
   }
@@ -187,6 +192,8 @@ function NewConversationForm({ projectId, onCreated }: { projectId?: string; onC
               </option>
             ))}
           </select>
+
+          <DeepSearchToggle checked={isDeep} onChange={setIsDeep} />
 
           {selectedModel && !selectedModel.available && (
             <Link to="/settings" className="krds-btn text small">
@@ -228,6 +235,7 @@ function ConversationView({ conversationId }: { conversationId: string }) {
   const { data: conversation } = useConversation(conversationId)
   const sendMessage = useSendMessage(conversationId)
   const [query, setQuery] = useState('')
+  const [isDeep, setIsDeep] = useState(false)
 
   const messages = conversation?.messages ?? []
   const lastMessage = messages[messages.length - 1]
@@ -239,7 +247,7 @@ function ConversationView({ conversationId }: { conversationId: string }) {
     e.preventDefault()
     const trimmed = query.trim()
     if (!trimmed || isBusy) return
-    sendMessage.mutate(trimmed)
+    sendMessage.mutate({ query: trimmed, mode: isDeep ? 'deep' : 'standard' })
     setQuery('')
   }
 
@@ -249,7 +257,8 @@ function ConversationView({ conversationId }: { conversationId: string }) {
         {messages.map((m) => <ChatMessageBubble key={m.id} message={m} />)}
       </div>
 
-      <form onSubmit={handleSubmit} style={{ display: 'flex', gap: 'var(--space-3)', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--color-border)' }}>
+      <form onSubmit={handleSubmit} style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--color-border)' }}>
+        <DeepSearchToggle checked={isDeep} onChange={setIsDeep} disabled={isBusy} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -318,7 +327,10 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
         background: '#fff', border: '1px solid #e2e8f0',
         borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',
       }}>
-        <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)' }}>질문</p>
+        <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+          질문
+          {chat.mode === 'deep' && <span className="krds-badge xsmall bg-secondary">심층 검색</span>}
+        </p>
         <p style={{ margin: 0 }}>{chat.query}</p>
       </div>
 
@@ -339,6 +351,8 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
               <span style={{ opacity: 0.5 }}>▌</span>
             </p>
           </div>
+        ) : chat.mode === 'deep' ? (
+          <DeepSearchProgress progress={chat.progress} />
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-4)', color: 'var(--color-text-muted)' }}>
             <div className="krds-spinner" role="status"><span className="sr-only">생성 중</span></div>
@@ -370,6 +384,8 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
               {chat.answer ? renderAnswer(chat.answer) : null}
             </p>
           </div>
+
+          {chat.agent_steps && <DeepSearchSteps steps={chat.agent_steps} />}
 
           {!!chat.citations?.length && (
             <div>

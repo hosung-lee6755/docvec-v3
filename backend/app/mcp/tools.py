@@ -74,6 +74,8 @@ class ReadDocumentArgs(BaseModel):
 
 class AskArgs(_Scope):
     question: str = Field(min_length=1, max_length=2000)
+    # 심층 검색(v3 마일스톤 5): 질문을 나눠 여러 번 찾은 뒤 종합한다. 더 오래 걸린다
+    deep: bool = False
 
 
 class NoArgs(BaseModel):
@@ -244,6 +246,7 @@ async def ask(ctx: ToolContext, args: AskArgs) -> dict:
     from app.pipeline.tasks.chat import generate_answer
 
     ctx.audit["question"] = args.question[:200]
+    ctx.audit["deep"] = args.deep
     await _check_scope(ctx, args)
     await _ensure_ask_capacity(ctx)
     title = args.question.strip().replace("\n", " ")[:60]
@@ -254,7 +257,8 @@ async def ask(ctx: ToolContext, args: AskArgs) -> dict:
     )
     ctx.db.add(conversation)
     await ctx.db.flush()
-    msg = ChatMessage(conversation_id=conversation.id, query=args.question, status="PENDING")
+    msg = ChatMessage(conversation_id=conversation.id, query=args.question, status="PENDING",
+                      mode="deep" if args.deep else "standard")
     ctx.db.add(msg)
     await ctx.db.commit()
     message_id = msg.id
@@ -268,16 +272,18 @@ async def ask(ctx: ToolContext, args: AskArgs) -> dict:
         await ctx.db.commit()
         raise ToolError("답변 작업을 시작하지 못했습니다. 잠시 뒤 다시 시도하세요.") from None
 
-    deadline = asyncio.get_running_loop().time() + settings.mcp_answer_timeout_seconds
+    timeout = settings.mcp_deep_answer_timeout_seconds if args.deep else settings.mcp_answer_timeout_seconds
+    deadline = asyncio.get_running_loop().time() + timeout
     while True:
         await asyncio.sleep(_ANSWER_POLL_SECONDS)
         row = (await ctx.db.execute(
-            select(ChatMessage.status, ChatMessage.answer, ChatMessage.citations, ChatMessage.error_message)
+            select(ChatMessage.status, ChatMessage.answer, ChatMessage.citations, ChatMessage.error_message,
+                   ChatMessage.agent_steps)
             .where(ChatMessage.id == message_id)
         )).one()
         # 기다리는 동안 DB 연결을 붙잡지 않도록 읽을 때마다 트랜잭션을 끝내 연결을 풀에 돌려준다
         await ctx.db.commit()
-        status, answer, citations, error = row
+        status, answer, citations, error, steps = row
         if status == "DONE":
             break
         if status == "FAILED":
@@ -292,10 +298,36 @@ async def ask(ctx: ToolContext, args: AskArgs) -> dict:
         for c in citations or []
     ]
     _documents(ctx, [s["document_id"] for s in sources])
-    return {
+    result = {
         "answer": answer, "sources": sources, "untrusted_content": True,
         "note": "답변은 AI가 사내 문서를 근거로 만든 것이다. 본문의 [n]은 sources의 index다.",
     }
+    if steps:
+        result["subquestions"] = await _visible_subquestions(ctx, steps)
+    return result
+
+
+async def _visible_subquestions(ctx: ToolContext, steps: dict) -> list[dict]:
+    """하위 질문과 각 질문으로 찾은 문서. 캐시된 답변이면 기록 뒤에 권한이 바뀌었을 수 있으므로
+    지금 권한으로 다시 판정해 볼 수 없는 문서는 뺀다(웹 채팅의 가림과 같은 기준)."""
+    from app.services.access_policy import (
+        build_access_context,
+        load_document_facts,
+        visible_document_ids,
+    )
+    from app.services.agentic.deep_search import mask_step_documents, step_document_ids
+
+    doc_ids = step_document_ids(steps)
+    visible: set[str] = set()
+    if doc_ids:
+        access = await build_access_context(ctx.db, ctx.user)
+        visible = visible_document_ids(access, await load_document_facts(ctx.db, doc_ids))
+    masked = mask_step_documents(steps, visible) or {}
+    return [
+        {"question": q.get("question"),
+         "documents": [d.get("filename") for d in q.get("documents") or [] if not d.get("hidden")]}
+        for q in masked.get("subquestions") or []
+    ]
 
 
 # -- 등록 ---------------------------------------------------------------------
@@ -342,6 +374,7 @@ TOOLS: dict[str, ToolSpec] = {t.name: t for t in (
              ReadDocumentArgs, read_document),
     ToolSpec("ask", "사내 문서로 답변 받기",
              "질문에 대해 v3가 사내 문서를 검색하고 근거를 붙여 답한다. 답변은 감사 기록에 남는다. "
-             "수십 초 걸릴 수 있다. " + UNTRUSTED_NOTE,
+             "수십 초 걸릴 수 있다. 여러 문서와 조건이 얽힌 복합 질문이면 deep=true로 심층 검색을 쓴다. "
+             "질문을 하위 질문으로 나눠 따로 찾은 뒤 종합하며, 몇 분 걸릴 수 있다. " + UNTRUSTED_NOTE,
              AskArgs, ask, expensive=True, read_only=False),
 )}

@@ -21,14 +21,17 @@ def _answer_cache_key(
     project_id: str | None,
     model_key: str,
     access_fingerprint: str,
+    mode: str = "standard",
 ) -> str:
     """access_fingerprint(AccessContext.fingerprint)를 반드시 포함한다 — 빠지면 높은
     등급 사용자가 받은 답변(과 인용)이 같은 질문을 한 낮은 등급 사용자에게 캐시로
     나간다(v3 권한 모델의 누출 경로). 같은 권한 조합끼리만 캐시를 공유한다."""
     normalized = query.strip().lower()
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    # 심층 검색은 같은 질문이라도 근거와 답이 달라 캐시를 따로 둔다. 일반 답변의 키는 그대로다
+    prefix = "rag_answer" if mode == "standard" else f"rag_answer_{mode}"
     return (
-        f"rag_answer:{model_key}:{collection_id or 'all'}:{project_id or 'none'}:"
+        f"{prefix}:{model_key}:{collection_id or 'all'}:{project_id or 'none'}:"
         f"{access_fingerprint}:{digest}"
     )
 
@@ -162,6 +165,20 @@ def _build_context(chunks: list[dict]) -> str:
 # Number of prior Q&A pairs from the same conversation included as chat history —
 # capped to bound prompt length/latency for local (CPU/GPU-bound) inference.
 _MAX_HISTORY_TURNS = 3
+_PROGRESS_TTL_SECONDS = 600
+
+
+def _progress_writer(redis_client, chat_message_id: str):
+    """심층 검색 진행 단계를 Redis에 적는 함수. 채팅 화면이 메시지를 읽을 때 함께 내려준다."""
+    key = f"chat_progress:{chat_message_id}"
+
+    def write(state: dict) -> None:
+        try:
+            redis_client.setex(key, _PROGRESS_TTL_SECONDS, json.dumps(state, ensure_ascii=False))
+        except Exception:
+            logger.warning("generate_answer: failed to write deep search progress", exc_info=True)
+
+    return write
 
 # Over-fetch this many times the requested limit before BM25 reranking, mirroring
 # search_service.py::perform_search's hybrid-search candidate pool.
@@ -180,10 +197,13 @@ def _accessible_collection_ids(db, user_id: str, project_id: str | None = None) 
 def _cited_documents_still_visible(db, access_ctx, cached_payload: dict) -> bool:
     """캐시 키의 권한 지문은 사용자 쪽(열람등급·그룹·컬렉션)만 담는다. 문서 쪽 권한(등급·ACL)이
     캐시 이후 바뀌면 같은 키로 낡은 답변·인용이 나가므로, 적중할 때마다 인용 문서를 Postgres로
-    다시 판정한다. 인용은 답변 생성에 쓴 컨텍스트 전체(chunks)이므로 이것으로 충분하다."""
+    다시 판정한다. 심층 검색 답변이면 검색 과정에 적힌 문서(인용되지 않은 검색 결과 포함)도 함께
+    판정한다. 하나라도 지금 볼 수 없으면 캐시를 버리고 새로 만든다."""
     from app.services.access_policy import load_document_facts_sync, visible_document_ids
+    from app.services.agentic.deep_search import step_document_ids
 
     doc_ids = {c.get("document_id") for c in cached_payload.get("citations") or []}
+    doc_ids |= step_document_ids(cached_payload.get("agent_steps"))
     doc_ids.discard(None)
     if not doc_ids:
         return True
@@ -477,7 +497,9 @@ def generate_answer(self, chat_message_id: str) -> dict:
             model_key=conversation.model_key,
             channel=conversation.channel or "web",
             access_token_id=str(conversation.access_token_id) if conversation.access_token_id else None,
+            mode=msg.mode or "standard",
         )
+        is_deep = trace["mode"] == "deep"
 
         redis_client = redis.from_url(settings.redis_url)
         access_ctx = build_access_context_sync(db, str(conversation.user_id))
@@ -488,6 +510,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
             project_id_str,
             conversation.model_key,
             access_ctx.fingerprint(),
+            mode=trace["mode"],
         )
         cached = redis_client.get(cache_key)
         cached_payload = json.loads(cached) if cached else None
@@ -498,6 +521,8 @@ def generate_answer(self, chat_message_id: str) -> dict:
         if cached_payload:
             msg.answer = cached_payload["answer"]
             msg.citations = cached_payload["citations"]
+            msg.agent_steps = cached_payload.get("agent_steps")
+            trace["agent_steps"] = msg.agent_steps
             msg.status = "DONE"
             record_answer_trace(
                 db, **trace, status="DONE", answer=msg.answer, chunks=msg.citations or [],
@@ -522,16 +547,39 @@ def generate_answer(self, chat_message_id: str) -> dict:
         # Route to one of three retrieval strategies based on what the query is
         # actually asking for — see _classify_intent's docstring/prompt for the
         # 3-way split (문서 검색 / 표 데이터 질의 / 요약 조회).
-        intent = _classify_intent(provider, msg.query)
-        trace["intent"] = intent
-        retrieval_fn = {
-            "table_query": _retrieve_table_chunks,
-            "summary_lookup": _retrieve_summary_chunks,
-        }.get(intent, _retrieve_chunks)
+        subquestions: list[str] = [msg.query]
+        agent_steps: dict | None = None
+        progress = _progress_writer(redis_client, chat_message_id)
+        if is_deep:
+            # 심층 검색(v3 마일스톤 5): 의도 분류 대신 질문을 나눠 하위 질문마다 찾는다.
+            # 모든 검색은 권한 필터가 걸린 _retrieve_chunks를 지난다.
+            from app.services.agentic.deep_search import run_deep_search
 
-        chunks = retrieval_fn(
-            db, str(conversation.user_id), msg.query, collection_id_str, project_id=project_id_str
-        )
+            trace["intent"] = "deep"
+            retrieval_fn = _retrieve_chunks
+            deep = run_deep_search(
+                provider, msg.query,
+                lambda q, limit: _retrieve_chunks(
+                    db, str(conversation.user_id), q, collection_id_str, project_id=project_id_str, limit=limit,
+                ),
+                progress,
+            )
+            chunks, subquestions, agent_steps = deep.chunks, deep.subquestions, dict(deep.steps)
+            # 종합이나 확인 단계에서 실패해도 어디까지 찾았는지 추적에 남도록 바로 붙인다
+            trace["agent_steps"] = agent_steps
+            progress({"phase": "answering", "subquestions": subquestions})
+        else:
+            intent = _classify_intent(provider, msg.query)
+            trace["intent"] = intent
+            retrieval_fn = {
+                "table_query": _retrieve_table_chunks,
+                "summary_lookup": _retrieve_summary_chunks,
+            }.get(intent, _retrieve_chunks)
+
+            chunks = retrieval_fn(
+                db, str(conversation.user_id), msg.query, collection_id_str, project_id=project_id_str
+            )
+        answer_started = time.monotonic()
         context = _build_context(chunks)
 
         prior_messages = (
@@ -566,8 +614,15 @@ def generate_answer(self, chat_message_id: str) -> dict:
             except Exception:
                 pass
 
+        def _user_content(ctx: str) -> str:
+            if is_deep:
+                from app.services.agentic.deep_search import synthesis_message
+
+                return synthesis_message(msg.query, subquestions, ctx)
+            return f"질문: {msg.query}\n\n발췌문:\n{ctx}"
+
         def _generate(ctx: str) -> str:
-            messages = [*history_messages, {"role": "user", "content": f"질문: {msg.query}\n\n발췌문:\n{ctx}"}]
+            messages = [*history_messages, {"role": "user", "content": _user_content(ctx)}]
             result = provider.generate_stream(system_prompt, messages, _write_partial)
             if _is_degenerate_answer(result):
                 logger.warning(
@@ -589,6 +644,10 @@ def generate_answer(self, chat_message_id: str) -> dict:
             return result
 
         answer = _generate(context)
+        if agent_steps is not None:
+            agent_steps["timings_ms"]["answer"] = _elapsed_ms(answer_started)
+            progress({"phase": "verifying", "subquestions": subquestions})
+        verify_started = time.monotonic()
 
         # Agentic self-reflection: verify the answer is grounded in what was
         # retrieved. If not, broaden retrieval once and regenerate — capped at
@@ -602,7 +661,8 @@ def generate_answer(self, chat_message_id: str) -> dict:
             )
             grounded = _is_answer_grounded(verifier, msg.query, context, answer)
             grounding = GROUNDING_PASSED if grounded else GROUNDING_FAILED
-            if not grounded:
+            # 심층 검색은 이미 하위 질문별로 보강 검색을 했으므로 다시 넓혀 찾지 않는다(지연 상한)
+            if not grounded and not is_deep:
                 logger.info(
                     "generate_answer: reflection flagged ungrounded answer, broadening retrieval once",
                     extra={"chat_message_id": chat_message_id},
@@ -650,6 +710,10 @@ def generate_answer(self, chat_message_id: str) -> dict:
             }
             for i, c in enumerate(chunks)
         ]
+        if agent_steps is not None:
+            agent_steps["timings_ms"]["verify"] = _elapsed_ms(verify_started)
+        msg.agent_steps = agent_steps
+        trace["agent_steps"] = agent_steps
         msg.status = "DONE"
         record_answer_trace(
             db, **trace, status="DONE", answer=answer, chunks=chunks, grounding=grounding,
@@ -658,7 +722,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
         db.commit()
 
         try:
-            redis_client.delete(partial_key)
+            redis_client.delete(partial_key, f"chat_progress:{chat_message_id}")
         except Exception:
             pass
 
@@ -666,7 +730,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
             redis_client.setex(
                 cache_key,
                 _ANSWER_CACHE_TTL_SECONDS,
-                json.dumps({"answer": msg.answer, "citations": msg.citations}),
+                json.dumps({"answer": msg.answer, "citations": msg.citations, "agent_steps": msg.agent_steps}),
             )
         except Exception:
             logger.exception("generate_answer: failed to write answer cache")
@@ -691,6 +755,14 @@ def generate_answer(self, chat_message_id: str) -> dict:
                 db.commit()
         except Exception:
             logger.exception("generate_answer: failed to record failure state")
+        try:
+            import redis
+
+            redis.from_url(settings.redis_url).delete(
+                f"chat_partial:{chat_message_id}", f"chat_progress:{chat_message_id}",
+            )
+        except Exception:
+            logger.warning("generate_answer: failed to clear progress keys", exc_info=True)
         return {"chat_message_id": chat_message_id, "status": "FAILED", "error": str(exc)}
     finally:
         db.close()

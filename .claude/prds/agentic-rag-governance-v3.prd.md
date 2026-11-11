@@ -87,7 +87,7 @@ v2에서 옮겨 온 영역:
 | 2 | 거버넌스·감사 증적 | 관리자가 어떤 답변이든 질의자, 권한 맥락, 근거 문서까지 역추적하고, AI 기본법 근거 문서를 내려받는다 | complete | `.claude/plans/m2-governance-audit-trail.plan.md` |
 | 3 | 기업 계정·문서 원천 연동 | 사용자가 사내 계정으로 로그인하고, 원천 시스템의 문서가 권한과 함께 자동으로 반영된다 | complete | `.claude/plans/m3-directory-and-smb-connector.plan.md` |
 | 4 | 외부 에이전트 연동(MCP) | 승인된 외부 에이전트가 사용자 권한 범위 안에서 사내 지식을 검색·인용하고, 그 호출이 감사 기록에 남는다 | complete | `.claude/plans/m4-mcp-agent-gateway.plan.md` |
-| 5 | 에이전틱 검색 | 여러 문서와 조건이 얽힌 복합 질문에, 단계적으로 검색하고 근거를 검증한 답이 나온다 | pending | — |
+| 5 | 에이전틱 검색 | 여러 문서와 조건이 얽힌 복합 질문에, 단계적으로 검색하고 근거를 검증한 답이 나온다 | complete | `.claude/plans/m5-agentic-search.plan.md` |
 | 6 | 문서인식·검색 품질 노출 UI (v2 #2) | 사용자가 검색 근거, OCR 신뢰도, 사전 적용 결과를 화면에서 확인하고 설정한다 | pending | — |
 | 7 | 데이터관리 고도화 (v2 #3) | 문서 버전 수명주기가 정식화되고, 골든쿼리 평가로 품질 회귀를 잡는다 | pending | — |
 | 8 | UI/UX 전면 개편 (v2 #5) | 권한·감사·에이전트 관리 화면을 포함한 전체 화면이 새 디자인 체계로 바뀐다 | pending | — |

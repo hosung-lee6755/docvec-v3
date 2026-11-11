@@ -331,3 +331,23 @@ async def test_get_chat_message_does_not_query_redis_for_non_generating_status(d
 
     assert result.status == status and result.partial_answer is None
     lookup.assert_not_called()
+
+
+async def test_create_message_keeps_the_requested_deep_mode(db_session):  # noqa: F811
+    conversation = await _conversation(db_session)
+    with patch(GENERATE), patch(RATE_LIMIT):
+        msg = await chat_api.create_message(
+            conversation.id, chat_api.CreateMessageRequest(query="복합 질문", mode="deep"), db_session, owner_user())
+    assert msg.mode == "deep"
+    stored = await db_session.get(ChatMessage, msg.id)
+    assert stored.mode == "deep"
+
+
+def test_generating_deep_message_carries_its_progress():
+    base = dict(id=uuid4(), query="q", answer=None, citations=None, error_message=None, created_at=datetime.utcnow())
+    progress = {"phase": "searching", "subquestions": ["a?", "b?"], "current": 1}
+    with patch.object(chat_api, "_partial_answer_for", return_value=None),          patch.object(chat_api, "_progress_for", return_value=progress) as lookup:
+        deep = chat_api._message_with_partial(SimpleNamespace(status="GENERATING", mode="deep", agent_steps=None, **base))
+        plain = chat_api._message_with_partial(SimpleNamespace(status="GENERATING", mode="standard", agent_steps=None, **base))
+    assert deep.progress == progress and plain.progress is None
+    lookup.assert_called_once()

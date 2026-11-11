@@ -29,6 +29,7 @@ from app.services.access_tokens import TokenRejected, authenticate_token, hash_t
 from tests.unit.api_pg_helpers import (  # noqa: F401
     db_session,
     make_collection,
+    make_document,
     make_project,
     make_user,
 )
@@ -375,3 +376,40 @@ async def test_ask_limits_how_many_answers_one_person_can_wait_for(world, client
         resp = (await _ask(client, out["token"], collection_id=str(world.col.id))).json()
     assert resp["result"]["isError"] is True and "기다리는 질문" in resp["result"]["content"][0]["text"]
     task.delay.assert_not_called()
+
+
+async def test_deep_ask_runs_in_deep_mode_with_its_own_timeout(world, client, monkeypatch):
+    out = await _issue(world)
+    seen = await make_document(world.db, world.alice, world.col, filename="a.pdf")
+    await world.db.commit()
+    queued = []
+    waited = []
+    docs = [{"document_id": str(seen.id), "filename": "a.pdf"},
+            {"document_id": str(uuid4()), "filename": "기밀.pdf"}]  # 지금은 볼 수 없는(없는) 문서
+
+    async def worker_finishes(seconds):
+        waited.append(seconds)
+        for message_id in queued:
+            await world.db.execute(update(ChatMessage).where(ChatMessage.id == message_id).values(
+                status="DONE", answer="종합 답[1]", citations=[],
+                agent_steps={"subquestions": [{"question": "목표?", "documents": docs}]},
+            ))
+        await world.db.commit()
+
+    monkeypatch.setattr(mcp_tools, "asyncio", _fake_asyncio(worker_finishes))
+    with patch("app.pipeline.tasks.chat.generate_answer") as task:
+        task.delay.side_effect = queued.append
+        resp = (await _post(client, out["token"], _rpc("tools/call", {"name": "ask", "arguments": {
+            "question": "복합 질문", "collection_id": str(world.col.id), "deep": True}}))).json()
+
+    result = resp["result"]["structuredContent"]
+    # 지금 볼 수 없는 문서는 이름을 빼고 돌려준다
+    assert result["subquestions"] == [{"question": "목표?", "documents": ["a.pdf"]}]
+    assert "기밀.pdf" not in str(resp)
+    message = await world.db.scalar(
+        select(ChatMessage).join(ChatConversation, ChatConversation.id == ChatMessage.conversation_id)
+        .where(ChatConversation.user_id == world.alice.id, ChatConversation.channel == "mcp"))
+    assert message.mode == "deep"
+    audit = await world.db.scalar(select(AuditLog).where(AuditLog.action == "mcp.tool_call",
+                                                         AuditLog.resource_id == "ask"))
+    assert audit.detail["deep"] is True

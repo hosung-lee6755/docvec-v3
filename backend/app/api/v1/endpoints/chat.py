@@ -1,4 +1,6 @@
+import json
 from datetime import datetime, timezone
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -50,6 +52,10 @@ class ChatMessageResponse(BaseModel):
     # Streaming: partial text mirrored to Redis by the worker while the answer
     # is still GENERATING — see generate_answer's _write_partial.
     partial_answer: str | None = None
+    # v3 마일스톤 5 심층 검색: 모드, 끝난 뒤의 검색 과정, 생성 중의 진행 단계
+    mode: str = "standard"
+    agent_steps: dict | None = None
+    progress: dict | None = None
 
     class Config:
         from_attributes = True
@@ -58,7 +64,7 @@ class ChatMessageResponse(BaseModel):
 _partial_redis = None
 
 
-def _partial_answer_for(message_id) -> str | None:
+def _redis_value(key: str) -> str | None:
     global _partial_redis
     try:
         if _partial_redis is None:
@@ -67,9 +73,21 @@ def _partial_answer_for(message_id) -> str | None:
             from app.core.config import settings as _settings
 
             _partial_redis = redis.from_url(_settings.redis_url)
-        val = _partial_redis.get(f"chat_partial:{message_id}")
+        val = _partial_redis.get(key)
         return val.decode("utf-8") if val else None
     except Exception:
+        return None
+
+
+def _partial_answer_for(message_id) -> str | None:
+    return _redis_value(f"chat_partial:{message_id}")
+
+
+def _progress_for(message_id) -> dict | None:
+    raw = _redis_value(f"chat_progress:{message_id}")
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
         return None
 
 
@@ -90,11 +108,16 @@ def _masked(citation: ChatCitation) -> ChatCitation:
 async def _mask_hidden_citations(
     db: AsyncSession, user: User, messages: list[ChatMessageResponse]
 ) -> list[ChatMessageResponse]:
-    """저장된 답변의 인용을 지금 권한으로 다시 판정한다. 권한이 회수됐거나 문서가 지워졌으면
-    그 인용을 가린다. 답변 본문은 이미 보여 준 것이므로 그대로 둔다(v3 마일스톤 2)."""
-    if not any(m.citations for m in messages):
+    """저장된 답변의 인용과 심층 검색 기록을 지금 권한으로 다시 판정한다. 권한이 회수됐거나 문서가
+    지워졌으면 가린다. 답변 본문은 이미 보여 준 것이므로 그대로 둔다(v3 마일스톤 2, 5)."""
+    from app.services.agentic.deep_search import mask_step_documents, step_document_ids
+
+    if not any(m.citations or step_document_ids(m.agent_steps) for m in messages):
         return messages
-    doc_ids = {_as_uuid(c.document_id) for m in messages for c in (m.citations or [])} - {None}
+    doc_ids = {_as_uuid(c.document_id) for m in messages for c in (m.citations or [])}
+    for m in messages:
+        doc_ids |= step_document_ids(m.agent_steps)
+    doc_ids -= {None}
     visible: set[str] = set()
     if doc_ids:
         ctx = await build_access_context(db, user)
@@ -105,7 +128,10 @@ async def _mask_hidden_citations(
         return c if _as_uuid(c.document_id) in visible else _masked(c)
 
     return [
-        m.model_copy(update={"citations": [check(c) for c in m.citations]}) if m.citations else m
+        m.model_copy(update={
+            "citations": [check(c) for c in m.citations] if m.citations else m.citations,
+            "agent_steps": mask_step_documents(m.agent_steps, visible),
+        })
         for m in messages
     ]
 
@@ -114,6 +140,8 @@ def _message_with_partial(message: "ChatMessage") -> ChatMessageResponse:
     item = ChatMessageResponse.model_validate(message)
     if item.status == "GENERATING":
         item.partial_answer = _partial_answer_for(message.id)
+        if item.mode == "deep":
+            item.progress = _progress_for(message.id)
     return item
 
 
@@ -139,10 +167,12 @@ class CreateConversationRequest(BaseModel):
     project_id: UUID | None = None
     collection_id: UUID | None = None
     model_key: str
+    mode: Literal["standard", "deep"] = "standard"
 
 
 class CreateMessageRequest(BaseModel):
     query: str
+    mode: Literal["standard", "deep"] = "standard"
 
 
 class RenameConversationRequest(BaseModel):
@@ -235,6 +265,19 @@ async def list_chat_models(
     }
 
 
+# 질문 1건마다 LLM 생성 태스크가 하나 돈다. 심층 검색은 검색 최대 7회와 LLM 3회를 쓰므로 따로 더 좁게 막는다.
+_CHAT_MESSAGES_PER_MINUTE = 30
+_DEEP_MESSAGES_PER_MINUTE = 5
+
+
+def _enforce_chat_rate_limit(user: User, mode: str) -> None:
+    from app.core.rate_limit import enforce_user_rate_limit
+
+    enforce_user_rate_limit(str(user.id), "chat_message", limit=_CHAT_MESSAGES_PER_MINUTE, window_seconds=60)
+    if mode == "deep":
+        enforce_user_rate_limit(str(user.id), "chat_deep", limit=_DEEP_MESSAGES_PER_MINUTE, window_seconds=60)
+
+
 @router.post("/chat/conversations", response_model=ConversationDetailResponse)
 async def create_conversation(
     data: CreateConversationRequest,
@@ -243,6 +286,7 @@ async def create_conversation(
 ):
     from app.pipeline.tasks.chat import generate_answer
 
+    _enforce_chat_rate_limit(current_user, data.mode)
     await _validate_model_and_key(db, current_user, data.model_key, project_id=data.project_id)
     if data.project_id:
         await check_project_access(db, data.project_id, current_user, min_role="viewer")
@@ -259,7 +303,7 @@ async def create_conversation(
     db.add(conversation)
     await db.flush()
 
-    msg = ChatMessage(conversation_id=conversation.id, query=data.query, status="PENDING")
+    msg = ChatMessage(conversation_id=conversation.id, query=data.query, status="PENDING", mode=data.mode)
     db.add(msg)
     await db.commit()
     await db.refresh(conversation)
@@ -358,14 +402,12 @@ async def create_message(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.core.rate_limit import enforce_user_rate_limit
     from app.pipeline.tasks.chat import generate_answer
 
-    # 질문 1건마다 LLM 생성 태스크가 하나 돈다 — 계정당 분당 상한으로 큐 폭주를 막는다.
-    enforce_user_rate_limit(str(current_user.id), "chat_message", limit=30, window_seconds=60)
+    _enforce_chat_rate_limit(current_user, data.mode)
     conversation = await _get_owned_conversation(db, conversation_id, current_user)
 
-    msg = ChatMessage(conversation_id=conversation.id, query=data.query, status="PENDING")
+    msg = ChatMessage(conversation_id=conversation.id, query=data.query, status="PENDING", mode=data.mode)
     db.add(msg)
     conversation.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()

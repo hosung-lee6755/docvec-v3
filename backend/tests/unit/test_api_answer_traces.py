@@ -187,3 +187,22 @@ async def test_detail_missing_trace_is_404(world):
     with pytest.raises(HTTPException) as exc:
         await traces_api.get_answer_trace(uuid4(), db=world["db"], current_user=world["admin"])
     assert exc.value.status_code == 404
+
+
+async def test_deep_search_steps_hide_documents_the_admin_cannot_view(world):
+    trace = world["main"]
+    trace.mode = "deep"
+    trace.agent_steps = {"subquestions": [{"question": "하위 질문", "documents": [
+        {"document_id": str(world["pub"].id), "filename": "pub.txt"},
+        {"document_id": str(world["conf"].id), "filename": "conf.txt"},
+    ]}]}
+    await world["db"].commit()
+
+    detail = await traces_api.get_answer_trace(trace.id, db=world["db"], current_user=world["admin"])
+    listed = await _list(world)
+
+    assert detail["mode"] == "deep"
+    docs = detail["agent_steps"]["subquestions"][0]["documents"]
+    assert docs[0]["filename"] == "pub.txt" and docs[1] == {"document_id": None, "filename": None, "hidden": True}
+    assert "conf.txt" not in str(detail)
+    assert {i["id"]: i["mode"] for i in listed["items"]}[str(trace.id)] == "deep"

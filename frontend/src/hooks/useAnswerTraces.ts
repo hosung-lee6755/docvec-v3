@@ -1,3 +1,4 @@
+import type { AgentSteps } from './useChat'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
 
@@ -17,6 +18,8 @@ export interface AnswerTraceItem {
   model_key: string | null
   // 'web'은 채팅 화면, 'mcp'는 외부 에이전트의 ask 도구
   channel: string
+  // 'deep'이면 심층 검색(v3 마일스톤 5)
+  mode?: string
   source_count: number
   cited_count: number
 }
@@ -55,6 +58,8 @@ export interface AnswerTraceDetail {
   model_key: string | null
   channel: string
   access_token_id: string | null
+  mode?: string
+  agent_steps?: AgentSteps | null
   provider: string | null
   verifier_model: string | null
   system_prompt_source: string | null

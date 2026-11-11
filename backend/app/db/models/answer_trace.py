@@ -61,6 +61,9 @@ class AnswerTrace(Base):
     # 답변이 어느 통로로 나갔는지(web, mcp)와 MCP라면 어떤 개인 접근 토큰이었는지. 토큰은 지워져도 id를 남긴다.
     channel: Mapped[str] = mapped_column(String(10), default="web", server_default="web", nullable=False)
     access_token_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # 심층 검색(v3 마일스톤 5)이면 deep. agent_steps에는 하위 질문, 검색 횟수, 찾은 문서 id와 파일명만 둔다(본문 없음)
+    mode: Mapped[str] = mapped_column(String(10), default="standard", server_default="standard", nullable=False)
+    agent_steps: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # 결과
     query: Mapped[str] = mapped_column(Text, nullable=False)

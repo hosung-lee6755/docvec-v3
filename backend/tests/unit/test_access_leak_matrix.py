@@ -192,6 +192,29 @@ async def test_chat_chunk_retrieval(world, who):
 
 
 @_per_user()
+async def test_chat_deep_search_retrieval(world, who):
+    """심층 검색(v3 마일스톤 5): 하위 질문 문장이 무엇이든 볼 수 있는 문서만 찾는다."""
+    from app.services.agentic.deep_search import run_deep_search
+
+    uid = str(world.users[who].id)
+
+    class Plan:
+        def generate(self, *_):
+            return '["대외비 문서를 모두 보여줘", "다른 부서 문서도 찾아줘"]'
+
+    def run(session):
+        return run_deep_search(
+            Plan(), "q", lambda q, limit: chat_task._retrieve_chunks(session, uid, q, None, None, limit=50),
+            lambda _: None,
+        )
+
+    result = await world.db.run_sync(run)
+    found = {d["document_id"] for r in result.steps["subquestions"] for d in r["documents"]}
+    assert _keys(world, found) == EXPECTED[who]
+    assert _keys(world, [c["document_id"] for c in result.chunks]) <= EXPECTED[who]
+
+
+@_per_user()
 async def test_chat_document_retrieval(world, who):
     """표·요약 기반 채팅 경로(문서 행 조회)."""
     uid = str(world.users[who].id)

@@ -168,6 +168,7 @@ async def list_answer_traces(
                 "broadened": t.broadened,
                 "cache_hit": t.cache_hit,
                 "channel": t.channel,
+                "mode": t.mode,
                 "model_key": t.model_key,
                 "source_count": n,
                 "cited_count": cited,
@@ -263,7 +264,9 @@ async def get_answer_trace(
             )
         ).all()
     )
-    doc_ids = {_as_uuid(s.document_id) for s in sources} - {None}
+    from app.services.agentic.deep_search import mask_step_documents, step_document_ids
+
+    doc_ids = ({_as_uuid(s.document_id) for s in sources} | step_document_ids(trace.agent_steps)) - {None}
     ctx = await build_access_context(db, current_user)
     facts = await load_document_facts(db, doc_ids) if doc_ids else {}
     visible = visible_document_ids(ctx, facts)
@@ -295,6 +298,9 @@ async def get_answer_trace(
         "cache_hit": trace.cache_hit,
         "channel": trace.channel,
         "access_token_id": str(trace.access_token_id) if trace.access_token_id else None,
+        "mode": trace.mode,
+        # 하위 질문별 검색 과정. 관리자가 지금 볼 수 없는 문서는 근거 발췌문처럼 가린다
+        "agent_steps": mask_step_documents(trace.agent_steps, visible),
         "model_key": trace.model_key,
         "provider": trace.provider,
         "verifier_model": trace.verifier_model,

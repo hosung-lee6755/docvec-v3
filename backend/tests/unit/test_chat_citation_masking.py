@@ -54,6 +54,12 @@ async def world(db_session):  # noqa: F811
         ],
     )
     db.add(msg)
+    # 심층 검색 기록(v3 마일스톤 5)의 문서 목록도 인용과 같은 기준으로 가려야 한다
+    msg.mode = "deep"
+    msg.agent_steps = {"subquestions": [{"question": "하위 질문", "documents": [
+        {"document_id": str(open_doc.id), "filename": "open.pdf"},
+        {"document_id": str(later_secret.id), "filename": "later-secret.pdf"},
+    ]}]}
     await db.commit()
     # 대화 이후 문서 하나가 대외비로 올라갔다(reader의 열람등급은 Internal)
     later_secret.security_level = "Confidential"
@@ -78,6 +84,9 @@ async def test_reopened_conversation_masks_citations_now_hidden(world):
     assert message.answer == "답[1][2][3]"
     _check(message.citations)
     assert "나중에 대외비가 된 발췌" not in detail.model_dump_json()
+    docs = message.agent_steps["subquestions"][0]["documents"]
+    assert docs[0]["filename"] == "open.pdf" and docs[1] == {"document_id": None, "filename": None, "hidden": True}
+    assert "later-secret.pdf" not in detail.model_dump_json()
 
 
 async def test_single_message_endpoint_masks_too(world):
