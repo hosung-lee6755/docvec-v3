@@ -69,6 +69,7 @@ async def test_perform_search_vector_mode_returns_results_and_logs_history():
     assert logged.query == "hello"
     assert logged.search_mode == "vector"
     assert logged.result_count == 1
+    assert logged.result_document_ids == [document_id]
     db.commit.assert_awaited_once()
 
 

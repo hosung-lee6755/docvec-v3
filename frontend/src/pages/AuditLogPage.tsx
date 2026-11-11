@@ -16,6 +16,20 @@ const ACTION_LABELS: Record<string, string> = {
   'api_key.delete': 'API 키 삭제',
   'project.member_invite': '프로젝트 멤버 초대',
   'project.member_remove': '프로젝트 멤버 제거',
+  'group.create': '그룹 생성',
+  'group.update': '그룹 수정',
+  'group.delete': '그룹 삭제',
+  'group.member_add': '그룹 멤버 추가',
+  'group.member_remove': '그룹 멤버 제거',
+  'user.clearance_update': '열람등급 변경',
+  'document.security_level_update': '문서 보안등급 변경',
+  'document.acl_update': '문서 접근 허용 변경',
+  'collection.security_level_update': '컬렉션 기본 등급 변경',
+  'document.preview': '원문 미리보기',
+  'document.download': '원문 다운로드',
+  'collection.export': '컬렉션 내보내기',
+  'answer_trace.view': '답변 추적 열람',
+  'governance.report_download': 'AI 기본법 근거 자료 내려받기',
 }
 
 export default function AuditLogPage() {

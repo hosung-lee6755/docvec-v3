@@ -15,6 +15,8 @@ import GroupsPage from './pages/GroupsPage'
 import ChatPage from './pages/ChatPage'
 import SettingsPage from './pages/SettingsPage'
 import AuditLogPage from './pages/AuditLogPage'
+import AnswerTracesPage from './pages/AnswerTracesPage'
+import GovernanceReportPage from './pages/GovernanceReportPage'
 import UsageDashboardPage from './pages/UsageDashboardPage'
 import DictionaryPage from './pages/DictionaryPage'
 import WorkflowsPage from './pages/WorkflowsPage'
@@ -70,6 +72,8 @@ export default function App() {
         <Route path="users" element={<UsersPage />} />
         <Route path="groups" element={<GroupsPage />} />
         <Route path="audit-logs" element={<AuditLogPage />} />
+        <Route path="answer-traces" element={<AnswerTracesPage />} />
+        <Route path="governance-report" element={<GovernanceReportPage />} />
         <Route path="usage" element={<UsageDashboardPage />} />
         <Route path="dictionary" element={<DictionaryPage />} />
         <Route path="cleaning-rules" element={<CleaningRulesPage />} />

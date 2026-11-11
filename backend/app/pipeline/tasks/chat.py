@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 
 from app.core.config import settings
 from app.pipeline.celery_app import celery_app
@@ -287,6 +288,9 @@ def _retrieve_chunks(
             "filename": h["payload"].get("filename"),
             "page_number": h["payload"].get("page_number"),
             "text": h["payload"].get("text", ""),
+            "source_kind": "chunk",
+            "chunk_ref": str(h["id"]),
+            "score": h["score"],
         }
         for h in hits
     ]
@@ -355,6 +359,7 @@ def _retrieve_table_chunks(
                 "filename": doc.original_filename,
                 "page_number": table.get("page_number"),
                 "text": text,
+                "source_kind": "table",
             })
 
     if not candidates:
@@ -385,6 +390,7 @@ def _retrieve_summary_chunks(
             "filename": doc.original_filename,
             "page_number": None,
             "text": doc.summary,
+            "source_kind": "summary",
         }
         for doc in docs
         if doc.summary_status == "DONE" and doc.summary
@@ -403,16 +409,45 @@ def _retrieve_summary_chunks(
     return _attach_collection_names(db, ranked)
 
 
+def _select_system_prompt(project, requester) -> tuple[str, str]:
+    """(출처, 프롬프트). 프로젝트 → 사용자 → 기본 순으로 고른다. 출처는 답변 추적 기록에 남는다."""
+    if project is not None and project.system_prompt:
+        return "project", project.system_prompt
+    if requester is not None and requester.system_prompt:
+        return "user", requester.system_prompt
+    return "default", _SYSTEM_PROMPT
+
+
+def _verifier_model_key(verifier, generation_provider, generation_model_key: str) -> str | None:
+    if verifier is generation_provider:
+        return generation_model_key
+    return getattr(verifier, "_model", None)
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
 @celery_app.task(name="tasks.generate_answer", queue="high", bind=True, max_retries=2)
 def generate_answer(self, chat_message_id: str) -> dict:
+    from app.db.models.answer_trace import (
+        GROUNDING_FAILED,
+        GROUNDING_PASSED,
+        GROUNDING_SKIPPED,
+    )
     from app.db.models.chat_conversation import ChatConversation
     from app.db.models.chat_message import ChatMessage
     from app.db.models.project import Project
     from app.db.models.user import User
     from app.db.session import get_sync_db
+    from app.services.answer_trace import record_answer_trace
     from app.services.llm import LLM_MODEL_REGISTRY, get_llm_provider
 
+    started = time.monotonic()
     db = get_sync_db()
+    # 답변 추적 기록(v3 마일스톤 2)에 넣을 사실을 단계마다 모은다. 실패 경로에서도
+    # 그때까지 알게 된 사실로 기록을 남기기 위해서다.
+    trace: dict = {}
     try:
         msg = db.get(ChatMessage, chat_message_id)
         if msg is None:
@@ -429,12 +464,26 @@ def generate_answer(self, chat_message_id: str) -> dict:
 
         from app.services.access_policy import build_access_context_sync
 
+        collection_id_str = str(conversation.collection_id) if conversation.collection_id else None
+        project_id_str = str(conversation.project_id) if conversation.project_id else None
+        requester = db.get(User, conversation.user_id)
+        trace.update(
+            query=msg.query,
+            chat_message_id=chat_message_id,
+            conversation_id=str(conversation.id),
+            user=requester,
+            scope_collection_id=collection_id_str,
+            scope_project_id=project_id_str,
+            model_key=conversation.model_key,
+        )
+
         redis_client = redis.from_url(settings.redis_url)
         access_ctx = build_access_context_sync(db, str(conversation.user_id))
+        trace["access_ctx"] = access_ctx
         cache_key = _answer_cache_key(
             msg.query,
-            str(conversation.collection_id) if conversation.collection_id else None,
-            str(conversation.project_id) if conversation.project_id else None,
+            collection_id_str,
+            project_id_str,
             conversation.model_key,
             access_ctx.fingerprint(),
         )
@@ -448,12 +497,17 @@ def generate_answer(self, chat_message_id: str) -> dict:
             msg.answer = cached_payload["answer"]
             msg.citations = cached_payload["citations"]
             msg.status = "DONE"
+            record_answer_trace(
+                db, **trace, status="DONE", answer=msg.answer, chunks=msg.citations or [],
+                cache_hit=True, latency_ms=_elapsed_ms(started),
+            )
             db.commit()
             return {"chat_message_id": chat_message_id, "status": "DONE", "cached": True}
 
         spec = LLM_MODEL_REGISTRY.get(conversation.model_key)
         if spec is None:
             raise ValueError(f"Unknown model: {conversation.model_key}")
+        trace["provider"] = spec["backend"]
 
         api_key = None
         if spec["backend"] in ("openai", "anthropic"):
@@ -461,15 +515,13 @@ def generate_answer(self, chat_message_id: str) -> dict:
             if not api_key:
                 raise ValueError(f"{spec['backend']} API 키가 등록되어 있지 않습니다")
 
-        collection_id_str = str(conversation.collection_id) if conversation.collection_id else None
-        project_id_str = str(conversation.project_id) if conversation.project_id else None
-
         provider = get_llm_provider(conversation.model_key, api_key=api_key)
 
         # Route to one of three retrieval strategies based on what the query is
         # actually asking for — see _classify_intent's docstring/prompt for the
         # 3-way split (문서 검색 / 표 데이터 질의 / 요약 조회).
         intent = _classify_intent(provider, msg.query)
+        trace["intent"] = intent
         retrieval_fn = {
             "table_query": _retrieve_table_chunks,
             "summary_lookup": _retrieve_summary_chunks,
@@ -496,13 +548,9 @@ def generate_answer(self, chat_message_id: str) -> dict:
             history_messages.append({"role": "user", "content": h.query})
             history_messages.append({"role": "assistant", "content": h.answer or ""})
 
-        requester = db.get(User, conversation.user_id)
         project = db.get(Project, conversation.project_id) if conversation.project_id else None
-        system_prompt = (
-            (project.system_prompt if project and project.system_prompt else None)
-            or (requester.system_prompt if requester and requester.system_prompt else None)
-            or _SYSTEM_PROMPT
-        )
+        prompt_source, system_prompt = _select_system_prompt(project, requester)
+        trace.update(system_prompt_source=prompt_source, system_prompt=system_prompt)
 
         # Polling-based streaming: the worker mirrors partial output into Redis
         # and the message API surfaces it while status is GENERATING, so the
@@ -544,19 +592,28 @@ def generate_answer(self, chat_message_id: str) -> dict:
         # retrieved. If not, broaden retrieval once and regenerate — capped at
         # exactly one extra hop so a persistently ungrounded question can't loop.
         verifier = _get_verifier_provider(db, conversation, provider, spec["backend"])
-        if chunks and not _is_answer_grounded(verifier, msg.query, context, answer):
-            logger.info(
-                "generate_answer: reflection flagged ungrounded answer, broadening retrieval once",
-                extra={"chat_message_id": chat_message_id},
+        grounding = GROUNDING_SKIPPED
+        broadened = False
+        if chunks:
+            trace["verifier_model"] = _verifier_model_key(
+                verifier, provider, conversation.model_key
             )
-            broadened_chunks = retrieval_fn(
-                db, str(conversation.user_id), msg.query, collection_id_str,
-                project_id=project_id_str, limit=10,
-            )
-            if broadened_chunks:
-                chunks = broadened_chunks
-                context = _build_context(chunks)
-                answer = _generate(context)
+            grounded = _is_answer_grounded(verifier, msg.query, context, answer)
+            grounding = GROUNDING_PASSED if grounded else GROUNDING_FAILED
+            if not grounded:
+                logger.info(
+                    "generate_answer: reflection flagged ungrounded answer, broadening retrieval once",
+                    extra={"chat_message_id": chat_message_id},
+                )
+                broadened_chunks = retrieval_fn(
+                    db, str(conversation.user_id), msg.query, collection_id_str,
+                    project_id=project_id_str, limit=10,
+                )
+                if broadened_chunks:
+                    chunks = broadened_chunks
+                    context = _build_context(chunks)
+                    answer = _generate(context)
+                    broadened = True
 
         usage = getattr(provider, "last_usage", None)
         if usage:
@@ -592,6 +649,10 @@ def generate_answer(self, chat_message_id: str) -> dict:
             for i, c in enumerate(chunks)
         ]
         msg.status = "DONE"
+        record_answer_trace(
+            db, **trace, status="DONE", answer=answer, chunks=chunks, grounding=grounding,
+            broadened=broadened, usage=usage, latency_ms=_elapsed_ms(started),
+        )
         db.commit()
 
         try:
@@ -620,6 +681,11 @@ def generate_answer(self, chat_message_id: str) -> dict:
             if msg:
                 msg.status = "FAILED"
                 msg.error_message = str(exc)[:500]
+                if "query" in trace:
+                    record_answer_trace(
+                        db, **trace, status="FAILED", error_message=str(exc),
+                        latency_ms=_elapsed_ms(started),
+                    )
                 db.commit()
         except Exception:
             logger.exception("generate_answer: failed to record failure state")

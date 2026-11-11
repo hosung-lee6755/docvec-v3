@@ -72,4 +72,6 @@ class DocumentAclResponse(BaseModel):
     # 문서 등급 → 컬렉션 기본 등급 → Public 순으로 정해진 실제 적용 등급
     effective_security_level: SecurityLevel
     restricted: bool
+    # 요청자가 등급을 낮추거나 제한을 풀 수 있는지(업로더·컬렉션 소유자). 화면의 버튼 활성화에 쓴다.
+    can_relax: bool = False
     entries: list[AclEntryOut]

@@ -77,4 +77,21 @@ describe('AccessPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '제한 해제' }))
     expect(mutate).toHaveBeenCalledWith({ documentId: 'doc-1', entries: [] })
   })
+
+  it('blocks relaxing actions for editors who are not the uploader or collection owner', () => {
+    aclState = {
+      isError: false,
+      data: {
+        document_id: 'doc-1', security_level: 'Internal', effective_security_level: 'Internal', restricted: true,
+        can_relax: false,
+        entries: [{ principal_type: 'user', principal_id: 'u-2', display_name: 'bob' }],
+      },
+    }
+    renderPanel()
+    expect(screen.getByRole('button', { name: '제한 해제' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'bob 허용 해제' })).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('허용 목록에 추가할 사용자 또는 그룹'), { target: { value: 'group:g-1' } })
+    expect(screen.getByRole('button', { name: '추가' })).toBeDisabled()
+    expect(screen.getByText(/업로더나 컬렉션 소유자만/)).toBeInTheDocument()
+  })
 })

@@ -140,6 +140,8 @@ async def perform_search(
             collection_id=str(request.collection_id) if request.collection_id else None,
             result_count=len(results),
             search_mode=request.mode,
+            # v3 조회 감사: 결과로 돌려준 문서(중복 제거, 결과 순서 유지)
+            result_document_ids=list(dict.fromkeys(str(r.document_id) for r in results)),
         )
     )
     await db.commit()

@@ -721,12 +721,14 @@ Reranker: Cross-Encoder (BAAI/bge-reranker-v2-m3)
 | RBAC | 구현(v2) | 시스템 역할 viewer/editor/admin, 컬렉션·프로젝트 역할 |
 | ABAC — 보안등급 | 구현 | 문서 `security_level` → 컬렉션 `default_security_level` → Public, 사용자 `clearance_level`과 순위 비교 |
 | 문서별 ACL | 구현 | `document_acl_entries`(사용자·그룹), 사용자 그룹 `user_groups` |
-| Tenant Isolation | 미구현 | 단일 테넌트. 물리 Qdrant 컬렉션 하나를 공유하고 페이로드 필터로 격리 |
-| ABAC — 조직 속성 | 미구현 | 마일스톤 3(사내 계정 연동)에서 조직 정보를 받아 그룹으로 매핑 예정 |
+| Tenant Isolation | 미구현 | 단일 테넌트다. Qdrant 컬렉션 하나를 함께 쓰고 페이로드 필터로 구분한다 |
+| ABAC — 조직 속성 | 미구현 | 마일스톤 3(사내 계정 연동)에서 조직 정보를 받아 그룹으로 옮길 예정이다 |
 
-15.1의 "검색 요청에 ACL Filter 적용 → 허용된 청크만 Reranking·LLM 전달"은 Qdrant 페이로드 필터 + Postgres 재확인의 2단계로 구현했다.
-판정 규칙의 단일 출처는 `backend/app/services/access_policy.py`이고, 알고리즘·검증 방법은 `docs/기술문서_시스템_아키텍처.md` §11.4,
-운영 절차(배포 후 권한 사본 백필 포함)는 `docs/유지보수_가이드.md` 1.11절에 있다. 관리자도 문서 열람 우회가 없다.
+15.1의 "검색 요청에 ACL Filter 적용 → 허용된 청크만 Reranking·LLM 전달"은 두 단계로 구현했다. 먼저 Qdrant 페이로드 필터로 거르고, 남은 후보를 Postgres로 다시 확인한다.
+판정 규칙은 `backend/app/services/access_policy.py` 한 곳에만 있다. 알고리즘과 검증 방법은 `docs/기술문서_시스템_아키텍처.md` §11.4에,
+배포 후 권한 사본 백필을 포함한 운영 절차는 `docs/유지보수_가이드.md` 1.11절에 있다. 관리자도 문서 열람 규칙을 건너뛰지 못한다.
+
+마일스톤 2(2026-11-11)에서는 답변마다 질문자, 권한 맥락, 근거 문서를 남기는 답변 추적 기록과 AI 기본법 근거 자료(docx)를 더했다. 구조는 아키텍처 문서 §11.5에, 운영 절차는 유지보수 가이드 1.12절에 있다.
 
 ---
 

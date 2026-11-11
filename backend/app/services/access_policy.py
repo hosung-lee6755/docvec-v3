@@ -153,6 +153,26 @@ def can_view(ctx: AccessContext, facts: DocumentAccessFacts) -> bool:
     return True
 
 
+RELAX_FORBIDDEN_DETAIL = "보안등급을 낮추거나 접근 제한을 푸는 일은 문서 업로더나 컬렉션 소유자만 할 수 있습니다"
+
+
+def is_relaxing_level(old_level: str | None, new_level: str | None) -> bool:
+    """유효 등급이 낮아지는지(더 많은 사람이 보게 되는지). None은 기본값(Public)으로 본다."""
+    return document_level_rank(new_level) < document_level_rank(old_level)
+
+
+def is_relaxing_acl(old_principals: Iterable[str], new_principals: Iterable[str]) -> bool:
+    """허용 목록 교체가 접근을 넓히는지. 제한 해제(빈 목록)나 허용 대상 추가가 해당한다.
+    처음 제한을 거는 것과 대상을 줄이는 것은 좁히는 방향이다."""
+    old, new = set(old_principals), set(new_principals)
+    return bool(old) and (not new or bool(new - old))
+
+
+def can_relax(user_id: str, uploader_id: str | None, collection_owner_id: str | None) -> bool:
+    """접근을 넓히는 변경은 문서 업로더와 컬렉션 소유자만 할 수 있다(관리자 예외 없음)."""
+    return str(user_id) in {str(uploader_id), str(collection_owner_id)} - {"None"}
+
+
 def document_access_payload(facts: DocumentAccessFacts) -> dict:
     """Qdrant 포인트에 넣는 권한 사본. 업로더는 ACL이 있을 때 항상 목록에 포함한다."""
     owner = str(facts.created_by) if facts.created_by is not None else None
@@ -382,3 +402,14 @@ def load_document_facts_sync(db, document_ids: Iterable[str]) -> dict[str, Docum
 
 def visible_document_ids(ctx: AccessContext, facts: dict[str, DocumentAccessFacts]) -> set[str]:
     return {doc_id for doc_id, f in facts.items() if can_view(ctx, f)}
+
+
+async def collection_owner_id(db, collection_id) -> str | None:
+    if collection_id is None:
+        return None
+    owner = await db.scalar(select(Collection.created_by).where(Collection.id == str(collection_id)))
+    return str(owner) if owner is not None else None
+
+
+async def can_relax_document(db, user, doc) -> bool:
+    return can_relax(str(user.id), doc.created_by, await collection_owner_id(db, doc.collection_id))

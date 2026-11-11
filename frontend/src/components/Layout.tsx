@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, FileText, FolderKanban, FolderOpen, Search, LogOut, Users, MessageSquare, Settings, ScrollText, DollarSign, BookOpen, GitBranch, AlertTriangle, XCircle, Activity, Eraser, ShieldCheck } from 'lucide-react'
+import { LayoutDashboard, FileText, FolderKanban, FolderOpen, Search, LogOut, Users, MessageSquare, Settings, ScrollText, DollarSign, BookOpen, GitBranch, AlertTriangle, XCircle, Activity, Eraser, ShieldCheck, Route, FileCheck } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { useWaitingReviewCount, useFailedCount } from '../hooks/useDocuments'
 
@@ -59,6 +59,8 @@ const navGroups: NavGroup[] = [
       { to: '/users', icon: Users, label: '사용자' },
       { to: '/groups', icon: ShieldCheck, label: '그룹' },
       { to: '/audit-logs', icon: ScrollText, label: '감사 로그' },
+      { to: '/answer-traces', icon: Route, label: '답변 추적' },
+      { to: '/governance-report', icon: FileCheck, label: 'AI 기본법 근거 자료' },
       { to: '/usage', icon: DollarSign, label: '사용량' },
     ],
   },

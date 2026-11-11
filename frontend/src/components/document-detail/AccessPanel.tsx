@@ -62,6 +62,10 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
   const groupOptions = (groups.data?.items ?? []).filter((g) => !current.has(`group:${g.id}`))
   const userOptions = (members.data?.items ?? []).filter((m) => !current.has(`user:${m.user_id}`))
   const effective = acl.data.effective_security_level
+  // 접근을 넓히는 변경(제한 해제, 허용 대상 추가, 마지막 항목 제거)은 업로더·컬렉션 소유자만 할 수 있다.
+  const canRelax = acl.data.can_relax ?? true
+  const canAdd = canRelax || !acl.data.restricted
+  const canRemove = canRelax || entries.length > 1
 
   return (
     <Row label="접근 허용">
@@ -84,7 +88,7 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
                 <button
                   type="button"
                   aria-label={`${e.display_name ?? e.principal_id} 허용 해제`}
-                  disabled={replaceAcl.isPending}
+                  disabled={replaceAcl.isPending || !canRemove}
                   onClick={() => save(entries.filter((x) => entryKey(x) !== entryKey(e)).map(toInput))}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'inherit', lineHeight: 1 }}
                 >
@@ -114,15 +118,20 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
               </optgroup>
             )}
           </select>
-          <button type="button" className="krds-btn xsmall secondary" disabled={!candidate || replaceAcl.isPending} onClick={handleAdd}>
+          <button type="button" className="krds-btn xsmall secondary" disabled={!candidate || replaceAcl.isPending || !canAdd} onClick={handleAdd}>
             추가
           </button>
           {acl.data.restricted && (
-            <button type="button" className="krds-btn text xsmall" disabled={replaceAcl.isPending} onClick={() => save([])}>
+            <button type="button" className="krds-btn text xsmall" disabled={replaceAcl.isPending || !canRelax} onClick={() => save([])}>
               제한 해제
             </button>
           )}
         </span>
+        {!canRelax && (
+          <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+            허용 대상을 늘리거나 제한을 푸는 일은 업로더나 컬렉션 소유자만 할 수 있습니다.
+          </span>
+        )}
         {replaceAcl.isError && <span style={{ fontSize: 12, color: '#dc2626' }}>{errorMessage(replaceAcl.error)}</span>}
       </span>
     </Row>

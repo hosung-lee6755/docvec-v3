@@ -14,6 +14,7 @@ from app.db.models.project_api_key import ProjectApiKey
 from app.db.models.user import User
 from app.db.models.user_api_key import UserApiKey
 from app.db.session import get_db
+from app.services.access_policy import build_access_context, load_document_facts, visible_document_ids
 from app.services.llm import LLM_MODEL_REGISTRY
 
 router = APIRouter()
@@ -34,6 +35,8 @@ class ChatCitation(BaseModel):
     filename: str | None
     page_number: int | None
     text: str
+    # v3: 지금 볼 수 없는 문서의 인용이면 True다. 본문·파일명·문서 id를 비워서 내려보낸다.
+    hidden: bool = False
 
 
 class ChatMessageResponse(BaseModel):
@@ -68,6 +71,43 @@ def _partial_answer_for(message_id) -> str | None:
         return val.decode("utf-8") if val else None
     except Exception:
         return None
+
+
+def _as_uuid(value: str | None) -> str | None:
+    try:
+        return str(UUID(str(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _masked(citation: ChatCitation) -> ChatCitation:
+    return citation.model_copy(update={
+        "hidden": True, "document_id": None, "collection_id": None, "collection_name": None,
+        "filename": None, "page_number": None, "text": "",
+    })
+
+
+async def _mask_hidden_citations(
+    db: AsyncSession, user: User, messages: list[ChatMessageResponse]
+) -> list[ChatMessageResponse]:
+    """저장된 답변의 인용을 지금 권한으로 다시 판정한다. 권한이 회수됐거나 문서가 지워졌으면
+    그 인용을 가린다. 답변 본문은 이미 보여 준 것이므로 그대로 둔다(v3 마일스톤 2)."""
+    if not any(m.citations for m in messages):
+        return messages
+    doc_ids = {_as_uuid(c.document_id) for m in messages for c in (m.citations or [])} - {None}
+    visible: set[str] = set()
+    if doc_ids:
+        ctx = await build_access_context(db, user)
+        visible = visible_document_ids(ctx, await load_document_facts(db, doc_ids))
+
+    def check(c: ChatCitation) -> ChatCitation:
+        # 문서를 특정할 수 없는 인용은 판정할 수 없으므로 가린다(fail-closed).
+        return c if _as_uuid(c.document_id) in visible else _masked(c)
+
+    return [
+        m.model_copy(update={"citations": [check(c) for c in m.citations]}) if m.citations else m
+        for m in messages
+    ]
 
 
 def _message_with_partial(message: "ChatMessage") -> ChatMessageResponse:
@@ -271,7 +311,9 @@ async def get_conversation(
     )
     return ConversationDetailResponse(
         **ConversationResponse.model_validate(conversation).model_dump(),
-        messages=[_message_with_partial(m) for m in messages.all()],
+        messages=await _mask_hidden_citations(
+            db, current_user, [_message_with_partial(m) for m in messages.all()]
+        ),
     )
 
 
@@ -347,4 +389,5 @@ async def get_chat_message(
     )
     if not conversation or str(conversation.user_id) != str(current_user.id):
         raise HTTPException(status_code=403, detail="Access denied")
-    return _message_with_partial(msg)
+    [item] = await _mask_hidden_citations(db, current_user, [_message_with_partial(msg)])
+    return item

@@ -362,7 +362,10 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
             background: '#eff6ff', border: '1px solid #bfdbfe',
             borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',
           }}>
-            <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)' }}>답변</p>
+            <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              답변
+              <span className="krds-badge small bg-information">AI가 생성한 답변</span>
+            </p>
             <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
               {chat.answer ? renderAnswer(chat.answer) : null}
             </p>
@@ -385,7 +388,15 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
               </button>
               {citationsOpen && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                  {chat.citations.map((c) => (
+                  {chat.citations.map((c) => c.hidden ? (
+                    <div
+                      key={c.index}
+                      ref={(el) => { citationRefs.current[c.index] = el }}
+                      style={{ border: '1px dashed #cbd5e1', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', fontSize: 12, color: 'var(--color-text-muted)' }}
+                    >
+                      <span style={{ fontWeight: 600 }}>[{c.index}]</span> 열람 권한이 없는 문서입니다. 답변 이후 권한이 바뀌었거나 문서가 삭제됐습니다.
+                    </div>
+                  ) : (
                     <div
                       key={c.index}
                       ref={(el) => { citationRefs.current[c.index] = el }}

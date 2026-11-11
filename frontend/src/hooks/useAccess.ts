@@ -46,6 +46,8 @@ export interface DocumentAcl {
   security_level: SecurityLevel | null
   effective_security_level: SecurityLevel
   restricted: boolean
+  // 등급을 낮추거나 제한을 풀 수 있는지(업로더·컬렉션 소유자만)
+  can_relax?: boolean
   entries: AclEntry[]
 }
 

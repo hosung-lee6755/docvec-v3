@@ -24,6 +24,9 @@ from app.services.access_policy import (
     PRINCIPAL_USER,
     SECURITY_LEVELS,
     effective_level_rank,
+    RELAX_FORBIDDEN_DETAIL,
+    can_relax_document,
+    is_relaxing_acl,
     load_document_facts,
 )
 from app.services.audit import log_audit
@@ -58,7 +61,7 @@ async def _display_names(
     return names
 
 
-async def _acl_response(db: AsyncSession, doc: Document) -> DocumentAclResponse:
+async def _acl_response(db: AsyncSession, doc: Document, user: User) -> DocumentAclResponse:
     entries = (
         await db.scalars(
             select(DocumentAclEntry)
@@ -73,6 +76,7 @@ async def _acl_response(db: AsyncSession, doc: Document) -> DocumentAclResponse:
         security_level=doc.security_level,
         effective_security_level=SECURITY_LEVELS[effective_level_rank(facts)],
         restricted=bool(entries),
+        can_relax=await can_relax_document(db, user, doc),
         entries=[
             AclEntryOut(
                 principal_type=e.principal_type,
@@ -109,7 +113,7 @@ async def get_document_acl(
     current_user: User = Depends(get_current_user),
 ):
     doc = await _get_editable_document(db, document_id, current_user)
-    return await _acl_response(db, doc)
+    return await _acl_response(db, doc, current_user)
 
 
 @router.put("/{document_id}/acl", response_model=DocumentAclResponse)
@@ -129,6 +133,9 @@ async def replace_document_acl(
         await db.scalars(select(DocumentAclEntry).where(DocumentAclEntry.document_id == doc.id))
     ).all()
     old_keys = {(e.principal_type, str(e.principal_id)) for e in old_entries}
+    if is_relaxing_acl(old_keys, new_keys) and not await can_relax_document(db, current_user, doc):
+        # v3 마일스톤 2: 제한 해제·허용 대상 추가는 업로더·컬렉션 소유자만 할 수 있다.
+        raise HTTPException(status_code=403, detail=RELAX_FORBIDDEN_DETAIL)
 
     if new_keys != old_keys:
         await db.execute(delete(DocumentAclEntry).where(DocumentAclEntry.document_id == doc.id))
@@ -150,4 +157,4 @@ async def replace_document_acl(
         await db.commit()
         await sync_access_or_502(db, [doc.id], "허용 목록")
 
-    return await _acl_response(db, doc)
+    return await _acl_response(db, doc, current_user)

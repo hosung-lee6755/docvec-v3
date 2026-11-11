@@ -16,6 +16,8 @@ export interface ChatCitation {
   filename: string | null
   page_number: number | null
   text: string
+  // 지금 볼 수 없는 문서의 인용이면 true다. 서버가 본문·파일명·문서 id를 비워서 보낸다.
+  hidden?: boolean
 }
 
 export interface ChatMessage {

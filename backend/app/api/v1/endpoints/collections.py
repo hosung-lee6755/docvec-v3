@@ -26,7 +26,12 @@ from app.db.models.user import User
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 from app.db.session import get_db
 from app.schemas.access import SecurityLevel
-from app.services.access_policy import build_access_context, document_visibility_clause
+from app.services.access_policy import (
+    RELAX_FORBIDDEN_DETAIL,
+    build_access_context,
+    document_visibility_clause,
+    is_relaxing_level,
+)
 from app.services.audit import log_audit
 from app.services.document_state import claim_document_status
 from app.services.document_storage import release_original
@@ -417,6 +422,13 @@ async def update_collection(
         "default_security_level" in data.model_fields_set
         and data.default_security_level != previous_level
     )
+    if (
+        level_changed
+        and is_relaxing_level(previous_level, data.default_security_level)
+        and str(collection.created_by) != str(current_user.id)
+    ):
+        # v3 마일스톤 2: 기본 등급을 낮추는 일은 컬렉션 소유자만. 커밋 전이므로 변경은 버려진다.
+        raise HTTPException(status_code=403, detail=RELAX_FORBIDDEN_DETAIL)
     if level_changed:
         collection.default_security_level = data.default_security_level
         log_audit(
@@ -580,6 +592,12 @@ async def export_collection(
             )
         )
     ).all()
+
+    log_audit(
+        db, str(current_user.id), "collection.export", "collection", str(collection.id),
+        detail={"document_count": len(docs)},
+    )
+    await db.commit()
 
     exported_docs = []
     for doc in docs:

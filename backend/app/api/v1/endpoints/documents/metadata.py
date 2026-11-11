@@ -12,6 +12,7 @@ from app.api.v1.permissions import (
     check_document_access,
 )
 from app.core.config import settings
+from app.db.models.collection import Collection
 from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
 from app.db.models.user import User
@@ -24,6 +25,7 @@ from app.schemas.document import (
     DocumentTagSuggestionRequest,
     DocumentTagsUpdateRequest,
 )
+from app.services.access_policy import RELAX_FORBIDDEN_DETAIL, can_relax_document, is_relaxing_level
 from app.services.audit import log_audit
 
 router = APIRouter()
@@ -94,6 +96,10 @@ async def update_document_metadata(
     updates = body.model_dump(exclude_unset=True)
     resets = set(updates.pop("reset_fields", None) or [])
     previous_level = doc.security_level
+    collection_default = (
+        await db.scalar(select(Collection.default_security_level).where(Collection.id == doc.collection_id))
+        if doc.collection_id else None
+    )
     edited = list(doc.user_edited_fields or [])
     for field, value in updates.items():
         if field in _AUTO_FIELDS:
@@ -114,6 +120,11 @@ async def update_document_metadata(
             update(DocumentChunk).where(DocumentChunk.document_id == doc.id).values(language=doc.language)
         )
     level_changed = doc.security_level != previous_level
+    if level_changed and is_relaxing_level(
+        previous_level or collection_default, doc.security_level or collection_default
+    ) and not await can_relax_document(db, current_user, doc):
+        # v3 마일스톤 2: 등급을 낮추는 일은 업로더·컬렉션 소유자만. 커밋 전이므로 변경은 버려진다.
+        raise HTTPException(status_code=403, detail=RELAX_FORBIDDEN_DETAIL)
     if level_changed:
         # v3: 보안등급은 열람 권한을 바꾸므로 감사 대상이다.
         log_audit(
@@ -231,13 +242,16 @@ async def get_document_preview(
     await check_document_access(db, doc, current_user, min_role="viewer")
 
     if doc.original_filename.lower().endswith(".pdf"):
-        return {"url": get_download_url(doc.minio_key), "kind": "pdf", "approximate": False}
-
-    url, kind, approximate = await asyncio.to_thread(
-        preview_url_for, str(doc.id), doc.original_filename, doc.minio_key
-    )
+        url, kind, approximate = get_download_url(doc.minio_key), "pdf", False
+    else:
+        url, kind, approximate = await asyncio.to_thread(
+            preview_url_for, str(doc.id), doc.original_filename, doc.minio_key
+        )
     if url is None:
         raise HTTPException(status_code=422, detail="이 형식은 원문 미리보기를 지원하지 않습니다")
+    # v3 조회 감사: 원문 URL을 실제로 내준 경우만 남긴다(미리보기, 다운로드, 내보내기).
+    log_audit(db, str(current_user.id), "document.preview", "document", str(doc.id))
+    await db.commit()
     return {"url": url, "kind": kind, "approximate": approximate}
 
 
@@ -290,6 +304,8 @@ async def get_document_download_url(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="viewer")
+    log_audit(db, str(current_user.id), "document.download", "document", str(doc.id))
+    await db.commit()
     return {"url": get_download_url(doc.minio_key)}
 
 
