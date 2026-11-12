@@ -70,7 +70,7 @@ def test_local_provider_uses_fp16_on_gpu():
     transformers.AutoModelForCausalLM.from_pretrained.return_value.to.assert_called_with("cuda")
 
 
-def test_local_generate_decodes_only_new_tokens_with_floor_and_penalty():
+def test_local_generate_decodes_only_new_tokens_without_length_floor():
     provider, _t, _tf, tokenizer, model = _local_provider()
     model.generate.return_value = [[1, 2, 3, 40, 50]]
     tokenizer.decode.return_value = "생성된 답"
@@ -84,7 +84,8 @@ def test_local_generate_decodes_only_new_tokens_with_floor_and_penalty():
     )
     assert tokenizer.decode.call_args.args[0] == [40, 50]
     gen_kwargs = model.generate.call_args.kwargs
-    assert gen_kwargs["min_new_tokens"] == 48
+    # 길이 하한을 두면 짧게 끝나야 할 답도 끝을 못 내고 대화 템플릿을 지어낸다(2026-11-12 실측)
+    assert "min_new_tokens" not in gen_kwargs
     assert gen_kwargs["max_new_tokens"] == 512
     assert gen_kwargs["do_sample"] is False
     assert gen_kwargs["repetition_penalty"] == pytest.approx(1.15)
@@ -101,6 +102,25 @@ def test_local_generate_stream_reports_accumulated_text_and_returns_full_text():
     assert seen == ["안녕", "안녕하세요"]
     model.generate.assert_called_once()
     assert model.generate.call_args.kwargs["streamer"] is transformers.TextIteratorStreamer.return_value
+
+
+def test_local_generate_cuts_leaked_chat_template():
+    provider, _t, _tf, tokenizer, model = _local_provider()
+    model.generate.return_value = [[1, 2, 3, 40]]
+    tokenizer.decode.return_value = "알 수 없습니다.[1]<tool_call>\n返回\nuser\n질문: 지어낸 질문"
+
+    assert provider.generate("sys", []) == "알 수 없습니다.[1]"
+
+
+def test_local_generate_stream_cuts_leaked_chat_template_in_partial_and_final():
+    provider, _t, transformers, _tok, _model = _local_provider()
+    transformers.TextIteratorStreamer.return_value = ["답", "입니다.", "<tool_call>", "\nuser 지어낸 질문"]
+    seen = []
+    with patch.dict("sys.modules", {"transformers": transformers}):
+        out = provider.generate_stream("sys", [], seen.append)
+
+    assert out == "답입니다."
+    assert all("<tool_call>" not in s and "user" not in s for s in seen)
 
 
 def test_local_generate_stream_ignores_callback_errors():

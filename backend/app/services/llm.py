@@ -25,6 +25,16 @@ class LLMProvider(ABC):
         raise NotImplementedError(f"{type(self).__name__} does not support vision input")
 
 
+# 대화 템플릿 표지. 특수 토큰으로 지워지지 않는 것(<tool_call>)도 있어 문자열로 자른다.
+# 답 뒤에 이 표지가 나오면 모델이 다음 차례(user 질문, 발췌문)를 지어내기 시작한 것이다.
+_TEMPLATE_LEAK_MARKERS = ("<tool_call>", "<|im_start|>", "<|im_end|>", "<|endoftext|>")
+
+
+def _cut_template_leak(text: str) -> str:
+    positions = [i for i in (text.find(m) for m in _TEMPLATE_LEAK_MARKERS) if i >= 0]
+    return text[: min(positions)].rstrip() if positions else text
+
+
 class LocalLLMProvider(LLMProvider):
     def __init__(self, repo_id: str) -> None:
         import torch
@@ -48,14 +58,14 @@ class LocalLLMProvider(LLMProvider):
         outputs = self._model.generate(
             **inputs,
             max_new_tokens=512,
-            # Without a floor, the model can emit a bare "[1]" then EOS immediately —
-            # min_new_tokens forces it past that degenerate citation-only completion.
-            min_new_tokens=48,
+            # 길이 하한(min_new_tokens)은 두지 않는다. 하한이 있으면 "알 수 없습니다"처럼
+            # 짧게 끝나야 할 답이 끝을 못 내고 다음 대화 차례를 지어낸다. "[1]"만 내는
+            # 출력은 generate_answer의 _is_degenerate_answer가 다시 생성시킨다.
             repetition_penalty=1.15,
             do_sample=False,
         )
         generated = outputs[0][inputs["input_ids"].shape[-1] :]
-        return self._tokenizer.decode(generated, skip_special_tokens=True)
+        return _cut_template_leak(self._tokenizer.decode(generated, skip_special_tokens=True))
 
     def generate_stream(
         self, system_prompt: str, messages: list[dict[str, str]], on_delta
@@ -80,7 +90,6 @@ class LocalLLMProvider(LLMProvider):
             kwargs=dict(
                 **inputs,
                 max_new_tokens=512,
-                min_new_tokens=48,
                 repetition_penalty=1.15,
                 do_sample=False,
                 streamer=streamer,
@@ -91,11 +100,11 @@ class LocalLLMProvider(LLMProvider):
         for piece in streamer:
             parts.append(piece)
             try:
-                on_delta("".join(parts))
+                on_delta(_cut_template_leak("".join(parts)))
             except Exception:
                 pass  # partial-progress reporting must never kill generation
         thread.join()
-        return "".join(parts)
+        return _cut_template_leak("".join(parts))
 
 
 class OpenAILLMProvider(LLMProvider):

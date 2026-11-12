@@ -694,6 +694,21 @@ def test_generate_answer_routes_to_intent_specific_retrieval(chat_env, intent, e
     chunk_search.assert_not_called()
 
 
+@pytest.mark.parametrize("intent", ["TABLE_QUERY", "SUMMARY_LOOKUP"])
+def test_generate_answer_falls_back_to_chunk_search_when_intent_retrieval_is_empty(chat_env, intent):
+    # 요약이 없는 문서에 "요약 조회"로 잘못 분류되면 근거 0건으로 답을 지어냈다(2026-11-12 실측)
+    _conv, msg = chat_env.build()
+    empty = MagicMock(return_value=[])
+
+    _result, chunk_search = chat_env.run(msg.id, ScriptedProvider(intent=intent), table=empty, summary=empty)
+
+    empty.assert_called_once()
+    assert chunk_search.called
+    stored, db = chat_env.reload(msg.id)
+    assert stored.citations
+    db.close()
+
+
 def test_generate_answer_retries_once_on_citation_only_output(chat_env):
     _conv, msg = chat_env.build()
     provider = ScriptedProvider(stream_answers=("[1], [2]",), generate_answer="완전한 설명 문장입니다[1].")

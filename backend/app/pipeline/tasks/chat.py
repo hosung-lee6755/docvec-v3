@@ -667,6 +667,17 @@ def generate_answer(self, chat_message_id: str) -> dict:
             chunks = retrieval_fn(
                 db, str(conversation.user_id), msg.query, collection_id_str, project_id=project_id_str
             )
+            if not chunks and retrieval_fn is not _retrieve_chunks:
+                # 요약이나 표가 없는 문서에서 근거 0건으로 답을 지어내지 않도록 일반 검색으로 다시 찾는다.
+                # 분류기가 사실 질문을 요약 조회로 잘못 고를 때도 이 길로 구제된다.
+                logger.info(
+                    "generate_answer: intent retrieval found nothing, falling back to chunk search",
+                    extra={"chat_message_id": chat_message_id, "intent": intent},
+                )
+                retrieval_fn = _retrieve_chunks
+                chunks = retrieval_fn(
+                    db, str(conversation.user_id), msg.query, collection_id_str, project_id=project_id_str
+                )
         msg.expanded_terms = _expanded_terms(db, msg.query)
         answer_started = time.monotonic()
         context = _build_context(chunks)
