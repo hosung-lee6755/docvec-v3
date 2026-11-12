@@ -3,6 +3,8 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
+import { Alert, Button, Field, Input } from '../components/ui'
+import '../styles/screens/user.css'
 
 const GENERIC_LOGIN_ERROR = "로그인하지 못했습니다. 아이디(이메일)와 비밀번호를 확인하세요."
 
@@ -33,58 +35,41 @@ export default function LoginPage() {
   })
 
   return (
-    <div style={{
-      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      <div style={{
-        background: 'var(--color-surface)', border: '1px solid var(--color-border)',
-        borderRadius: 'var(--radius-lg)', padding: 'var(--space-8)', width: 360,
-      }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 'var(--space-6)', color: 'var(--color-text)' }}>DocVec</h1>
-        <form onSubmit={(e) => { e.preventDefault(); loginMutation.mutate() }}>
-          <div className="form-group" style={{ marginBottom: 'var(--space-4)' }}>
-            <div className="form-tit" style={{ color: 'var(--color-text-muted)' }}>
-              <label htmlFor="login_email">아이디 또는 이메일</label>
-            </div>
-            <div className="form-conts">
-              <input
-                id="login_email"
+    <div className="user-auth">
+      <div className="user-auth__card">
+        <div className="user-auth__brand">
+          <span className="user-auth__logo" aria-hidden="true">DV</span>
+          <h1 className="user-auth__name">DocVec</h1>
+          <p className="user-auth__subtitle">계정에 로그인</p>
+        </div>
+        <form className="user-auth__form" onSubmit={(e) => { e.preventDefault(); loginMutation.mutate() }}>
+          <Field label="아이디 또는 이메일">
+            {(id) => (
+              <Input
+                id={id}
                 type="text" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required
                 placeholder="사내 계정 아이디 또는 user@example.com"
-                className="krds-input"
-                style={{ width: '100%', boxSizing: 'border-box' }}
               />
-            </div>
-          </div>
-          <div className="form-group" style={{ marginBottom: 'var(--space-6)' }}>
-            <div className="form-tit" style={{ color: 'var(--color-text-muted)' }}>
-              <label htmlFor="login_password">비밀번호</label>
-            </div>
-            <div className="form-conts">
-              <input
-                id="login_password"
+            )}
+          </Field>
+          <Field label="비밀번호">
+            {(id) => (
+              <Input
+                id={id}
                 type="password" value={password} onChange={(e) => setPassword(e.target.value)} required
-                className="krds-input"
-                style={{ width: '100%', boxSizing: 'border-box' }}
               />
-            </div>
-          </div>
+            )}
+          </Field>
           {loginMutation.isError && (
-            <p role="alert" style={{ color: 'var(--color-danger)', fontSize: 12, marginBottom: 'var(--space-4)' }}>
-              {loginErrorMessage(loginMutation.error)}
-            </p>
+            <Alert tone="danger">{loginErrorMessage(loginMutation.error)}</Alert>
           )}
-          <button
-            type="submit" disabled={loginMutation.isPending}
-            className="krds-btn medium primary"
-            style={{ width: '100%', justifyContent: 'center' }}
-          >
+          <Button type="submit" variant="primary" isBlock disabled={loginMutation.isPending}>
             {loginMutation.isPending ? '로그인 중...' : '로그인'}
-          </button>
+          </Button>
         </form>
-        <p style={{ marginTop: 'var(--space-4)', textAlign: 'center', fontSize: 13, color: 'var(--color-text-muted)' }}>
+        <p className="user-auth__footer">
           계정이 없으신가요?{' '}
-          <Link to="/register" style={{ color: 'var(--color-accent)', textDecoration: 'none' }}>회원가입</Link>
+          <Link to="/register" className="user-auth__link">회원가입</Link>
         </p>
       </div>
     </div>

@@ -5,20 +5,13 @@ import { useEmbeddingModels } from '../../hooks/useCollections'
 import { useDictionaryEntries } from '../../hooks/useDictionary'
 import { jsonSchemaToConfigFields } from '../../lib/blockConfigSchema'
 import { getBlockMeta, type ConfigField } from '../../lib/workflowBlocks'
+import { IconButton } from '../ui'
+import '../../styles/screens/pipeline.css'
 
 interface BlockPropertyPanelProps {
   block: WorkflowBlock | null
   onChange: (blockId: string, updates: { label?: string; config?: Record<string, unknown> }) => void
   onDelete?: (blockId: string) => void
-}
-
-const fieldLabelStyle: React.CSSProperties = {
-  fontSize: 11, fontWeight: 700, color: 'var(--color-text-muted)',
-  textTransform: 'uppercase', letterSpacing: 0.4,
-}
-
-const helpStyle: React.CSSProperties = {
-  fontSize: 11, color: 'var(--color-text-muted)', lineHeight: 1.5,
 }
 
 function ConfigFieldInput({
@@ -31,51 +24,46 @@ function ConfigFieldInput({
 }) {
   if (field.type === 'boolean') {
     const checked = value === undefined ? !!field.default : !!value
-    // KRDS hides native checkboxes — it only styles its own
-    // .krds-form-check > .chk + label pattern (same as DocumentsPage).
     return (
       <div>
-        <div className="krds-form-check">
+        <label className="block-panel__check" htmlFor={inputId}>
           <input
             type="checkbox"
-            className="chk"
             id={inputId}
             checked={checked}
             onChange={(e) => onValueChange(e.target.checked)}
           />
-          <label htmlFor={inputId} style={{ fontSize: 13, color: 'var(--color-text)' }}>
-            {field.label}
-          </label>
-        </div>
-        {field.help && <div style={{ ...helpStyle, marginTop: 2 }}>{field.help}</div>}
+          {field.label}
+        </label>
+        {field.help && <div className="block-panel__help" style={{ marginTop: 2 }}>{field.help}</div>}
       </div>
     )
   }
 
   if (field.type === 'number') {
     return (
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
-        <span style={fieldLabelStyle}>{field.label}</span>
+      <label className="block-panel__field">
+        <span className="block-panel__label">{field.label}</span>
         <input
           type="number"
-          className="krds-input small"
+          className="ds-input ds-input--sm"
           value={value === undefined || value === null ? String(field.default ?? '') : String(value)}
           placeholder={field.placeholder}
           min={field.min}
           max={field.max}
           onChange={(e) => onValueChange(e.target.value === '' ? undefined : Number(e.target.value))}
         />
-        {field.help && <span style={helpStyle}>{field.help}</span>}
+        {field.help && <span className="block-panel__help">{field.help}</span>}
       </label>
     )
   }
 
   if (field.type === 'select') {
     return (
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
-        <span style={fieldLabelStyle}>{field.label}</span>
+      <label className="block-panel__field">
+        <span className="block-panel__label">{field.label}</span>
         <select
-          className="krds-form-select small"
+          className="ds-select ds-select--sm"
           value={value === undefined ? String(field.default ?? '') : String(value)}
           onChange={(e) => onValueChange(e.target.value === '' ? undefined : e.target.value)}
         >
@@ -83,7 +71,7 @@ function ConfigFieldInput({
             <option key={opt.value} value={opt.value}>{opt.label}</option>
           ))}
         </select>
-        {field.help && <span style={helpStyle}>{field.help}</span>}
+        {field.help && <span className="block-panel__help">{field.help}</span>}
       </label>
     )
   }
@@ -99,24 +87,23 @@ function ConfigFieldInput({
       onValueChange(ordered.length ? ordered : undefined)
     }
     return (
-      <fieldset style={{ border: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
-        <legend style={{ ...fieldLabelStyle, padding: 0, marginBottom: 'var(--space-1)' }}>{field.label}</legend>
+      <fieldset className="block-panel__field">
+        <legend className="block-panel__label">{field.label}</legend>
         {options.map((opt) => {
           const id = `${inputId}_${opt.value}`
           return (
-            <div className="krds-form-check" key={opt.value}>
+            <label className="block-panel__check" htmlFor={id} key={opt.value}>
               <input
                 type="checkbox"
-                className="chk"
                 id={id}
                 checked={selected.includes(opt.value)}
                 onChange={(e) => toggle(opt.value, e.target.checked)}
               />
-              <label htmlFor={id} style={{ fontSize: 13, color: 'var(--color-text)' }}>{opt.label}</label>
-            </div>
+              {opt.label}
+            </label>
           )
         })}
-        {field.help && <span style={helpStyle}>{field.help}</span>}
+        {field.help && <span className="block-panel__help">{field.help}</span>}
       </fieldset>
     )
   }
@@ -124,10 +111,10 @@ function ConfigFieldInput({
   if (field.type === 'list') {
     const text = Array.isArray(value) ? value.join(', ') : ''
     return (
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
-        <span style={fieldLabelStyle}>{field.label}</span>
+      <label className="block-panel__field">
+        <span className="block-panel__label">{field.label}</span>
         <input
-          className="krds-input small"
+          className="ds-input ds-input--sm"
           value={text}
           placeholder={field.placeholder}
           onChange={(e) => {
@@ -135,39 +122,38 @@ function ConfigFieldInput({
             onValueChange(items.length ? items : undefined)
           }}
         />
-        {field.help && <span style={helpStyle}>{field.help}</span>}
+        {field.help && <span className="block-panel__help">{field.help}</span>}
       </label>
     )
   }
 
   if (field.type === 'textarea') {
     return (
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
-        <span style={fieldLabelStyle}>{field.label}</span>
+      <label className="block-panel__field">
+        <span className="block-panel__label">{field.label}</span>
         <textarea
-          className="krds-input small"
+          className="ds-textarea"
           rows={3}
           value={typeof value === 'string' ? value : ''}
           placeholder={field.placeholder}
           onChange={(e) => onValueChange(e.target.value || undefined)}
-          style={{ resize: 'vertical' }}
         />
-        {field.help && <span style={helpStyle}>{field.help}</span>}
+        {field.help && <span className="block-panel__help">{field.help}</span>}
       </label>
     )
   }
 
   // 'text'
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
-      <span style={fieldLabelStyle}>{field.label}</span>
+    <label className="block-panel__field">
+      <span className="block-panel__label">{field.label}</span>
       <input
-        className="krds-input small"
+        className="ds-input ds-input--sm"
         value={typeof value === 'string' ? value : ''}
         placeholder={field.placeholder}
         onChange={(e) => onValueChange(e.target.value || undefined)}
       />
-      {field.help && <span style={helpStyle}>{field.help}</span>}
+      {field.help && <span className="block-panel__help">{field.help}</span>}
     </label>
   )
 }
@@ -225,11 +211,7 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
   }, [block, blockTypes, embeddingModels, stopwordEntries])
 
   if (!block) {
-    return (
-      <div style={{ padding: 'var(--space-4)', fontSize: 13, color: 'var(--color-text-muted)', textAlign: 'center' }}>
-        블록을 선택하면 속성을 편집할 수 있습니다
-      </div>
-    )
+    return <div className="block-panel__empty">블록을 선택하면 속성을 편집할 수 있습니다</div>
   }
 
   const meta = getBlockMeta(block.block_type)
@@ -247,48 +229,39 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', padding: 'var(--space-3)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-        <div style={{
-          width: 28, height: 28, borderRadius: 'var(--radius-sm)', flexShrink: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: `${meta.color}26`, color: meta.color,
-        }}>
-          <Icon size={16} />
+    <div className="block-panel">
+      <div className="block-panel__head">
+        {/* 블록 범주색은 구분용이라 인라인 색을 그대로 쓴다. */}
+        <div
+          className="block-panel__icon"
+          style={{ background: `${meta.color}26`, color: meta.color }}
+        >
+          <Icon size={16} aria-hidden="true" />
         </div>
-        <div style={{ minWidth: 0, flex: '1 1 auto' }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-text)' }}>{meta.label}</div>
-          <div style={{ fontSize: 11, color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {meta.description}
-          </div>
+        <div className="block-panel__titles">
+          <div className="block-panel__name">{meta.label}</div>
+          <div className="block-panel__desc">{meta.description}</div>
         </div>
         {onDelete && (
-          <button
-            type="button"
-            onClick={() => onDelete(block.id)}
-            title="블록 삭제"
-            aria-label="블록 삭제"
-            className="krds-btn text xsmall icon-btn danger"
-            style={{ flexShrink: 0 }}
-          >
-            <Trash2 size={14} />
-          </button>
+          <IconButton tone="danger" label="블록 삭제" onClick={() => onDelete(block.id)}>
+            <Trash2 size={14} aria-hidden="true" />
+          </IconButton>
         )}
       </div>
 
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
-        <span style={fieldLabelStyle}>이름</span>
+      <label className="block-panel__field">
+        <span className="block-panel__label">이름</span>
         <input
           value={block.label ?? ''}
           onChange={(e) => onChange(block.id, { label: e.target.value })}
           placeholder={meta.label}
-          className="krds-input small"
+          className="ds-input ds-input--sm"
         />
       </label>
 
       {configFields.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-          <span style={fieldLabelStyle}>설정</span>
+        <div className="block-panel__section">
+          <span className="block-panel__label">설정</span>
           {configFields.map((field) => (
             <ConfigFieldInput
               key={field.key}
@@ -302,17 +275,17 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
       )}
 
       {configFields.length === 0 && (
-        <span style={helpStyle}>
+        <span className="block-panel__help">
           {meta.configHint ?? '이 블록은 별도 설정이 필요 없습니다.'}
         </span>
       )}
 
-      <details>
-        <summary style={{ fontSize: 11, color: 'var(--color-text-muted)', cursor: 'pointer', userSelect: 'none' }}>
-          고급 설정 (JSON 직접 편집)
-        </summary>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', marginTop: 'var(--space-2)' }}>
+      <details className="block-panel__json">
+        <summary>고급 설정 (JSON 직접 편집)</summary>
+        <div className="block-panel__json-body">
           <textarea
+            className="ds-textarea"
+            aria-label="고급 설정 JSON"
             value={configText}
             onChange={(e) => setConfigText(e.target.value)}
             onBlur={() => {
@@ -325,15 +298,10 @@ export default function BlockPropertyPanel({ block, onChange, onDelete }: BlockP
               }
             }}
             rows={8}
-            className="krds-input small"
-            style={{ fontFamily: 'monospace', fontSize: 12, resize: 'vertical' }}
           />
           {configError && (
-            <span style={{
-              display: 'flex', alignItems: 'center', gap: 'var(--space-1)',
-              color: 'var(--color-danger)', fontSize: 12,
-            }}>
-              <AlertCircle size={13} /> {configError}
+            <span className="block-panel__error">
+              <AlertCircle size={13} aria-hidden="true" /> {configError}
             </span>
           )}
         </div>

@@ -7,6 +7,10 @@ import { useCollections } from '../hooks/useCollections'
 import { useAllTags } from '../hooks/useDocuments'
 import { useSearchHistory } from '../hooks/useSearchHistory'
 import { CitationEvidence, LowOcrBadge, type RetrievalEvidence } from '../components/chat/CitationEvidence'
+import {
+  Alert, Badge, Button, EmptyState, FilterChip, Input, Page, PageBody, PageHeader, SearchInput, Segmented, Select, Toolbar,
+} from '../components/ui'
+import '../styles/screens/user.css'
 
 interface SearchResult {
   chunk_id: string
@@ -38,6 +42,11 @@ interface SearchResponse {
 type SearchMode = 'vector' | 'hybrid'
 
 const RESULT_LIMITS = [5, 10, 20, 30]
+
+const MODE_OPTIONS: ReadonlyArray<{ value: SearchMode; label: string }> = [
+  { value: 'vector', label: '의미 검색' },
+  { value: 'hybrid', label: '하이브리드(BM25)' },
+]
 
 function appliedSummary(applied: AppliedSearchSettings): string {
   const how = applied.mode === 'hybrid'
@@ -97,13 +106,13 @@ export default function SearchPage() {
   const canSearch = query.trim().length > 0
 
   return (
-    <div>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 'var(--space-6)' }}>의미 검색</h1>
-
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', marginBottom: 'var(--space-6)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <select
+    <Page>
+      <PageHeader title="의미 검색" />
+      <PageBody>
+        <form onSubmit={handleSubmit} className="user-search__form">
+          <Toolbar label="검색 설정">
+            <Select
+              controlSize="sm"
               value={collectionId}
               onChange={(e) => {
                 // 컬렉션을 고르면 그 컬렉션의 검색 설정(v3 마일스톤 6)을 기본값으로 가져온다
@@ -115,53 +124,40 @@ export default function SearchPage() {
                 }
               }}
               disabled={collectionsLoading}
-              className="krds-form-select small"
-              style={{ flex: '0 0 180px', width: 180 }}
+              className="user-search__collection"
+              aria-label="검색할 컬렉션"
             >
               <option value="">전체 문서 검색</option>
               {collectionsData?.items.map((col) => (
                 <option key={col.id} value={col.id}>{col.name}</option>
               ))}
-            </select>
+            </Select>
 
-            <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
-              {(['vector', 'hybrid'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMode(m)}
-                  className={`krds-btn small ${mode === m ? 'primary' : 'tertiary'}`}
-                >
-                  {m === 'vector' ? '의미 검색' : '하이브리드(BM25)'}
-                </button>
-              ))}
-            </div>
+            <Segmented options={MODE_OPTIONS} value={mode} onChange={setMode} label="검색 방식" />
 
-            <button
-              type="button"
+            <FilterChip
+              isActive={diversify}
               onClick={() => setDiversify((v) => !v)}
               title="비슷한 청크가 중복 노출되지 않도록 결과를 다양화합니다"
-              className={`krds-btn small ${diversify ? 'primary' : 'tertiary'}`}
             >
               다양성 검색
-            </button>
+            </FilterChip>
 
-            <select
+            <Select
+              controlSize="sm"
               value={limit}
               onChange={(e) => setLimit(Number(e.target.value))}
               aria-label="결과 수"
-              className="krds-form-select small"
-              style={{ width: 90 }}
+              className="user-search__limit"
             >
               {RESULT_LIMITS.map((n) => <option key={n} value={n}>{n}건</option>)}
-            </select>
+            </Select>
 
-            <input
+            <SearchInput
+              label="태그 필터"
               value={tagFilter}
               onChange={(e) => setTagFilter(e.target.value)}
-              placeholder="태그 필터"
-              className="krds-input small"
-              style={{ width: 140 }}
+              width={160}
               list="tag-suggestions"
             />
             <datalist id="tag-suggestions">
@@ -170,172 +166,143 @@ export default function SearchPage() {
               ))}
             </datalist>
 
-            <button
-              type="button"
-              onClick={() => setShowScores((v) => !v)}
-              className={`krds-btn small ${showScores ? 'primary' : 'tertiary'}`}
-            >
+            <FilterChip isActive={showScores} onClick={() => setShowScores((v) => !v)}>
               상세 점수
-            </button>
+            </FilterChip>
+
+            <span className="user-search__spacer" />
+            <Button variant="ghost" size="sm" onClick={() => setShowHistory((v) => !v)} icon={<History size={14} />}>
+              최근 검색
+            </Button>
+          </Toolbar>
+
+          <div className="user-search__query-row">
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="문서 내용 검색..."
+              className="user-search__grow"
+            />
+            <Button type="submit" variant="primary" disabled={search.isPending || !canSearch} icon={search.isPending
+              ? <span className="user-spinner" role="status"><span className="sr-only">로딩 중</span></span>
+              : <Search size={16} />}>
+              검색
+            </Button>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setShowHistory((v) => !v)}
-            className="krds-btn text small"
-          >
-            <History size={14} /> 최근 검색
-          </button>
-        </div>
+          {showHistory && (
+            <div className="user-search__history">
+              {!historyData?.items.length && (
+                <p className="user-search__muted user-search__history-empty">
+                  최근 검색 기록이 없습니다.
+                </p>
+              )}
+              {historyData?.items.map((h) => (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => runSearch(h.query, h.search_mode === 'hybrid' ? 'hybrid' : 'vector')}
+                  className="user-search__history-item"
+                >
+                  <span>{h.query}</span>
+                  <span className="user-search__history-meta">
+                    {h.result_count}건 · {h.search_mode}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
 
-        <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="문서 내용 검색..."
-            className="krds-input small"
-            style={{ flex: '1 1 auto', width: '100%' }}
-          />
+          <p className="user-search__muted">
+            {collectionId
+              ? '선택한 컬렉션 내에서 검색합니다.'
+              : '컬렉션을 선택하면 해당 컬렉션 내에서만 검색합니다.'}
+          </p>
+        </form>
 
-          <button
-            type="submit"
-            disabled={search.isPending || !canSearch}
-            className="krds-btn small primary"
-          >
-            {search.isPending
-              ? <div className="krds-spinner" role="status" style={{ width: 16, height: 16 }}><span className="sr-only">로딩 중</span></div>
-              : <Search size={16} />}
-            검색
-          </button>
-        </div>
-
-        {showHistory && (
-          <div style={{
-            border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)',
-            background: '#fff', padding: 'var(--space-2)',
-          }}>
-            {!historyData?.items.length && (
-              <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 'var(--space-2)' }}>
-                최근 검색 기록이 없습니다.
-              </p>
-            )}
-            {historyData?.items.map((h) => (
-              <button
-                key={h.id}
-                type="button"
-                onClick={() => runSearch(h.query, h.search_mode === 'hybrid' ? 'hybrid' : 'vector')}
-                className="krds-btn text"
-                style={{ display: 'flex', justifyContent: 'space-between', width: '100%', textAlign: 'left' }}
-              >
-                <span>{h.query}</span>
-                <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>
-                  {h.result_count}건 · {h.search_mode}
-                </span>
-              </button>
-            ))}
+        {search.isPending && (
+          <div className="user-search__loading">
+            <div className="user-spinner" role="status"><span className="sr-only">로딩 중</span></div>
           </div>
         )}
 
-        <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: 0 }}>
-          {collectionId
-            ? '선택한 컬렉션 내에서 검색합니다.'
-            : '컬렉션을 선택하면 해당 컬렉션 내에서만 검색합니다.'}
-        </p>
-      </form>
+        {search.isError && (
+          <Alert tone="danger">검색 중 오류가 발생했습니다.</Alert>
+        )}
 
-      {search.isPending && (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-8)' }}>
-          <div className="krds-spinner" role="status"><span className="sr-only">로딩 중</span></div>
-        </div>
-      )}
+        {!search.isPending && search.isSuccess && search.data.items.length === 0 && (
+          <EmptyState title="검색 결과가 없습니다." />
+        )}
 
-      {search.isError && (
-        <div style={{
-          background: '#fef2f2', border: '1px solid #fecaca',
-          borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',
-          color: '#dc2626', marginBottom: 'var(--space-4)',
-        }}>
-          검색 중 오류가 발생했습니다.
-        </div>
-      )}
-
-      {!search.isPending && search.isSuccess && search.data.items.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
-          <p>검색 결과가 없습니다.</p>
-        </div>
-      )}
-
-      {!search.isPending && search.data && (search.data.items.length ?? 0) > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-          <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: 0 }}>
-            {search.data.items.length}개 결과
-            {!!search.data.added_terms.length && (
-              <span style={{ marginLeft: 'var(--space-2)', color: 'var(--color-text-muted)' }}>
-                · 사전에 등록된 동의어로 확장됨: {search.data.added_terms.join(', ')}
-              </span>
-            )}
-          </p>
-          {search.data.applied && (
-            <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>
-              검색 방식: {appliedSummary(search.data.applied)}
-            </p>
-          )}
-          {search.data.items.map((result) => (
-            <div key={result.chunk_id} style={{
-              background: '#fff', border: '1px solid #e2e8f0',
-              borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
-                <button
-                  type="button"
-                  onClick={() => navigate(projectId ? `/projects/${projectId}/documents/${result.document_id}` : `/documents/${result.document_id}`)}
-                  title="문서 상세보기"
-                  className="krds-btn text small"
-                >
-                  <FileText size={12} />
-                  {typeof result.metadata.filename === 'string' ? result.metadata.filename : `문서 ${result.document_id.slice(0, 8)}...`}
-                </button>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                  <LowOcrBadge evidence={result.evidence} />
-                  <span className="krds-badge small bg-secondary">
-                    {((result.final_score ?? result.score) * 100).toFixed(1)}%
-                    {result.bm25_score != null && ' (하이브리드)'}
-                  </span>
+        {!search.isPending && search.data && (search.data.items.length ?? 0) > 0 && (
+          <div className="user-search__results">
+            <p className="user-search__muted">
+              {search.data.items.length}개 결과
+              {!!search.data.added_terms.length && (
+                <span className="user-search__added">
+                  · 사전에 등록된 동의어로 확장됨: {search.data.added_terms.join(', ')}
                 </span>
-              </div>
-              {showScores && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 'var(--space-2)' }}>
-                  <span className="krds-badge small bg-gray">벡터 {(result.score * 100).toFixed(1)}</span>
-                  {result.bm25_score != null && (
-                    <span className="krds-badge small bg-gray">BM25 {(result.bm25_score * 100).toFixed(1)}</span>
-                  )}
-                  {result.final_score != null && (
-                    <span className="krds-badge small bg-information">최종 {(result.final_score * 100).toFixed(1)}</span>
-                  )}
-                  {typeof result.metadata.chunk_index === 'number' && (
-                    <span className="krds-badge small bg-gray">청크 #{(result.metadata.chunk_index as number) + 1}</span>
-                  )}
-                  {typeof result.metadata.page_number === 'number' && (
-                    <span className="krds-badge small bg-gray">{result.metadata.page_number as number}쪽</span>
-                  )}
-                  {Array.isArray(result.metadata.tags) && (result.metadata.tags as string[]).map((t) => (
-                    <span key={t} className="krds-badge small bg-secondary">#{t}</span>
-                  ))}
-                </div>
               )}
-              <p style={{ fontSize: 14, lineHeight: 1.6, margin: 0 }}>{result.content}</p>
-              <CitationEvidence evidence={{
-                ...result.evidence,
-                scores: {
-                  vector: result.score,
-                  ...(result.bm25_score != null ? { bm25: result.bm25_score } : {}),
-                  ...(result.final_score != null ? { fused: result.final_score } : {}),
-                },
-              }} />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+            </p>
+            {search.data.applied && (
+              <p className="user-search__muted">
+                검색 방식: {appliedSummary(search.data.applied)}
+              </p>
+            )}
+            {search.data.items.map((result) => (
+              <div key={result.chunk_id} className="user-search__result">
+                <div className="user-search__result-head">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => navigate(projectId ? `/projects/${projectId}/documents/${result.document_id}` : `/documents/${result.document_id}`)}
+                    title="문서 상세보기"
+                    icon={<FileText size={12} />}
+                  >
+                    {typeof result.metadata.filename === 'string' ? result.metadata.filename : `문서 ${result.document_id.slice(0, 8)}...`}
+                  </Button>
+                  <span className="user-search__result-badges">
+                    <LowOcrBadge evidence={result.evidence} />
+                    <Badge tone="neutral">
+                      {((result.final_score ?? result.score) * 100).toFixed(1)}%
+                      {result.bm25_score != null && ' (하이브리드)'}
+                    </Badge>
+                  </span>
+                </div>
+                {showScores && (
+                  <div className="user-search__chips">
+                    <Badge tone="neutral">벡터 {(result.score * 100).toFixed(1)}</Badge>
+                    {result.bm25_score != null && (
+                      <Badge tone="neutral">BM25 {(result.bm25_score * 100).toFixed(1)}</Badge>
+                    )}
+                    {result.final_score != null && (
+                      <Badge tone="info">최종 {(result.final_score * 100).toFixed(1)}</Badge>
+                    )}
+                    {typeof result.metadata.chunk_index === 'number' && (
+                      <Badge tone="neutral">청크 #{(result.metadata.chunk_index as number) + 1}</Badge>
+                    )}
+                    {typeof result.metadata.page_number === 'number' && (
+                      <Badge tone="neutral">{result.metadata.page_number as number}쪽</Badge>
+                    )}
+                    {Array.isArray(result.metadata.tags) && (result.metadata.tags as string[]).map((t) => (
+                      <Badge key={t} tone="neutral">#{t}</Badge>
+                    ))}
+                  </div>
+                )}
+                <p className="user-search__content">{result.content}</p>
+                <CitationEvidence evidence={{
+                  ...result.evidence,
+                  scores: {
+                    vector: result.score,
+                    ...(result.bm25_score != null ? { bm25: result.bm25_score } : {}),
+                    ...(result.final_score != null ? { fused: result.final_score } : {}),
+                  },
+                }} />
+              </div>
+            ))}
+          </div>
+        )}
+      </PageBody>
+    </Page>
   )
 }

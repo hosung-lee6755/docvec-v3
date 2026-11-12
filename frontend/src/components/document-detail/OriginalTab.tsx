@@ -65,7 +65,7 @@ export default function OriginalTab({
       {hasMultiplePages && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <button
-            className="krds-btn secondary small"
+            className="ds-btn ds-btn--secondary ds-btn--sm"
             disabled={clampedPage <= 1}
             onClick={() => onOriginalPageChange(clampedPage - 1)}
             style={{ cursor: 'pointer' }}
@@ -76,7 +76,7 @@ export default function OriginalTab({
             {clampedPage} / {maxPage} 쪽
           </span>
           <button
-            className="krds-btn secondary small"
+            className="ds-btn ds-btn--secondary ds-btn--sm"
             disabled={clampedPage >= maxPage}
             onClick={() => onOriginalPageChange(clampedPage + 1)}
             style={{ cursor: 'pointer' }}
@@ -91,7 +91,7 @@ export default function OriginalTab({
         </div>
       )}
       {previewResult?.approximate && (
-        <p style={{ fontSize: 12, color: '#b45309', margin: 0, flexShrink: 0 }}>
+        <p style={{ fontSize: 12, color: 'var(--color-warning)', margin: 0, flexShrink: 0 }}>
           이 형식은 원본을 직접 렌더링할 수 없어 재구성한 근사치입니다 — 레이아웃·글꼴·이미지 배치가 실제 원본과 다를 수 있습니다. 정확한 원본은 "원본 다운로드"를 이용하세요.
         </p>
       )}
@@ -101,14 +101,14 @@ export default function OriginalTab({
             {isPdfPreview ? '원본 PDF' : '원본 (변환 미리보기)'}
           </p>
           {isPreviewError && (
-            <p style={{ color: '#dc2626', fontSize: 13 }}>원문 미리보기를 생성하지 못했습니다.</p>
+            <p style={{ color: 'var(--color-danger)', fontSize: 13 }}>원문 미리보기를 생성하지 못했습니다.</p>
           )}
           {!isPreviewError && iframeSrc ? (
             <iframe
               key={isPdfPreview ? clampedPage : 'html'}
               src={iframeSrc}
               title="원본 문서"
-              style={{ flex: 1, width: '100%', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)', background: '#fff' }}
+              style={{ flex: 1, width: '100%', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', background: 'var(--color-surface)' }}
             />
           ) : !isPreviewError && (
             <div
@@ -127,7 +127,7 @@ export default function OriginalTab({
             </p>
             <ViewModeToggle showJson={showJson} onChange={onShowJsonChange} />
           </div>
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)', padding: 'var(--space-3)', background: showJson ? '#f8fafc' : '#fff' }}>
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-3)', background: showJson ? 'var(--color-surface-subtle)' : 'var(--color-surface)' }}>
             {isContentLoading && (
               <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6)' }}>
                 <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--color-text-muted)' }} />
@@ -136,7 +136,7 @@ export default function OriginalTab({
             {!isContentLoading && showJson && (
               <pre style={{
                 fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                fontFamily: 'monospace', margin: 0,
+                fontFamily: 'var(--font-mono)', margin: 0,
               }}>
                 {toBlocksJson(currentPageText ?? content?.full_text ?? '')}
               </pre>

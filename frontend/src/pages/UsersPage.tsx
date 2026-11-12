@@ -1,17 +1,16 @@
 import { useState } from 'react'
-import { Users, Loader2, ShieldOff, Trash2 } from 'lucide-react'
+import { Users, ShieldOff, Trash2 } from 'lucide-react'
 import { useUsers, useUpdateUser, useDeleteUser } from '../hooks/useUsers'
 import { useAuthStore } from '../store/authStore'
 import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../hooks/useAccess'
 import type { SecurityLevel } from '../hooks/useDocumentMetadata'
+import { ROLE_LABELS } from '../lib/roleLabels'
+import {
+  Alert, Badge, Button, EmptyState, IconButton, Page, PageBody, PageHeader, Select, Spinner, Stat, StatStrip,
+} from '../components/ui'
 
 const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000001'
 
-const ROLE_LABELS: Record<string, string> = {
-  admin: '관리자',
-  editor: '편집자',
-  viewer: '뷰어',
-}
 
 export default function UsersPage() {
   const currentUser = useAuthStore((s) => s.user)
@@ -22,12 +21,15 @@ export default function UsersPage() {
 
   if (currentUser?.role !== 'admin') {
     return (
-      <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
-        <ShieldOff size={48} style={{ margin: '0 auto var(--space-4)', display: 'block', opacity: 0.4 }} />
-        <p>관리자만 접근할 수 있습니다.</p>
-      </div>
+      <Page>
+        <EmptyState icon={<ShieldOff size={48} aria-hidden="true" />} title="관리자만 접근할 수 있습니다." />
+      </Page>
     )
   }
+
+  const users = data?.items ?? []
+  const adminCount = users.filter((u) => u.role === 'admin').length
+  const inactiveCount = users.filter((u) => !u.is_active).length
 
   const handleRoleChange = (id: string, role: 'viewer' | 'editor' | 'admin') => {
     updateUser.mutate({ id, payload: { role } })
@@ -47,161 +49,133 @@ export default function UsersPage() {
   }
 
   return (
-    <div>
-      <style>{'@keyframes spin { to { transform: rotate(360deg) } }'}</style>
+    <Page>
+      <PageHeader title="사용자 관리" subtitle="역할, 열람등급, 사용 여부를 관리합니다." />
+      <StatStrip>
+        <Stat label="전체 사용자" value={users.length} />
+        <Stat label="관리자" value={adminCount} />
+        <Stat label="비활성" value={inactiveCount} tone={inactiveCount > 0 ? 'warning' : 'default'} />
+      </StatStrip>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-6)' }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700 }}>사용자 관리</h1>
-      </div>
+      <PageBody>
+        {isLoading && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-8)' }}>
+            <Spinner />
+          </div>
+        )}
 
-      {isLoading && (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-8)' }}>
-          <Loader2 size={24} style={{ animation: 'spin 1s linear infinite', color: 'var(--color-text-muted)' }} />
-        </div>
-      )}
+        {isError && <Alert tone="danger">사용자 목록을 불러오지 못했습니다.</Alert>}
 
-      {isError && (
-        <div style={{
-          background: '#fef2f2', border: '1px solid #fecaca',
-          borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',
-          color: '#dc2626', marginBottom: 'var(--space-4)',
-        }}>
-          사용자 목록을 불러오지 못했습니다.
-        </div>
-      )}
+        {!isLoading && !isError && users.length === 0 && (
+          <EmptyState icon={<Users size={48} aria-hidden="true" />} title="사용자가 없습니다." />
+        )}
 
-      {!isLoading && !isError && (data?.items.length ?? 0) === 0 && (
-        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
-          <Users size={48} style={{ margin: '0 auto var(--space-4)', display: 'block', opacity: 0.4 }} />
-          <p>사용자가 없습니다.</p>
-        </div>
-      )}
+        {!isLoading && !isError && users.length > 0 && (
+          <div className="ds-table-wrap">
+            <table className="ds-table">
+              <caption className="sr-only">사용자 목록</caption>
+              <thead>
+                <tr>
+                  <th scope="col">이메일</th>
+                  <th scope="col">이름</th>
+                  <th scope="col">역할</th>
+                  <th scope="col" title="볼 수 있는 문서 보안등급의 상한">열람등급</th>
+                  <th scope="col">활성</th>
+                  <th scope="col">가입일</th>
+                  <th scope="col"><span className="sr-only">작업</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => {
+                  // 원천 연결용 내부 계정(auth_source=system)도 시스템 계정처럼 고칠 수 없다
+                  const isSystem = u.id === SYSTEM_USER_ID || u.auth_source === 'system'
+                  const isDirectory = u.auth_source === 'ldap'
+                  const isSelf = u.id === currentUser?.id
+                  const isProtected = isSystem || isSelf
+                  // AD 계정의 사용 여부와 관리자 지정은 AD가 정한다(서버도 409로 막는다)
+                  const isAdminLocked = isDirectory && u.role === 'admin'
 
-      {!isLoading && !isError && (data?.items.length ?? 0) > 0 && (
-        <div className="krds-table-wrap">
-          <table className="tbl col data">
-            <caption>사용자 목록</caption>
-            <colgroup>
-              <col style={{ width: '22%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '14%' }} />
-              <col />
-            </colgroup>
-            <thead>
-              <tr>
-                <th scope="col">이메일</th>
-                <th scope="col">이름</th>
-                <th scope="col">역할</th>
-                <th scope="col" title="볼 수 있는 문서 보안등급의 상한">열람등급</th>
-                <th scope="col">활성</th>
-                <th scope="col">가입일</th>
-                <th scope="col">작업</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data?.items.map((u) => {
-                // 원천 연결용 내부 계정(auth_source=system)도 시스템 계정처럼 고칠 수 없다
-                const isSystem = u.id === SYSTEM_USER_ID || u.auth_source === 'system'
-                const isDirectory = u.auth_source === 'ldap'
-                const isSelf = u.id === currentUser?.id
-                const isProtected = isSystem || isSelf
-                // AD 계정의 사용 여부와 관리자 지정은 AD가 정한다(서버도 409로 막는다)
-                const isAdminLocked = isDirectory && u.role === 'admin'
-
-                return (
-                  <tr key={u.id} style={{ opacity: u.is_active ? 1 : 0.6 }}>
-                    <td style={{ fontWeight: 500 }}>
-                      {u.email}
-                      {isSystem && (
-                        <span className="krds-badge xsmall bg-gray" style={{ marginLeft: 'var(--space-2)' }}>
-                          {u.auth_source === 'system' ? '원천 연결' : 'SYSTEM'}
+                  return (
+                    <tr key={u.id} className={u.is_active ? undefined : 'is-warning'}>
+                      <td>
+                        <span style={{ fontWeight: 500 }}>{u.email}</span>
+                        <span style={{ display: 'inline-flex', gap: 4, marginLeft: 'var(--space-2)' }}>
+                          {isSystem && (
+                            <Badge tone="neutral">{u.auth_source === 'system' ? '원천 연결' : 'SYSTEM'}</Badge>
+                          )}
+                          {isDirectory && (
+                            <Badge tone="info" title="사내 AD 계정입니다. 비밀번호, 소속 그룹, 퇴사 처리는 AD를 따릅니다.">AD</Badge>
+                          )}
+                          {isSelf && <Badge tone="info">나</Badge>}
                         </span>
-                      )}
-                      {isDirectory && (
-                        <span
-                          className="krds-badge xsmall bg-information"
-                          style={{ marginLeft: 'var(--space-2)' }}
-                          title="사내 AD 계정입니다. 비밀번호, 소속 그룹, 퇴사 처리는 AD를 따릅니다."
-                        >AD</span>
-                      )}
-                      {isSelf && (
-                        <span className="krds-badge xsmall bg-primary" style={{ marginLeft: 'var(--space-2)' }}>나</span>
-                      )}
-                    </td>
-                    <td style={{ color: 'var(--color-text-muted)' }}>{u.username}</td>
-                    <td>
-                      <select
-                        value={u.role}
-                        disabled={isProtected || isAdminLocked || updateUser.isPending}
-                        title={isDirectory ? '관리자 지정은 AD 관리자 그룹 구성원으로 정합니다.' : undefined}
-                        onChange={(e) => handleRoleChange(u.id, e.target.value as 'viewer' | 'editor' | 'admin')}
-                        className="krds-form-select small"
-                      >
-                        <option value="viewer">{ROLE_LABELS.viewer}</option>
-                        <option value="editor">{ROLE_LABELS.editor}</option>
-                        <option value="admin" disabled={isDirectory && !isAdminLocked}>{ROLE_LABELS.admin}</option>
-                      </select>
-                    </td>
-                    <td>
-                      <select
-                        value={u.clearance_level}
-                        disabled={isSystem || updateUser.isPending}
-                        onChange={(e) => handleClearanceChange(u.id, e.target.value as SecurityLevel)}
-                        className="krds-form-select small"
-                        aria-label={`${u.email} 열람등급`}
-                      >
-                        {SECURITY_LEVELS.map((level) => (
-                          <option key={level} value={level}>{SECURITY_LEVEL_LABELS[level]}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <button
-                        disabled={isProtected || isDirectory || updateUser.isPending}
-                        title={isDirectory ? 'AD 계정의 사용 중지는 AD에서 합니다.' : undefined}
-                        onClick={() => handleToggleActive(u.id, !u.is_active)}
-                        className={`krds-badge xsmall ${u.is_active ? 'bg-success' : 'bg-gray'}`}
-                        style={{ border: 'none', cursor: isProtected || isDirectory ? 'not-allowed' : 'pointer' }}
-                      >
-                        {u.is_active ? '활성' : '비활성'}
-                      </button>
-                    </td>
-                    <td style={{ color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>
-                      {new Date(u.created_at).toLocaleDateString('ko-KR')}
-                    </td>
-                    <td>
-                      {isProtected ? null : confirmDeleteId === u.id ? (
-                        <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-                          <span style={{ fontSize: 12, color: '#dc2626' }}>삭제하시겠습니까?</span>
-                          <button
-                            onClick={() => handleDelete(u.id)}
-                            disabled={deleteUser.isPending}
-                            className="krds-btn xsmall primary"
-                          >확인</button>
-                          <button
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="krds-btn xsmall secondary"
-                          >취소</button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setConfirmDeleteId(u.id)}
-                          className="krds-btn text xsmall icon-btn danger"
+                      </td>
+                      <td className="ds-cell-muted">{u.username}</td>
+                      <td>
+                        <Select
+                          controlSize="sm"
+                          aria-label={`${u.email} 역할`}
+                          value={u.role}
+                          disabled={isProtected || isAdminLocked || updateUser.isPending}
+                          title={isDirectory ? '관리자 지정은 AD 관리자 그룹 구성원으로 정합니다.' : undefined}
+                          onChange={(e) => handleRoleChange(u.id, e.target.value as 'viewer' | 'editor' | 'admin')}
                         >
-                          <Trash2 size={14} />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+                          <option value="viewer">{ROLE_LABELS.viewer}</option>
+                          <option value="editor">{ROLE_LABELS.editor}</option>
+                          <option value="admin" disabled={isDirectory && !isAdminLocked}>{ROLE_LABELS.admin}</option>
+                        </Select>
+                      </td>
+                      <td>
+                        <Select
+                          controlSize="sm"
+                          value={u.clearance_level}
+                          disabled={isSystem || updateUser.isPending}
+                          onChange={(e) => handleClearanceChange(u.id, e.target.value as SecurityLevel)}
+                          aria-label={`${u.email} 열람등급`}
+                        >
+                          {SECURITY_LEVELS.map((level) => (
+                            <option key={level} value={level}>{SECURITY_LEVEL_LABELS[level]}</option>
+                          ))}
+                        </Select>
+                      </td>
+                      <td>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={isProtected || isDirectory || updateUser.isPending}
+                          title={isDirectory ? 'AD 계정의 사용 중지는 AD에서 합니다.' : undefined}
+                          onClick={() => handleToggleActive(u.id, !u.is_active)}
+                        >
+                          <Badge tone={u.is_active ? 'success' : 'neutral'} hasDot>
+                            {u.is_active ? '활성' : '비활성'}
+                          </Badge>
+                        </Button>
+                      </td>
+                      <td className="ds-cell-muted" style={{ whiteSpace: 'nowrap' }}>
+                        {new Date(u.created_at).toLocaleDateString('ko-KR')}
+                      </td>
+                      <td>
+                        {isProtected ? null : confirmDeleteId === u.id ? (
+                          <span style={{ display: 'inline-flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+                            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>삭제하시겠습니까?</span>
+                            <Button variant="danger-solid" size="sm" disabled={deleteUser.isPending} onClick={() => handleDelete(u.id)}>
+                              확인
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteId(null)}>취소</Button>
+                          </span>
+                        ) : (
+                          <IconButton tone="danger" label={`${u.email} 삭제`} onClick={() => setConfirmDeleteId(u.id)}>
+                            <Trash2 size={14} aria-hidden="true" />
+                          </IconButton>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </PageBody>
+    </Page>
   )
 }

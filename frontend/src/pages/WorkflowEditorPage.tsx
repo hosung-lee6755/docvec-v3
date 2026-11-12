@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useBlocker } from 'react-router-dom'
-import {
-  AlertTriangle, History, Info, Loader2, Play, Save, Trash2, UploadCloud,
-} from 'lucide-react'
+import { History, Loader2, Play, Save, Trash2, UploadCloud } from 'lucide-react'
 import {
   useCreateDraftVersion,
   useDeleteVersion,
@@ -20,6 +18,10 @@ import WorkflowCanvas from '../components/workflow/WorkflowCanvas'
 import BlockPropertyPanel from '../components/workflow/BlockPropertyPanel'
 import RunWorkflowModal from '../components/workflow/RunWorkflowModal'
 import { getBlockMeta } from '../lib/workflowBlocks'
+import {
+  Alert, Badge, Button, IconButton, Page, PageHeader, Select, SidePanel, Toolbar,
+} from '../components/ui'
+import '../styles/screens/pipeline.css'
 
 export default function WorkflowEditorPage() {
   const navigate = useNavigate()
@@ -219,244 +221,171 @@ export default function WorkflowEditorPage() {
     }
   }
 
-
   const selectedBlock = blocks.find((b) => b.id === selectedBlockId) ?? null
   const selectedEdge = edges.find((e) => e.id === selectedEdgeId) ?? null
   const selectedEdgeFromBlock = selectedEdge ? blocks.find((b) => b.id === selectedEdge.from_block_id) : null
   const selectedEdgeToBlock = selectedEdge ? blocks.find((b) => b.id === selectedEdge.to_block_id) : null
+  const isGraphBusy = graphLoading || !!graphError
+  const paneDimClass = isGraphBusy ? ' pipeline-editor__pane--dimmed' : ''
+
+  const headerActions = (
+    <>
+      <Button
+        variant="ghost"
+        icon={<History size={14} aria-hidden="true" />}
+        onClick={() => navigate(`${projectId ? `/projects/${projectId}` : ''}/workflows/${workflowId}/runs`)}
+      >
+        실행 이력
+      </Button>
+      {isReadOnly ? (
+        <Button
+          variant="primary"
+          onClick={handleNewDraft}
+          disabled={createDraftVersion.isPending}
+          icon={createDraftVersion.isPending
+            ? <Loader2 size={14} className="pipeline-spin" aria-hidden="true" />
+            : <Save size={14} aria-hidden="true" />}
+        >
+          새 버전으로 저장
+        </Button>
+      ) : (
+        <>
+          <Button
+            variant="primary"
+            onClick={handleSave}
+            disabled={saveGraph.isPending || isGraphBusy}
+            icon={saveGraph.isPending
+              ? <Loader2 size={14} className="pipeline-spin" aria-hidden="true" />
+              : <Save size={14} aria-hidden="true" />}
+          >
+            저장
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={handlePublish}
+            disabled={publishVersion.isPending || isGraphBusy}
+            icon={publishVersion.isPending
+              ? <Loader2 size={14} className="pipeline-spin" aria-hidden="true" />
+              : <UploadCloud size={14} aria-hidden="true" />}
+          >
+            게시
+          </Button>
+        </>
+      )}
+      <Button
+        variant="secondary"
+        onClick={() => setShowRunModal(true)}
+        disabled={!isReadOnly}
+        title={isReadOnly ? undefined : '게시된 버전만 실행할 수 있습니다'}
+        icon={<Play size={14} aria-hidden="true" />}
+      >
+        실행
+      </Button>
+    </>
+  )
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-3)' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          {workflow && (
-            <span className={`krds-badge small ${workflow.kind === 'PREPROCESS' ? 'bg-primary' : 'bg-secondary'}`}>
-              {workflow.kind === 'PREPROCESS' ? '전처리' : '분석'}
-            </span>
-          )}
-          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>{workflow?.name ?? '워크플로우 편집'}</h2>
-          {editableVersion && (
-            <select
-              value={editableVersion.id}
-              onChange={(e) => setSelectedVersionId(e.target.value)}
-              className="krds-form-select small"
-              aria-label="버전 선택"
-              style={{ width: 'auto', minWidth: 130 }}
-            >
-              {versionsData?.items.map((v) => (
-                <option key={v.id} value={v.id}>
-                  v{v.version_number} · {v.published_at ? '게시됨' : '초안'}
-                </option>
-              ))}
-            </select>
-          )}
-          {editableVersion && (versionsData?.items.length ?? 0) > 1 && (
-            confirmDeleteVersion ? (
-              <div
-                ref={deleteConfirmRef}
-                role="alert"
-                style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
-              >
-                <span style={{ fontSize: 12, color: '#dc2626' }}>
-                  v{editableVersion.version_number}을(를) 삭제할까요?
-                </span>
-                <button
-                  type="button"
-                  onClick={handleDeleteVersion}
-                  disabled={deleteVersion.isPending}
-                  className="krds-btn xsmall primary"
-                  autoFocus
-                >
-                  확인
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDeleteVersion(false)}
-                  className="krds-btn xsmall secondary"
-                >
-                  취소
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmDeleteVersion(true)
-                  // Focus will be moved to the confirm dialog after rendering
-                  setTimeout(() => {
-                    deleteConfirmRef.current?.focus()
-                  }, 0)
-                }}
-                title="이 버전 삭제"
-                aria-label="이 버전 삭제"
-                className="krds-btn text xsmall icon-btn danger"
-              >
-                <Trash2 size={15} />
-              </button>
-            )
-          )}
-        </div>
-          {workflow?.description && (
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>
-              {workflow.description}
-            </p>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          <button
-            type="button"
-            onClick={() => navigate(`${projectId ? `/projects/${projectId}` : ''}/workflows/${workflowId}/runs`)}
-            className="krds-btn small text"
-            style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+    <Page className="pipeline-editor">
+      <PageHeader
+        title={workflow?.name ?? '워크플로우 편집'}
+        subtitle={workflow?.description || undefined}
+        actions={headerActions}
+      />
+
+      <Toolbar label="버전과 종류" className="pipeline-editor__toolbar">
+        {workflow && (
+          <Badge tone={workflow.kind === 'PREPROCESS' ? 'info' : 'neutral'}>
+            {workflow.kind === 'PREPROCESS' ? '전처리' : '분석'}
+          </Badge>
+        )}
+        {editableVersion && (
+          <Select
+            value={editableVersion.id}
+            onChange={(e) => setSelectedVersionId(e.target.value)}
+            controlSize="sm"
+            aria-label="버전 선택"
+            style={{ width: 'auto', minWidth: 130 }}
           >
-            <History size={14} />
-            실행 이력
-          </button>
-          {isReadOnly ? (
-            <button
-              type="button" onClick={handleNewDraft} disabled={createDraftVersion.isPending}
-              className="krds-btn small secondary" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+            {versionsData?.items.map((v) => (
+              <option key={v.id} value={v.id}>
+                v{v.version_number} · {v.published_at ? '게시됨' : '초안'}
+              </option>
+            ))}
+          </Select>
+        )}
+        {editableVersion && (versionsData?.items.length ?? 0) > 1 && (
+          confirmDeleteVersion ? (
+            <div
+              ref={deleteConfirmRef}
+              role="alert"
+              tabIndex={-1}
+              className="pipeline-confirm"
             >
-              {createDraftVersion.isPending ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={14} />}
-              새 버전으로 저장
-            </button>
+              <span className="pipeline-confirm__text">
+                v{editableVersion.version_number}을(를) 삭제할까요?
+              </span>
+              <Button
+                variant="danger-solid"
+                size="sm"
+                onClick={handleDeleteVersion}
+                disabled={deleteVersion.isPending}
+                autoFocus
+              >
+                확인
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteVersion(false)}>
+                취소
+              </Button>
+            </div>
           ) : (
-            <>
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saveGraph.isPending || graphLoading || !!graphError}
-                className="krds-btn small secondary"
-                style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
-              >
-                {saveGraph.isPending ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={14} />}
-                저장
-              </button>
-              <button
-                type="button"
-                onClick={handlePublish}
-                disabled={publishVersion.isPending || graphLoading || !!graphError}
-                className="krds-btn small secondary"
-                style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
-              >
-                {publishVersion.isPending ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <UploadCloud size={14} />}
-                게시
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            onClick={() => setShowRunModal(true)}
-            disabled={!isReadOnly}
-            title={isReadOnly ? undefined : '게시된 버전만 실행할 수 있습니다'}
-            className="krds-btn small primary"
-            style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
-          >
-            <Play size={14} />
-            실행
-          </button>
-        </div>
+            <IconButton
+              tone="danger"
+              label="이 버전 삭제"
+              onClick={() => {
+                setConfirmDeleteVersion(true)
+                // Focus will be moved to the confirm dialog after rendering
+                setTimeout(() => {
+                  deleteConfirmRef.current?.focus()
+                }, 0)
+              }}
+            >
+              <Trash2 size={15} aria-hidden="true" />
+            </IconButton>
+          )
+        )}
+      </Toolbar>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', padding: 'var(--space-3) var(--space-5) 0' }}>
+        {graphError && (
+          <Alert tone="danger">워크플로우를 로드할 수 없습니다. 다시 시도해주세요.</Alert>
+        )}
+
+        {isReadOnly && (
+          <Alert tone="info">
+            게시된 버전은 읽기 전용입니다. 블록 위치 이동·추가·삭제·연결을 하려면 "새 버전으로 저장"을 눌러 초안을 만드세요.
+          </Alert>
+        )}
+
+        {errorMessage && <Alert tone="danger">{errorMessage}</Alert>}
+
+        {validationErrors.length > 0 && (
+          <Alert tone="danger">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+              {validationErrors.map((err, i) => (
+                <div key={i}>{err.message}</div>
+              ))}
+            </div>
+          </Alert>
+        )}
+
+        {graphLoading && <Alert tone="info">워크플로우를 로드 중입니다...</Alert>}
       </div>
 
-      {graphError && (
-        <div
-          role="alert"
-          style={{
-            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-            padding: 'var(--space-2) var(--space-3)', background: '#fef2f2',
-            border: '1px solid #fecaca', color: '#b91c1c',
-            borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
-          }}
-        >
-          <AlertTriangle size={14} style={{ flexShrink: 0 }} />
-          워크플로우를 로드할 수 없습니다. 다시 시도해주세요.
-        </div>
-      )}
-
-      {isReadOnly && (
-        <div
-          style={{
-            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-            padding: 'var(--space-2) var(--space-3)', background: '#eff6ff',
-            border: '1px solid #bfdbfe', color: '#1d4ed8',
-            borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
-          }}
-        >
-          <Info size={14} style={{ flexShrink: 0 }} />
-          게시된 버전은 읽기 전용입니다. 블록 위치 이동·추가·삭제·연결을 하려면 "새 버전으로 저장"을 눌러 초안을 만드세요.
-        </div>
-      )}
-
-      {errorMessage && (
-        <div
-          role="alert"
-          style={{
-            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-            padding: 'var(--space-2) var(--space-3)', background: '#fef2f2',
-            border: '1px solid #fecaca', color: '#b91c1c',
-            borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
-          }}
-        >
-          <AlertTriangle size={14} style={{ flexShrink: 0 }} />
-          {errorMessage}
-        </div>
-      )}
-
-      {validationErrors.length > 0 && (
-        <div
-          role="alert"
-          style={{
-            display: 'flex', flexDirection: 'column', gap: 'var(--space-1)',
-            padding: 'var(--space-2) var(--space-3)', background: '#fef2f2',
-            border: '1px solid #fecaca', color: '#b91c1c',
-            borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
-          }}
-        >
-          {validationErrors.map((err, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-              <AlertTriangle size={14} style={{ flexShrink: 0 }} /> {err.message}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {graphLoading && (
-        <div
-          style={{
-            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-            padding: 'var(--space-2) var(--space-3)', background: '#f3f4f6',
-            border: '1px solid #d1d5db', color: '#374151',
-            borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)', fontSize: 13,
-          }}
-        >
-          <Loader2 size={14} style={{ flexShrink: 0, animation: 'spin 1s linear infinite' }} />
-          워크플로우를 로드 중입니다...
-        </div>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr 280px', gap: 'var(--space-3)', flex: 1, minHeight: 500 }}>
-        <div
-          style={{
-            border: '1px solid var(--color-border)',
-            borderRadius: 'var(--radius-lg)',
-            overflow: 'auto',
-            background: 'var(--color-surface)',
-            opacity: graphLoading || !!graphError ? 0.5 : 1,
-            pointerEvents: graphLoading || !!graphError ? 'none' : 'auto',
-          }}
-        >
+      <div className="pipeline-editor__body">
+        <div className={`pipeline-editor__pane${paneDimClass}`}>
           <BlockPalette onAddBlock={handleAddBlock} workflowKind={workflow?.kind} />
         </div>
-        <div
-          style={{
-            border: '1px solid var(--color-border)',
-            borderRadius: 'var(--radius-lg)',
-            overflow: 'hidden',
-            opacity: graphLoading || !!graphError ? 0.5 : 1,
-            pointerEvents: graphLoading || !!graphError ? 'none' : 'auto',
-          }}
-        >
+        <div className={`pipeline-editor__pane pipeline-editor__canvas${paneDimClass}`}>
           <WorkflowCanvas
             blocks={blocks}
             edges={edges}
@@ -472,41 +401,39 @@ export default function WorkflowEditorPage() {
             readOnly={isReadOnly}
           />
         </div>
-        <div style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'auto', background: 'var(--color-surface)' }}>
-          {selectedEdge ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', padding: 'var(--space-3)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                <div style={{ minWidth: 0, flex: '1 1 auto' }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-text)' }}>연결</div>
-                  <div style={{ fontSize: 12, color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {selectedEdgeFromBlock ? getBlockMeta(selectedEdgeFromBlock.block_type).label : '?'}
-                    {' → '}
-                    {selectedEdgeToBlock ? getBlockMeta(selectedEdgeToBlock.block_type).label : '?'}
-                  </div>
-                </div>
-                {!isReadOnly && (
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteEdge(selectedEdge.id)}
-                    title="연결 삭제"
-                    aria-label="연결 삭제"
-                    className="krds-btn text xsmall icon-btn danger"
-                    style={{ flexShrink: 0 }}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )}
-              </div>
+        {selectedEdge ? (
+          <SidePanel
+            title="연결"
+            label="연결 속성"
+            actions={!isReadOnly && (
+              <Button
+                variant="danger"
+                size="sm"
+                isBlock
+                icon={<Trash2 size={14} aria-hidden="true" />}
+                onClick={() => handleDeleteEdge(selectedEdge.id)}
+              >
+                연결 삭제
+              </Button>
+            )}
+          >
+            <div className="pipeline-editor__edge-route">
+              {selectedEdgeFromBlock ? getBlockMeta(selectedEdgeFromBlock.block_type).label : '?'}
+              {' → '}
+              {selectedEdgeToBlock ? getBlockMeta(selectedEdgeToBlock.block_type).label : '?'}
             </div>
-          ) : (
+          </SidePanel>
+        ) : (
+          <div className="pipeline-editor__pane">
             <BlockPropertyPanel
               block={selectedBlock}
               onChange={handleBlockChange}
               onDelete={isReadOnly ? undefined : handleDeleteBlock}
             />
-          )}
-        </div>
+          </div>
+        )}
       </div>
+
       {showRunModal && workflowId && versionId && (
         <RunWorkflowModal
           workflowId={workflowId}
@@ -517,7 +444,6 @@ export default function WorkflowEditorPage() {
           onClose={() => setShowRunModal(false)}
         />
       )}
-      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
-    </div>
+    </Page>
   )
 }

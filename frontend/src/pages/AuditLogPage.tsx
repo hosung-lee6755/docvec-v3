@@ -1,7 +1,11 @@
 import { useState } from 'react'
-import { ScrollText, Loader2, ShieldOff } from 'lucide-react'
+import { ScrollText, ShieldOff } from 'lucide-react'
 import { useAuditLogs } from '../hooks/useAudit'
+import type { AuditLogItem } from '../hooks/useAudit'
 import { useAuthStore } from '../store/authStore'
+import {
+  Alert, Button, EmptyState, Page, PageBody, PageHeader, Select, Spinner, Stat, StatStrip, Toolbar,
+} from '../components/ui'
 
 const PAGE_SIZE = 50
 
@@ -42,6 +46,17 @@ const ACTION_LABELS: Record<string, string> = {
   'mcp.tool_call': '외부 에이전트 도구 호출',
 }
 
+// 원문이나 추적 기록을 열어 본 행. 누가 무엇을 봤는지 확인해야 하므로 주의 색을 쓴다.
+const EXPOSURE_ACTIONS = new Set([
+  'document.preview', 'document.download', 'collection.export', 'answer_trace.view', 'governance.report_download',
+])
+
+function rowClassName(row: AuditLogItem): string | undefined {
+  if (row.action === 'auth.login_failed') return 'is-danger'
+  if (EXPOSURE_ACTIONS.has(row.action)) return 'is-warning'
+  return undefined
+}
+
 export default function AuditLogPage() {
   const currentUser = useAuthStore((s) => s.user)
   const [action, setAction] = useState('')
@@ -55,121 +70,95 @@ export default function AuditLogPage() {
 
   if (currentUser?.role !== 'admin') {
     return (
-      <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
-        <ShieldOff size={48} style={{ margin: '0 auto var(--space-4)', display: 'block', opacity: 0.4 }} />
-        <p>관리자만 접근할 수 있습니다.</p>
-      </div>
+      <Page>
+        <EmptyState icon={<ShieldOff size={48} aria-hidden="true" />} title="관리자만 접근할 수 있습니다." />
+      </Page>
     )
   }
 
-  const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1
+  const items = data?.items ?? []
+  const total = data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const loginFailedCount = items.filter((row) => row.action === 'auth.login_failed').length
+  const exposureCount = items.filter((row) => EXPOSURE_ACTIONS.has(row.action)).length
 
   return (
-    <div>
-      <style>{'@keyframes spin { to { transform: rotate(360deg) } }'}</style>
+    <Page>
+      <PageHeader title="감사 로그" subtitle="관리자와 사용자의 주요 작업 기록입니다. 요약 칸은 이 페이지에 보이는 행만 셉니다." />
+      <StatStrip>
+        <Stat label="전체 기록" value={total.toLocaleString('ko-KR')} />
+        <Stat label="이 페이지 로그인 실패" value={loginFailedCount} tone={loginFailedCount > 0 ? 'danger' : 'default'} />
+        <Stat label="이 페이지 원문·추적 열람" value={exposureCount} tone={exposureCount > 0 ? 'warning' : 'default'} />
+      </StatStrip>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-6)' }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700 }}>감사 로그</h1>
-      </div>
-
-      <div style={{ marginBottom: 'var(--space-4)', display: 'flex', gap: 'var(--space-3)', alignItems: 'center' }}>
-        <select
+      <Toolbar label="감사 로그 거르기" meta={`${page + 1} / ${totalPages} 쪽`}>
+        <Select
+          controlSize="sm"
+          aria-label="액션 거르기"
           value={action}
           onChange={(e) => {
             setAction(e.target.value)
             setPage(0)
           }}
-          className="krds-form-select small"
+          style={{ minWidth: 200 }}
         >
           <option value="">전체 액션</option>
           {Object.entries(ACTION_LABELS).map(([key, label]) => (
             <option key={key} value={key}>{label}</option>
           ))}
-        </select>
-      </div>
+        </Select>
+      </Toolbar>
 
-      {isLoading && (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-8)' }}>
-          <Loader2 size={24} style={{ animation: 'spin 1s linear infinite', color: 'var(--color-text-muted)' }} />
-        </div>
-      )}
+      <PageBody>
+        {isLoading && <Spinner />}
+        {isError && <Alert tone="danger">감사 로그를 불러오지 못했습니다.</Alert>}
+        {!isLoading && !isError && items.length === 0 && (
+          <EmptyState icon={<ScrollText size={48} aria-hidden="true" />} title="기록된 로그가 없습니다." />
+        )}
 
-      {isError && (
-        <div style={{
-          background: '#fef2f2', border: '1px solid #fecaca',
-          borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',
-          color: '#dc2626', marginBottom: 'var(--space-4)',
-        }}>
-          감사 로그를 불러오지 못했습니다.
-        </div>
-      )}
-
-      {!isLoading && !isError && (data?.items.length ?? 0) === 0 && (
-        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
-          <ScrollText size={48} style={{ margin: '0 auto var(--space-4)', display: 'block', opacity: 0.4 }} />
-          <p>기록된 로그가 없습니다.</p>
-        </div>
-      )}
-
-      {!isLoading && !isError && (data?.items.length ?? 0) > 0 && (
-        <>
-          <div className="krds-table-wrap">
-            <table className="tbl col data">
-              <caption>감사 로그 목록</caption>
-              <colgroup>
-                <col style={{ width: '18%' }} />
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '12%' }} />
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '12%' }} />
-                <col />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th scope="col">시각</th>
-                  <th scope="col">액션</th>
-                  <th scope="col">리소스 유형</th>
-                  <th scope="col">리소스 ID</th>
-                  <th scope="col">IP</th>
-                  <th scope="col">상세</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data?.items.map((row) => (
-                  <tr key={row.id}>
-                    <td style={{ whiteSpace: 'nowrap', color: 'var(--color-text-muted)' }}>
-                      {new Date(row.created_at).toLocaleString('ko-KR')}
-                    </td>
-                    <td style={{ fontWeight: 500 }}>{ACTION_LABELS[row.action] ?? row.action}</td>
-                    <td>{row.resource_type ?? '-'}</td>
-                    <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{row.resource_id ?? '-'}</td>
-                    <td style={{ color: 'var(--color-text-muted)' }}>{row.ip_address ?? '-'}</td>
-                    <td style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-                      {row.detail ? JSON.stringify(row.detail) : '-'}
-                    </td>
+        {!isLoading && !isError && items.length > 0 && (
+          <>
+            <div className="ds-table-wrap">
+              <table className="ds-table ds-table--compact">
+                <caption className="sr-only">감사 로그 목록</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">시각</th>
+                    <th scope="col">액션</th>
+                    <th scope="col">리소스 유형</th>
+                    <th scope="col">리소스 ID</th>
+                    <th scope="col">IP</th>
+                    <th scope="col">상세</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((row) => (
+                    <tr key={row.id} className={rowClassName(row)}>
+                      <td className="ds-cell-muted" style={{ whiteSpace: 'nowrap' }}>
+                        {new Date(row.created_at).toLocaleString('ko-KR')}
+                      </td>
+                      <td style={{ fontWeight: 500 }}>{ACTION_LABELS[row.action] ?? row.action}</td>
+                      <td>{row.resource_type ?? '-'}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>{row.resource_id ?? '-'}</td>
+                      <td className="ds-cell-muted">{row.ip_address ?? '-'}</td>
+                      <td className="ds-cell-muted" style={{ fontSize: 'var(--text-xs)', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        title={row.detail ? JSON.stringify(row.detail) : undefined}>
+                        {row.detail ? JSON.stringify(row.detail) : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 'var(--space-3)', marginTop: 'var(--space-4)' }}>
-            <button
-              className="krds-btn small secondary"
-              disabled={page === 0}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-            >이전</button>
-            <span style={{ color: 'var(--color-text-muted)', alignSelf: 'center' }}>
-              {page + 1} / {totalPages}
-            </span>
-            <button
-              className="krds-btn small secondary"
-              disabled={page + 1 >= totalPages}
-              onClick={() => setPage((p) => p + 1)}
-            >다음</button>
-          </div>
-        </>
-      )}
-    </div>
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 'var(--space-3)' }}>
+              <Button variant="secondary" size="sm" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>이전</Button>
+              <span className="ds-cell-muted" style={{ fontSize: 'var(--text-sm)' }}>{page + 1} / {totalPages}</span>
+              <Button variant="secondary" size="sm" disabled={page + 1 >= totalPages} onClick={() => setPage((p) => p + 1)}>다음</Button>
+            </div>
+          </>
+        )}
+      </PageBody>
+    </Page>
   )
 }

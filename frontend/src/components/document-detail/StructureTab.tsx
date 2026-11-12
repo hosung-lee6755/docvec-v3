@@ -54,15 +54,15 @@ function TreeRow({
         style={{
           display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left',
           padding: '4px 8px', paddingLeft: 8 + depth * 16, fontSize: 12, border: 'none',
-          background: node.id === selectedId ? '#eff6ff' : 'transparent', cursor: 'pointer',
+          background: node.id === selectedId ? 'var(--color-primary-subtle)' : 'transparent', cursor: 'pointer',
           color: node.id === selectedId ? 'var(--color-accent)' : 'inherit',
         }}
       >
-        <span style={{ color: '#94a3b8', flexShrink: 0 }}>{NODE_TYPE_ICONS[node.node_type] ?? '·'}</span>
+        <span style={{ color: 'var(--color-text-subtle)', flexShrink: 0 }}>{NODE_TYPE_ICONS[node.node_type] ?? '·'}</span>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {node.text?.slice(0, 60) || NODE_TYPE_LABELS[node.node_type] || node.node_type}
         </span>
-        {node.user_corrected && <span style={{ flexShrink: 0, color: '#2563eb', fontSize: 11 }}>●</span>}
+        {node.user_corrected && <span style={{ flexShrink: 0, color: 'var(--color-primary)', fontSize: 11 }}>●</span>}
       </button>
       {node.children.map((child) => (
         <TreeRow key={child.id} node={child} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />
@@ -151,7 +151,7 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 'var(--space-3)' }}>
       <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '260px 1fr', gap: 'var(--space-4)' }}>
-        <div style={{ overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)' }}>
+        <div style={{ overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
           {tree.map((root) => (
             <TreeRow key={root.id} node={root} depth={0} selectedId={selected?.id ?? null} onSelect={handleSelect} />
           ))}
@@ -162,13 +162,13 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
           )}
           {selected && (
             <div style={{
-              border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)',
               padding: 'var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 12, color: 'var(--color-text-muted)' }}>
-                <span className="krds-badge xsmall bg-information">{NODE_TYPE_LABELS[selected.node_type] ?? selected.node_type}</span>
+                <span className="ds-badge ds-badge--info">{NODE_TYPE_LABELS[selected.node_type] ?? selected.node_type}</span>
                 {selected.page_number != null && <span>{selected.page_number}페이지</span>}
-                {selected.user_corrected && <span style={{ color: '#2563eb' }}>사용자 보정됨</span>}
+                {selected.user_corrected && <span style={{ color: 'var(--color-primary)' }}>사용자 보정됨</span>}
               </div>
               {selected.text && (
                 <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: 0 }}>{selected.text}</p>
@@ -186,13 +186,13 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
                     value={levelInput}
                     onChange={(e) => setLevelInput(e.target.value)}
                     placeholder="예: 1 (H1)"
-                    style={{ marginLeft: 6, width: 60, fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px' }}
+                    style={{ marginLeft: 6, width: 60, fontSize: 12, border: '1px solid var(--color-border)', borderRadius: 4, padding: '2px 6px' }}
                   />
                 </label>
                 <label style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                   노드 유형
                   <select
-                    className="krds-form-select"
+                    className="ds-select"
                     value={typeInput}
                     onChange={(e) => setTypeInput(e.target.value)}
                     style={{ marginLeft: 6, fontSize: 12 }}
@@ -212,7 +212,7 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
                     value={styleNameInput}
                     onChange={(e) => setStyleNameInput(e.target.value)}
                     placeholder="예: Heading1"
-                    style={{ marginLeft: 6, width: 90, fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px' }}
+                    style={{ marginLeft: 6, width: 90, fontSize: 12, border: '1px solid var(--color-border)', borderRadius: 4, padding: '2px 6px' }}
                   />
                 </label>
                 <label style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
@@ -222,7 +222,7 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
                     value={fontSizeInput}
                     onChange={(e) => setFontSizeInput(e.target.value)}
                     placeholder="pt"
-                    style={{ marginLeft: 6, width: 60, fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px' }}
+                    style={{ marginLeft: 6, width: 60, fontSize: 12, border: '1px solid var(--color-border)', borderRadius: 4, padding: '2px 6px' }}
                   />
                 </label>
                 <label style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
@@ -231,7 +231,7 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
                     value={fontNameInput}
                     onChange={(e) => setFontNameInput(e.target.value)}
                     placeholder="예: 맑은 고딕"
-                    style={{ marginLeft: 6, width: 100, fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px' }}
+                    style={{ marginLeft: 6, width: 100, fontSize: 12, border: '1px solid var(--color-border)', borderRadius: 4, padding: '2px 6px' }}
                   />
                 </label>
               </div>
@@ -242,7 +242,7 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
                     <button
                       type="button"
                       onClick={() => onViewInOriginal(selected.page_number as number)}
-                      className="krds-btn text small"
+                      className="ds-btn ds-btn--ghost ds-btn--sm"
                       style={{ cursor: 'pointer', fontSize: 11, padding: 0 }}
                     >
                       원문 대조에서 보기
@@ -252,8 +252,8 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
               )}
               {showReprocessBanner && impact && (
                 <div style={{
-                  fontSize: 12, color: '#b45309', background: '#fffbeb',
-                  border: '1px solid #fde68a', borderRadius: 'var(--radius-sm)',
+                  fontSize: 12, color: 'var(--color-warning)', background: 'var(--color-warning-bg)',
+                  border: '1px solid var(--color-warning-border)', borderRadius: 'var(--radius-sm)',
                   padding: 'var(--space-2)', display: 'flex', alignItems: 'center', gap: 8,
                 }}>
                   <span>구조 변경이 청크 {impact.affectedChunkCount}개에 영향 —</span>
@@ -261,8 +261,8 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
                     <button
                       type="button"
                       onClick={() => onReprocessFromStructure(structureStep.block_instance_id)}
-                      className="krds-btn text small"
-                      style={{ cursor: 'pointer', fontSize: 12, padding: 0, color: '#b45309', textDecoration: 'underline' }}
+                      className="ds-btn ds-btn--ghost ds-btn--sm"
+                      style={{ cursor: 'pointer', fontSize: 12, padding: 0, color: 'var(--color-warning)', textDecoration: 'underline' }}
                     >
                       지금 재처리
                     </button>
@@ -270,8 +270,8 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
                   <button
                     type="button"
                     onClick={() => setShowReprocessBanner(false)}
-                    className="krds-btn text small"
-                    style={{ cursor: 'pointer', fontSize: 12, padding: 0, color: '#b45309' }}
+                    className="ds-btn ds-btn--ghost ds-btn--sm"
+                    style={{ cursor: 'pointer', fontSize: 12, padding: 0, color: 'var(--color-warning)' }}
                   >
                     나중에
                   </button>
@@ -282,7 +282,7 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
                   type="button"
                   onClick={handleSave}
                   disabled={updateNode.isPending}
-                  className="krds-btn primary small"
+                  className="ds-btn ds-btn--primary ds-btn--sm"
                   style={{ cursor: 'pointer' }}
                 >
                   보정 저장
@@ -292,7 +292,7 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
           )}
         </div>
       </div>
-      <div style={{ fontSize: 12, color: 'var(--color-text-muted)', borderTop: '1px solid #e2e8f0', paddingTop: 'var(--space-2)' }}>
+      <div style={{ fontSize: 12, color: 'var(--color-text-muted)', borderTop: '1px solid var(--color-border)', paddingTop: 'var(--space-2)' }}>
         노드 {nodes.length}개 · 제목 {(counts.HEADING ?? 0) + (counts.SECTION ?? 0)} · 문단 {counts.PARAGRAPH ?? 0} · 표 {counts.TABLE ?? 0} · 사용자 보정 {correctedCount}
       </div>
     </div>

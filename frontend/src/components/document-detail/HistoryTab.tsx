@@ -1,4 +1,5 @@
-import { RUN_STATUS_BADGE, RUN_TRIGGER_LABELS } from './documentDetailHelpers'
+import { toneFromKrdsClass } from '../ui'
+import { RUN_STATUS_BADGE, RUN_STATUS_LABELS, RUN_TRIGGER_LABELS } from './documentDetailHelpers'
 import StepTimeline from '../workflow/StepTimeline'
 import type { DocumentRunsResult } from '../../hooks/useDocumentRuns'
 import type { WorkflowRunStep } from '../../hooks/useWorkflows'
@@ -35,13 +36,13 @@ export default function HistoryTab({
             onClick={() => onSelectedRunIdChange(run.id)}
             style={{
               display: 'flex', alignItems: 'center', gap: 'var(--space-2)', textAlign: 'left',
-              padding: 'var(--space-1) var(--space-2)', fontSize: 12, border: '1px solid #e2e8f0',
+              padding: 'var(--space-1) var(--space-2)', fontSize: 12, border: '1px solid var(--color-border)',
               borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-              background: run.id === selectedRunId ? '#eff6ff' : '#fff',
+              background: run.id === selectedRunId ? 'var(--color-primary-subtle)' : 'var(--color-surface)',
             }}
           >
-            <span className={`krds-badge xsmall ${RUN_STATUS_BADGE[run.status] ?? 'bg-gray'}`}>
-              {run.status}
+            <span className={`ds-badge ds-badge--${toneFromKrdsClass(RUN_STATUS_BADGE[run.status] ?? 'bg-gray')}`}>
+              {RUN_STATUS_LABELS[run.status] ?? run.status}
             </span>
             <span>{RUN_TRIGGER_LABELS[run.trigger] ?? run.trigger}</span>
             <span style={{ color: 'var(--color-text-muted)' }}>
@@ -59,7 +60,7 @@ export default function HistoryTab({
           renderStepActions={(step) => (
             <button
               onClick={() => onReprocessFromHistory(step.block_instance_id)}
-              className="krds-btn text xsmall"
+              className="ds-btn ds-btn--ghost ds-btn--sm"
               style={{ cursor: 'pointer' }}
             >
               이 블록부터 재처리

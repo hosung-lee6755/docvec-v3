@@ -24,7 +24,7 @@ export default function TablesTab({
 
   if (isError) {
     return (
-      <p style={{ color: '#dc2626', fontSize: 13, margin: 0 }}>
+      <p style={{ color: 'var(--color-danger)', fontSize: 13, margin: 0 }}>
         표 데이터를 불러오는 중 오류가 발생했습니다.
       </p>
     )
@@ -45,7 +45,7 @@ export default function TablesTab({
           <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 'var(--space-2)' }}>
             표 {i + 1}{isPdfDoc ? ` · ${table.page_number}쪽` : ''}
           </div>
-          <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)' }}>
+          <div style={{ overflowX: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
             <table style={{ borderCollapse: 'collapse', fontSize: 13, whiteSpace: 'nowrap' }}>
               <tbody>
                 {table.rows.map((row, ri) => (
@@ -55,8 +55,8 @@ export default function TablesTab({
                         key={ci}
                         style={{
                           padding: '6px 10px',
-                          border: '1px solid #e2e8f0',
-                          background: ri === 0 ? '#f8fafc' : undefined,
+                          border: '1px solid var(--color-border)',
+                          background: ri === 0 ? 'var(--color-surface-subtle)' : undefined,
                           fontWeight: ri === 0 ? 600 : 400,
                         }}
                       >

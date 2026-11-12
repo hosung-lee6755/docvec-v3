@@ -1,81 +1,16 @@
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, FileText, FolderKanban, FolderOpen, Search, LogOut, Users, MessageSquare, Settings, ScrollText, DollarSign, BookOpen, GitBranch, AlertTriangle, XCircle, Activity, Eraser, ShieldCheck, Route, FileCheck, HardDrive, Plug } from 'lucide-react'
+import { useEffect, useState } from 'react'
+// NavLink는 쿼리를 무시하고 aria-current를 스스로 붙이므로 Link에 직접 계산한 값을 준다.
+import { Outlet, Link, useLocation } from 'react-router-dom'
+import { LogOut, Menu, Search, Settings, X } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { useWaitingReviewCount, useFailedCount } from '../hooks/useDocuments'
+import { CountBadge } from './ui'
+import { CommandPalette } from './CommandPalette'
+import { HOME_ITEM, isNavItemActive, visibleNavGroups } from './navigation'
+import type { NavItem } from './navigation'
 
-interface NavItem {
-  to: string
-  icon: typeof FileText
-  label: string
-  badge?: 'waitingReview' | 'failed'
-  adminOnly?: boolean
-}
-
-interface NavGroup {
-  section: string
-  adminOnly?: boolean
-  items: NavItem[]
-}
-
-// 정보 구조: 탐색 단위(워크스페이스)를 최상단으로 승격하고, 매일 쓰는 업무(문서 처리/
-// 지식 활용)와 가끔 손대는 기술 설정(파이프라인 설정)을 분리 — 기존 "구성" 그룹이 이
-// 둘을 한데 묶어 프로젝트가 3번째 그룹에 묻혀 있던 문제를 해소한다.
-const navGroups: NavGroup[] = [
-  {
-    section: '워크스페이스',
-    items: [
-      { to: '/projects', icon: FolderKanban, label: '프로젝트' },
-      { to: '/collections', icon: FolderOpen, label: '컬렉션' },
-    ],
-  },
-  {
-    section: '문서 처리',
-    items: [
-      { to: '/documents', icon: FileText, label: '문서' },
-      { to: '/documents?status=WAITING_REVIEW', icon: AlertTriangle, label: '검토 대기', badge: 'waitingReview' },
-      { to: '/documents?status=FAILED', icon: XCircle, label: '실패', badge: 'failed' },
-      { to: '/processing-status', icon: Activity, label: '처리 현황' },
-    ],
-  },
-  {
-    section: '지식 활용',
-    items: [
-      { to: '/search', icon: Search, label: '검색' },
-      { to: '/chat', icon: MessageSquare, label: '채팅' },
-    ],
-  },
-  {
-    section: '파이프라인 설정',
-    items: [
-      { to: '/workflows', icon: GitBranch, label: '워크플로우' },
-      { to: '/dictionary', icon: BookOpen, label: '검색 사전', adminOnly: true },
-      { to: '/cleaning-rules', icon: Eraser, label: '정제 규칙', adminOnly: true },
-    ],
-  },
-  {
-    section: '관리',
-    adminOnly: true,
-    items: [
-      { to: '/users', icon: Users, label: '사용자' },
-      { to: '/groups', icon: ShieldCheck, label: '그룹' },
-      { to: '/connectors', icon: HardDrive, label: '문서 원천 연결' },
-      { to: '/access-tokens', icon: Plug, label: '외부 에이전트 토큰' },
-      { to: '/audit-logs', icon: ScrollText, label: '감사 로그' },
-      { to: '/answer-traces', icon: Route, label: '답변 추적' },
-      { to: '/governance-report', icon: FileCheck, label: 'AI 기본법 근거 자료' },
-      { to: '/usage', icon: DollarSign, label: '사용량' },
-    ],
-  },
-]
-
-// React Router's NavLink only matches on pathname, so "/documents" and
-// "/documents?status=WAITING_REVIEW" (같은 pathname, 다른 쿼리) both light up
-// together — this compares the query string too so only one is active.
-function isNavItemActive(pathname: string, search: string, to: string): boolean {
-  const [toPath, toQuery] = to.split('?')
-  if (pathname !== toPath && !pathname.startsWith(`${toPath}/`)) return false
-  if (toQuery) return search === `?${toQuery}`
-  return search !== '?status=WAITING_REVIEW' && search !== '?status=FAILED'
+function initialOf(email: string | undefined): string {
+  return (email ?? '?').trim().charAt(0).toUpperCase() || '?'
 }
 
 export default function Layout() {
@@ -84,134 +19,106 @@ export default function Layout() {
   const waitingReviewCount = useWaitingReviewCount()
   const failedCount = useFailedCount()
   const location = useLocation()
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false)
+  // 좁은 화면(860px 이하)에서만 쓰는 메뉴 펼침 상태. 화면을 옮기면 접는다.
+  const [isNavOpen, setIsNavOpen] = useState(false)
+  const isAdmin = user?.role === 'admin'
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setIsPaletteOpen((open) => !open)
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  useEffect(() => {
+    setIsNavOpen(false)
+  }, [location.pathname, location.search])
+
+  const renderItem = ({ to, icon: Icon, label, badge }: NavItem) => {
+    const isActive = isNavItemActive(location.pathname, location.search, to)
+    return (
+      <Link key={to} to={to} className="ds-nav__item" aria-current={isActive ? 'page' : undefined}>
+        <Icon size={16} aria-hidden="true" />
+        <span className="ds-nav__label">{label}</span>
+        {badge === 'waitingReview' && <CountBadge count={waitingReviewCount} tone="warning" label="검토 대기" />}
+        {badge === 'failed' && <CountBadge count={failedCount} tone="danger" label="실패" />}
+      </Link>
+    )
+  }
+
+  const isSettingsActive = location.pathname === '/settings'
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh' }}>
-      <nav style={{
-        width: 220,
-        background: 'var(--color-surface)',
-        borderRight: '1px solid var(--color-border)',
-        display: 'flex',
-        flexDirection: 'column',
-        padding: 'var(--space-4)',
-        gap: 'var(--space-1)',
-        flexShrink: 0,
-        overflowY: 'auto',
-      }}>
-        <div style={{ padding: 'var(--space-4) var(--space-2)', marginBottom: 'var(--space-4)' }}>
-          <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-accent)' }}>DocVec</span>
+    <div className="ds-shell">
+      <nav className="ds-sidebar" aria-label="주 메뉴">
+        <div className="ds-sidebar__brand">
+          <span className="ds-sidebar__logo" aria-hidden="true">DV</span>
+          <span className="ds-sidebar__product">
+            <strong>DocVec</strong>
+            <span>문서 지식 플랫폼</span>
+          </span>
+          <button
+            type="button"
+            className="ds-icon-btn ds-sidebar__toggle"
+            aria-label={isNavOpen ? '메뉴 닫기' : '메뉴 열기'}
+            aria-expanded={isNavOpen}
+            aria-controls="ds-sidebar-body"
+            onClick={() => setIsNavOpen((open) => !open)}
+          >
+            {isNavOpen ? <X size={16} aria-hidden="true" /> : <Menu size={16} aria-hidden="true" />}
+          </button>
         </div>
-        <NavLink
-          to="/"
-          end
-          style={({ isActive }) => ({
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-3)',
-            padding: 'var(--space-2) var(--space-3)',
-            borderRadius: 'var(--radius-md)',
-            color: isActive ? 'var(--color-text)' : 'var(--color-text-muted)',
-            background: isActive ? 'rgba(99,102,241,0.15)' : 'transparent',
-            textDecoration: 'none',
-            fontSize: 14,
-            marginBottom: 'var(--space-2)',
-            transition: 'all var(--duration-fast)',
-          })}
-        >
-          <LayoutDashboard size={16} />
-          대시보드
-        </NavLink>
-        {navGroups
-          .filter((group) => !group.adminOnly || user?.role === 'admin')
-          .map((group) => (
-            <div key={group.section} style={{ marginTop: 'var(--space-3)' }}>
-              <div style={{
-                padding: 'var(--space-1) var(--space-3)',
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: '0.04em',
-                textTransform: 'uppercase',
-                color: 'var(--color-text-muted)',
-                opacity: 0.7,
-              }}>
-                {group.section}
-              </div>
-              {group.items
-                .filter((item) => !item.adminOnly || user?.role === 'admin')
-                .map(({ to, icon: Icon, label, badge }) => {
-                  const active = isNavItemActive(location.pathname, location.search, to)
-                  return (
-                    <NavLink
-                      key={to}
-                      to={to}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 'var(--space-3)',
-                        padding: 'var(--space-2) var(--space-3)',
-                        borderRadius: 'var(--radius-md)',
-                        color: active ? 'var(--color-text)' : 'var(--color-text-muted)',
-                        background: active ? 'rgba(99,102,241,0.15)' : 'transparent',
-                        textDecoration: 'none',
-                        fontSize: 14,
-                        transition: 'all var(--duration-fast)',
-                      }}
-                    >
-                      <Icon size={16} />
-                      <span style={{ flex: 1 }}>{label}</span>
-                      {badge === 'waitingReview' && waitingReviewCount > 0 && (
-                        <span className="krds-badge xsmall bg-warning">{waitingReviewCount}</span>
-                      )}
-                      {badge === 'failed' && failedCount > 0 && (
-                        <span className="krds-badge xsmall bg-danger">{failedCount}</span>
-                      )}
-                    </NavLink>
-                  )
-                })}
-            </div>
-          ))}
-        <div style={{ marginTop: 'auto' }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: 'var(--space-2) var(--space-3)', gap: 'var(--space-2)',
-          }}>
-            <span style={{
-              color: 'var(--color-text-muted)', fontSize: 12,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {user?.email}
-            </span>
-            <NavLink
+
+        <div id="ds-sidebar-body" className={`ds-sidebar__body${isNavOpen ? ' is-open' : ''}`}>
+        <button type="button" className="ds-sidebar__find" onClick={() => setIsPaletteOpen(true)}>
+          <Search size={14} aria-hidden="true" />
+          <span style={{ flex: 1 }}>화면 찾기</span>
+          <kbd className="ds-kbd">Ctrl K</kbd>
+        </button>
+
+        <div className="ds-nav">{renderItem(HOME_ITEM)}</div>
+
+        {visibleNavGroups(isAdmin).map((group) => (
+          <div key={group.section} className="ds-nav" role="group" aria-label={group.section}>
+            <div className="ds-nav__section" aria-hidden="true">{group.section}</div>
+            {group.items.map(renderItem)}
+          </div>
+        ))}
+
+        <div className="ds-sidebar__footer">
+          <div className="ds-user">
+            <span className="ds-avatar" aria-hidden="true">{initialOf(user?.email)}</span>
+            <span className="ds-user__name" title={user?.email}>{user?.email}</span>
+            <Link
               to="/settings"
               title="계정 설정"
               aria-label="계정 설정"
-              style={({ isActive }) => ({
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                flexShrink: 0, width: 24, height: 24, borderRadius: 'var(--radius-md, 6px)',
-                color: isActive ? 'var(--color-text)' : 'var(--color-text-muted)',
-                background: isActive ? 'rgba(99,102,241,0.15)' : 'transparent',
-              })}
+              className="ds-icon-btn"
+              aria-current={isSettingsActive ? 'page' : undefined}
             >
-              <Settings size={14} />
-            </NavLink>
+              <Settings size={15} aria-hidden="true" />
+            </Link>
           </div>
-          <button
-            type="button"
-            onClick={clearAuth}
-            className="krds-btn medium text"
-            style={{
-              width: '100%', display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-start',
-              gap: 'var(--space-3)', fontSize: 14, color: 'var(--color-text-muted)',
-            }}
-          >
-            <LogOut size={16} />
-            로그아웃
+          <button type="button" onClick={clearAuth} className="ds-nav__item" style={{ border: 0, background: 'transparent', cursor: 'pointer', font: 'inherit' }}>
+            <LogOut size={16} aria-hidden="true" />
+            <span className="ds-nav__label" style={{ textAlign: 'left' }}>로그아웃</span>
           </button>
         </div>
+        </div>
       </nav>
-      <main style={{ flex: 1, overflow: 'auto', padding: 'var(--space-8)' }}>
-        <Outlet />
+
+      <main className="ds-main">
+        <div className="ds-main__frame">
+          <Outlet />
+        </div>
       </main>
+
+      <CommandPalette isOpen={isPaletteOpen} isAdmin={isAdmin} onClose={() => setIsPaletteOpen(false)} />
     </div>
   )
 }

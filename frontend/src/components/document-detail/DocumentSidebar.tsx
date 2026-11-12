@@ -1,10 +1,11 @@
+import { toneFromKrdsClass } from '../ui'
 import { Loader2 } from 'lucide-react'
 import { STATUS_BADGE_CLASSES, STATUS_LABELS } from '../../lib/documentStatus'
 import type { TabKey } from './documentDetailHelpers'
 import {
   Row, CopyableValue, EditableMetaField, DateMetaField, SecurityLevelField, LanguageMetaField, AutoValueControls,
 } from './documentDetailParts'
-import { qualityStatusDisplay, RUN_TRIGGER_LABELS, RUN_STATUS_BADGE } from './documentDetailHelpers'
+import { qualityStatusDisplay, RUN_TRIGGER_LABELS, RUN_STATUS_BADGE, RUN_STATUS_LABELS } from './documentDetailHelpers'
 import type { useAcceptTagSuggestion, useDismissTagSuggestion, useUpdateDocumentTags } from '../../hooks/useDocuments'
 import type { MetadataResettableField, useUpdateDocumentMetadata } from '../../hooks/useDocumentMetadata'
 import type { Document } from '../../hooks/useDocuments'
@@ -57,7 +58,7 @@ export default function DocumentSidebar({
       <div style={{ maxWidth: 640 }}>
         <Row label="상태">
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            <span className={`krds-badge small ${STATUS_BADGE_CLASSES[doc.status] ?? 'bg-gray'}`}>
+            <span className={`ds-badge ds-badge--${toneFromKrdsClass(STATUS_BADGE_CLASSES[doc.status] ?? 'bg-gray')}`}>
               {STATUS_LABELS[doc.status] ?? doc.status}
             </span>
             {isProcessing && (
@@ -144,7 +145,7 @@ export default function DocumentSidebar({
         <Row label="태그">
           <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
             {(doc.tags ?? []).map((tag) => (
-              <span key={tag} className="krds-badge small bg-information" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span key={tag} className="ds-badge ds-badge--info" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 {tag}
                 <button
                   onClick={() => updateTags.mutate({ docId: doc.id, tags: (doc.tags ?? []).filter((t) => t !== tag) })}
@@ -169,7 +170,7 @@ export default function DocumentSidebar({
                 }
               }}
               placeholder="태그 입력 후 Enter"
-              style={{ fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 8px', width: 130 }}
+              style={{ fontSize: 12, border: '1px solid var(--color-border)', borderRadius: 4, padding: '2px 8px', width: 130 }}
             />
           </span>
         </Row>
@@ -189,10 +190,10 @@ export default function DocumentSidebar({
                 return (
                   <span
                     key={tag}
-                    className="krds-badge small"
+                    className="ds-badge"
                     style={{
                       display: 'inline-flex', alignItems: 'center', gap: 4,
-                      border: alreadyAdded ? '1px solid var(--color-success, #16a34a)' : '1px dashed #94a3b8',
+                      border: alreadyAdded ? '1px solid var(--color-success)' : '1px dashed var(--color-text-subtle)',
                       background: 'transparent', color: 'var(--color-text-muted)',
                     }}
                   >
@@ -200,7 +201,7 @@ export default function DocumentSidebar({
                     {alreadyAdded ? (
                       <span
                         title="이미 태그로 추가됨"
-                        style={{ color: 'var(--color-success, #16a34a)', lineHeight: 1, fontWeight: 700 }}
+                        style={{ color: 'var(--color-success)', lineHeight: 1, fontWeight: 700 }}
                       >
                         ✓
                       </span>
@@ -209,7 +210,7 @@ export default function DocumentSidebar({
                         onClick={() => acceptSuggestion.mutate({ docId: doc.id, tag })}
                         aria-label={`추천 태그 ${tag} 추가`}
                         title="태그로 추가"
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--color-success, #16a34a)', lineHeight: 1, fontWeight: 700 }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--color-success)', lineHeight: 1, fontWeight: 700 }}
                       >
                         +
                       </button>
@@ -284,7 +285,7 @@ export default function DocumentSidebar({
               )}
               <button
                 onClick={() => onActiveTabChange('chunks')}
-                className="krds-btn text xsmall"
+                className="ds-btn ds-btn--ghost ds-btn--sm"
                 style={{ padding: 0, cursor: 'pointer' }}
               >
                 자세히
@@ -294,14 +295,14 @@ export default function DocumentSidebar({
               <span style={{ width: 64, flexShrink: 0, color: 'var(--color-text-muted)' }}>품질</span>
               {qualityReport ? (
                 <>
-                  <span className={`krds-badge xsmall ${qualityStatusDisplay(qualityReport.status, qualityReport.warnings?.length ?? 0).badgeClass}`}>
+                  <span className={`ds-badge ds-badge--${toneFromKrdsClass(qualityStatusDisplay(qualityReport.status, qualityReport.warnings?.length ?? 0).badgeClass)}`}>
                     {qualityStatusDisplay(qualityReport.status, qualityReport.warnings?.length ?? 0).label}
                   </span>
                   {qualityReport.overall_score != null && (
                     <span style={{ color: 'var(--color-text-muted)' }}>{qualityReport.overall_score.toFixed(1)}점</span>
                   )}
                   {!!qualityReport.warnings?.length && (
-                    <span style={{ color: '#b45309' }}>경고 {qualityReport.warnings.length}건</span>
+                    <span style={{ color: 'var(--color-warning)' }}>경고 {qualityReport.warnings.length}건</span>
                   )}
                 </>
               ) : (
@@ -309,7 +310,7 @@ export default function DocumentSidebar({
               )}
               <button
                 onClick={() => onActiveTabChange('quality')}
-                className="krds-btn text xsmall"
+                className="ds-btn ds-btn--ghost ds-btn--sm"
                 style={{ padding: 0, cursor: 'pointer' }}
               >
                 자세히
@@ -319,8 +320,8 @@ export default function DocumentSidebar({
               <span style={{ width: 64, flexShrink: 0, color: 'var(--color-text-muted)' }}>최근 실행</span>
               {latestRun ? (
                 <>
-                  <span className={`krds-badge xsmall ${RUN_STATUS_BADGE[latestRun.status] ?? 'bg-gray'}`}>
-                    {latestRun.status}
+                  <span className={`ds-badge ds-badge--${toneFromKrdsClass(RUN_STATUS_BADGE[latestRun.status] ?? 'bg-gray')}`}>
+                    {RUN_STATUS_LABELS[latestRun.status] ?? latestRun.status}
                   </span>
                   <span>{RUN_TRIGGER_LABELS[latestRun.trigger] ?? latestRun.trigger}</span>
                   <span style={{ color: 'var(--color-text-muted)' }}>
@@ -332,7 +333,7 @@ export default function DocumentSidebar({
               )}
               <button
                 onClick={() => onActiveTabChange('history')}
-                className="krds-btn text xsmall"
+                className="ds-btn ds-btn--ghost ds-btn--sm"
                 style={{ padding: 0, cursor: 'pointer' }}
               >
                 자세히

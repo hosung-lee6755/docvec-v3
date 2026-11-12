@@ -16,32 +16,12 @@
   border: 0;
 }
 
-:root {
-  --color-bg: #0f172a;
-  --color-surface: #1e293b;
-  --color-border: #334155;
-  --color-text: #f1f5f9;
-  --color-text-muted: #94a3b8;
-  --color-accent: #6366f1;
-  --color-accent-hover: #818cf8;
-  --color-danger: #dc2626;
-  --color-success: #16a34a;
-  --color-warning: #f59e0b;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --duration-fast: 150ms;
-}
+/* 색, 간격, 글자 토큰은 styles/tokens.css 한곳에서 정의한다(마일스톤 8). */
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
   color: var(--color-text);
   background: var(--color-bg);
 }
@@ -72,8 +52,10 @@ html .krds-table-wrap {
    explicit font-size override (e.g. `tbl col data` tables). */
 #root {
   min-height: 100vh;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  color: var(--color-text);
+  background: var(--color-bg);
 }
 
 /* Canonical icon-only action button. Pages previously reinvented this
@@ -97,23 +79,23 @@ html .krds-table-wrap {
   color: var(--color-text-muted);
 }
 .icon-btn:hover:not(:disabled) {
-  background: rgba(148, 163, 184, 0.12);
+  background: var(--color-surface-muted);
   color: var(--color-text);
 }
 .icon-btn.danger:hover:not(:disabled) {
-  background: rgba(220, 38, 38, 0.1);
+  background: var(--color-danger-bg);
   color: var(--color-danger);
 }
 .icon-btn.accent:hover:not(:disabled) {
-  background: rgba(99, 102, 241, 0.1);
+  background: var(--color-primary-subtle);
   color: var(--color-accent);
 }
 .icon-btn.success:hover:not(:disabled) {
-  background: rgba(22, 163, 74, 0.1);
+  background: var(--color-success-bg);
   color: var(--color-success);
 }
 .icon-btn:disabled {
-  color: #cbd5e1;
+  color: var(--color-text-disabled);
   cursor: not-allowed;
 }
 
@@ -125,18 +107,18 @@ html .krds-table-wrap {
 }
 .markdown-body th,
 .markdown-body td {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--color-border);
   padding: 4px 8px;
   text-align: left;
 }
 .markdown-body th {
-  background: #f8fafc;
+  background: var(--color-surface-subtle);
 }
 .markdown-body p {
   margin: 0 0 8px;
 }
 .markdown-body pre {
-  background: #f8fafc;
+  background: var(--color-surface-subtle);
   padding: 8px;
   overflow-x: auto;
 }

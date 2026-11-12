@@ -16,6 +16,8 @@ import {
 } from '../hooks/useChat'
 import { DeepSearchProgress, DeepSearchSteps, DeepSearchToggle } from '../components/chat/DeepSearch'
 import { CitationEvidence, LowOcrBadge } from '../components/chat/CitationEvidence'
+import { Alert, Badge, Button, IconButton, Input, Page, PageTitle, Select, buttonClass } from '../components/ui'
+import '../styles/screens/user.css'
 
 export default function ChatPage() {
   const { conversationId, projectId } = useParams<{ conversationId: string; projectId?: string }>()
@@ -23,19 +25,21 @@ export default function ChatPage() {
   const basePath = projectId ? `/projects/${projectId}/chat` : '/chat'
 
   return (
-    <div style={{ display: 'flex', gap: 'var(--space-6)', height: 'calc(100vh - var(--space-8) * 2)' }}>
-      <ConversationSidebar
-        projectId={projectId}
-        activeId={conversationId ?? null}
-        onSelect={(id) => navigate(`${basePath}/${id}`)}
-        onNew={() => navigate(basePath)}
-      />
-      <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {conversationId
-          ? <ConversationView conversationId={conversationId} />
-          : <NewConversationForm projectId={projectId} onCreated={(id) => navigate(`${basePath}/${id}`)} />}
+    <Page className="user-chat">
+      <div className="user-chat__layout">
+        <ConversationSidebar
+          projectId={projectId}
+          activeId={conversationId ?? null}
+          onSelect={(id) => navigate(`${basePath}/${id}`)}
+          onNew={() => navigate(basePath)}
+        />
+        <div className="user-chat__main">
+          {conversationId
+            ? <ConversationView conversationId={conversationId} />
+            : <NewConversationForm projectId={projectId} onCreated={(id) => navigate(`${basePath}/${id}`)} />}
+        </div>
       </div>
-    </div>
+    </Page>
   )
 }
 
@@ -64,32 +68,23 @@ function ConversationSidebar({
   }
 
   return (
-    <div style={{
-      width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column',
-      borderRight: '1px solid var(--color-border)', paddingRight: 'var(--space-4)',
-    }}>
-      <button type="button" onClick={onNew} className="krds-btn small primary"
-        style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
-        <Plus size={16} /> 새 채팅
-      </button>
+    <div className="user-chat__list">
+      <Button variant="primary" size="sm" isBlock onClick={onNew} icon={<Plus size={16} />}>
+        새 채팅
+      </Button>
 
-      <div style={{ flex: '1 1 auto', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div className="user-chat__list-items">
         {conversations?.map((c) => (
           <div
             key={c.id}
             onClick={() => editingId !== c.id && onSelect(c.id)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-              padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-md, 8px)',
-              cursor: 'pointer', background: c.id === activeId ? '#eff6ff' : 'transparent',
-              color: c.id === activeId ? '#1d4ed8' : '#334155', fontSize: 13,
-            }}
-            className="chat-conv-row"
+            className={`user-chat__row chat-conv-row${c.id === activeId ? ' is-active' : ''}`}
           >
             {editingId === c.id ? (
               <>
-                <input
+                <Input
                   autoFocus
+                  controlSize="sm"
                   value={editingTitle}
                   onChange={(e) => setEditingTitle(e.target.value)}
                   onKeyDown={(e) => {
@@ -97,39 +92,38 @@ function ConversationSidebar({
                     if (e.key === 'Escape') setEditingId(null)
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="krds-input small"
-                  style={{ flex: '1 1 auto', minWidth: 0 }}
+                  className="user-chat__rename"
                 />
-                <button type="button" onClick={(e) => { e.stopPropagation(); commitEdit() }}
-                  className="krds-btn text xsmall icon-btn success" title="저장">
+                <IconButton label="저장" onClick={(e) => { e.stopPropagation(); commitEdit() }}>
                   <Check size={14} />
-                </button>
-                <button type="button" onClick={(e) => { e.stopPropagation(); setEditingId(null) }}
-                  className="krds-btn text xsmall icon-btn" title="취소">
+                </IconButton>
+                <IconButton label="취소" onClick={(e) => { e.stopPropagation(); setEditingId(null) }}>
                   <X size={14} />
-                </button>
+                </IconButton>
               </>
             ) : (
               <>
-                <span style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {/* 키보드와 화면 낭독기가 대화를 고를 수 있게 제목을 단추로 둔다. */}
+                <button
+                  type="button"
+                  className="user-chat__row-title"
+                  aria-current={c.id === activeId ? 'page' : undefined}
+                  onClick={(e) => { e.stopPropagation(); onSelect(c.id) }}
+                >
                   {c.title}
-                </span>
-                <button type="button" onClick={(e) => { e.stopPropagation(); startEdit(c) }}
-                  className="krds-btn text xsmall icon-btn" title="이름 변경">
+                </button>
+                <IconButton label="이름 변경" onClick={(e) => { e.stopPropagation(); startEdit(c) }}>
                   <Pencil size={13} />
-                </button>
-                <button type="button" onClick={(e) => { e.stopPropagation(); handleDelete(c.id) }}
-                  className="krds-btn text xsmall icon-btn" title="삭제">
+                </IconButton>
+                <IconButton label="삭제" tone="danger" onClick={(e) => { e.stopPropagation(); handleDelete(c.id) }}>
                   <Trash2 size={13} />
-                </button>
+                </IconButton>
               </>
             )}
           </div>
         ))}
         {!conversations?.length && (
-          <p style={{ fontSize: 13, color: 'var(--color-text-muted)', padding: 'var(--space-3)' }}>
-            아직 채팅이 없습니다.
-          </p>
+          <p className="user-chat__empty">아직 채팅이 없습니다.</p>
         )}
       </div>
     </div>
@@ -164,66 +158,67 @@ function NewConversationForm({ projectId, onCreated }: { projectId?: string; onC
   }
 
   return (
-    <div style={{ flex: '1 1 auto', display: 'flex', flexDirection: 'column', justifyContent: 'center', maxWidth: 640, margin: '0 auto', width: '100%' }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 'var(--space-6)', textAlign: 'center' }}>새 채팅 시작</h1>
+    <div className="user-chat__start">
+      <PageTitle className="user-chat__start-title">새 채팅 시작</PageTitle>
 
       <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-        <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)' }}>
-          <select
+        <div className="user-chat__controls">
+          <Select
+            controlSize="sm"
             value={collectionId}
             onChange={(e) => setCollectionId(e.target.value)}
-            className="krds-form-select small"
-            style={{ flex: '0 0 180px', width: 180 }}
+            className="user-chat__select user-chat__select--collection"
           >
             <option value="">전체 문서</option>
             {collectionsData?.items.map((col) => (
               <option key={col.id} value={col.id}>{col.name}</option>
             ))}
-          </select>
+          </Select>
 
-          <select
+          <Select
+            controlSize="sm"
             value={modelKey || models[0]?.key || ''}
             onChange={(e) => setModelKey(e.target.value)}
-            className="krds-form-select small"
-            style={{ flex: '0 0 240px', width: 240 }}
+            className="user-chat__select user-chat__select--model"
           >
             {models.map((m) => (
               <option key={m.key} value={m.key} disabled={!m.available}>
                 {m.label}{!m.available ? ' (API 키 필요)' : ''}
               </option>
             ))}
-          </select>
+          </Select>
 
           <DeepSearchToggle checked={isDeep} onChange={setIsDeep} />
 
           {selectedModel && !selectedModel.available && (
-            <Link to="/settings" className="krds-btn text small">
+            <Link to="/settings" className={buttonClass('ghost', 'sm')}>
               <SettingsIcon size={14} /> API 키 등록하러 가기
             </Link>
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
-          <input
+        <div className="user-chat__form-row">
+          <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="문서 내용에 대해 질문하세요..."
-            className="krds-input small"
-            style={{ flex: '1 1 auto', width: '100%' }}
+            controlSize="sm"
+            className="user-chat__grow"
           />
-          <button
+          <Button
             type="submit"
+            variant="primary"
+            size="sm"
             disabled={createConversation.isPending || !query.trim() || !selectedModel?.available}
-            className="krds-btn small primary"
           >
             {createConversation.isPending
-              ? <div className="krds-spinner" role="status" style={{ width: 16, height: 16 }}><span className="sr-only">생성 중</span></div>
+              ? <span className="user-spinner" role="status"><span className="sr-only">생성 중</span></span>
               : <Send size={16} />}
             질문
-          </button>
+          </Button>
         </div>
         {selectedModel?.backend === 'local' && (
-          <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0, textAlign: 'center' }}>
+          <p className="user-chat__hint">
             로컬 모델은 첫 요청 시 모델 로딩으로 응답이 오래 걸릴 수 있습니다.
           </p>
         )}
@@ -253,26 +248,26 @@ function ConversationView({ conversationId }: { conversationId: string }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div style={{ flex: '1 1 auto', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--space-6)', paddingBottom: 'var(--space-4)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0 }}>
+      <div className="user-chat__thread">
         {messages.map((m) => <ChatMessageBubble key={m.id} message={m} />)}
       </div>
 
-      <form onSubmit={handleSubmit} style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--color-border)' }}>
+      <form onSubmit={handleSubmit} className="user-chat__composer">
         <DeepSearchToggle checked={isDeep} onChange={setIsDeep} disabled={isBusy} />
-        <input
+        <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="이어서 질문하세요..."
-          className="krds-input small"
-          style={{ flex: '1 1 auto', width: '100%' }}
+          controlSize="sm"
+          className="user-chat__grow"
         />
-        <button type="submit" disabled={isBusy || !query.trim()} className="krds-btn small primary">
+        <Button type="submit" variant="primary" size="sm" disabled={isBusy || !query.trim()}>
           {isBusy
-            ? <div className="krds-spinner" role="status" style={{ width: 16, height: 16 }}><span className="sr-only">생성 중</span></div>
+            ? <span className="user-spinner" role="status"><span className="sr-only">생성 중</span></span>
             : <Send size={16} />}
           질문
-        </button>
+        </Button>
       </form>
     </div>
   )
@@ -308,12 +303,7 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
             type="button"
             onClick={() => jumpToCitation(idx)}
             title={`발췌문 [${idx}] 보기`}
-            style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              background: '#dbeafe', color: '#1d4ed8', border: 'none', borderRadius: 4,
-              fontSize: 11, fontWeight: 700, padding: '0 5px', margin: '0 1px',
-              cursor: 'pointer', verticalAlign: 'baseline', lineHeight: '18px',
-            }}
+            className="user-chat__cite-btn"
           >
             {idx}
           </button>
@@ -323,71 +313,59 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
     })
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-      <div style={{
-        background: '#fff', border: '1px solid #e2e8f0',
-        borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',
-      }}>
-        <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+    <div className="user-chat__turn">
+      <div className="user-chat__bubble">
+        <p className="user-chat__label">
           질문
-          {chat.mode === 'deep' && <span className="krds-badge xsmall bg-secondary">심층 검색</span>}
+          {chat.mode === 'deep' && <Badge tone="neutral">심층 검색</Badge>}
         </p>
         <p style={{ margin: 0 }}>{chat.query}</p>
       </div>
 
       {(chat.status === 'PENDING' || chat.status === 'GENERATING') && (
         chat.partial_answer ? (
-          <div style={{
-            background: '#eff6ff', border: '1px solid #bfdbfe',
-            borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',
-          }}>
-            <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="user-chat__bubble user-chat__bubble--answer">
+            <p className="user-chat__label">
               답변
-              <span className="krds-spinner" role="status" style={{ width: 12, height: 12 }}>
+              <span className="user-spinner" role="status" style={{ width: 12, height: 12 }}>
                 <span className="sr-only">생성 중</span>
               </span>
             </p>
-            <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+            <p className="user-chat__text">
               {chat.partial_answer}
-              <span style={{ opacity: 0.5 }}>▌</span>
+              <span className="user-chat__cursor">▌</span>
             </p>
           </div>
         ) : chat.mode === 'deep' ? (
           <DeepSearchProgress progress={chat.progress} />
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-4)', color: 'var(--color-text-muted)' }}>
-            <div className="krds-spinner" role="status"><span className="sr-only">생성 중</span></div>
+          <div className="user-chat__waiting">
+            <div className="user-spinner" role="status"><span className="sr-only">생성 중</span></div>
             답변 생성 중...
           </div>
         )
       )}
 
       {chat.status === 'FAILED' && (
-        <div style={{
-          background: '#fef2f2', border: '1px solid #fecaca',
-          borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', color: '#dc2626',
-        }}>
+        <Alert tone="danger">
           답변 생성에 실패했습니다{chat.error_message ? `: ${chat.error_message}` : ''}
-        </div>
+        </Alert>
       )}
 
       {chat.status === 'DONE' && (
         <>
-          <div style={{
-            background: '#eff6ff', border: '1px solid #bfdbfe',
-            borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',
-          }}>
-            <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div className="user-chat__bubble user-chat__bubble--answer">
+            <p className="user-chat__label">
               답변
-              <span className="krds-badge small bg-information">AI가 생성한 답변</span>
+              <Badge tone="info" hasDot>AI가 생성한 답변</Badge>
             </p>
-            <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+            <p className="user-chat__text">
               {chat.answer ? renderAnswer(chat.answer) : null}
             </p>
           </div>
 
           {!!chat.expanded_terms?.length && (
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>
+            <p className="user-chat__notice">
               사전의 동의어로 함께 찾은 낱말: {chat.expanded_terms.join(', ')}
             </p>
           )}
@@ -396,67 +374,58 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
 
           {!!chat.citations?.length && (
             <div>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
+                className="user-chat__cite-toggle"
                 onClick={() => setCitationsOpen((v) => !v)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 'var(--space-1)',
-                  background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                  fontSize: 13, fontWeight: 600, margin: '0 0 var(--space-2)', color: 'inherit',
-                }}
                 aria-expanded={citationsOpen}
+                icon={citationsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               >
-                {citationsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 인용된 발췌문 ({chat.citations.length})
-              </button>
+              </Button>
               {citationsOpen && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                <div className="user-chat__cite-list">
                   {chat.citations.map((c) => c.hidden ? (
                     <div
                       key={c.index}
                       ref={(el) => { citationRefs.current[c.index] = el }}
-                      style={{ border: '1px dashed #cbd5e1', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', fontSize: 12, color: 'var(--color-text-muted)' }}
+                      className="user-chat__cite is-hidden"
                     >
-                      <span style={{ fontWeight: 600 }}>[{c.index}]</span> 열람 권한이 없는 문서입니다. 답변 이후 권한이 바뀌었거나 문서가 삭제됐습니다.
+                      <span className="user-chat__cite-index">[{c.index}]</span> 열람 권한이 없는 문서입니다. 답변 이후 권한이 바뀌었거나 문서가 삭제됐습니다.
                     </div>
                   ) : (
                     <div
                       key={c.index}
                       ref={(el) => { citationRefs.current[c.index] = el }}
-                      style={{
-                        background: flashIndex === c.index ? '#fef9c3' : '#fff',
-                        border: flashIndex === c.index ? '1px solid #facc15' : '1px solid #e2e8f0',
-                        borderRadius: 'var(--radius-md)', padding: 'var(--space-3)',
-                        transition: 'background-color .4s ease, border-color .4s ease',
-                      }}
+                      className={`user-chat__cite${flashIndex === c.index ? ' is-flash' : ''}`}
                     >
-                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-1)', fontSize: 12, color: 'var(--color-text-muted)' }}>
-                        <span style={{ fontWeight: 600 }}>[{c.index}]</span>
+                      <div className="user-chat__cite-meta">
+                        <span className="user-chat__cite-index">[{c.index}]</span>
                         {c.collection_name && (
-                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span className="user-chat__cite-file">
                             <FolderOpen size={12} />
                             {c.collection_name}
                           </span>
                         )}
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span className="user-chat__cite-file">
                           <FileText size={12} />
                           {c.filename ?? '문서'}
                         </span>
                         {c.page_number ? <span>{c.page_number}쪽</span> : null}
                         <LowOcrBadge evidence={c.evidence} />
-                        <span style={{ flex: 1 }} />
+                        <span className="user-chat__spacer" />
                         {c.document_id && (
-                          <button
-                            type="button"
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => window.open(`/documents/${c.document_id}`, '_blank', 'noopener')}
-                            className="krds-btn text small"
-                            style={{ cursor: 'pointer', fontSize: 12 }}
                           >
                             문서 열기
-                          </button>
+                          </Button>
                         )}
                       </div>
-                      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>{c.text}</p>
+                      <p className="user-chat__cite-text">{c.text}</p>
                       <CitationEvidence evidence={c.evidence} />
                     </div>
                   ))}

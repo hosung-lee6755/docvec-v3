@@ -1,5 +1,8 @@
-import { X, Loader2, Layers } from 'lucide-react'
+import { Layers } from 'lucide-react'
 import { useCollectionVectorStats } from '../hooks/useCollectionVectorStats'
+import { Alert, Button, DescriptionList, Modal, Spinner } from './ui'
+import type { DescriptionItem } from './ui'
+import '../styles/screens/documents.css'
 
 interface VectorStatsModalProps {
   collectionId: string
@@ -17,71 +20,64 @@ const REEMBED_LABELS: Record<string, string> = {
 export default function VectorStatsModal({ collectionId, collectionName, onClose }: VectorStatsModalProps) {
   const { data, isLoading, isError } = useCollectionVectorStats(collectionId)
 
+  const footer = <Button variant="secondary" onClick={onClose}>닫기</Button>
+
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
-    }}>
-      <section className="krds-modal fade shown in" role="dialog">
-        <div className="modal-dialog modal-sm">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2 className="modal-title">벡터 DB 현황 — {collectionName}</h2>
-            </div>
-            <div className="modal-conts">
-              <div className="conts-area">
-                {isLoading && (
-                  <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6)' }}>
-                    <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--color-text-muted)' }} />
-                  </div>
-                )}
+    <Modal isOpen title={`벡터 DB 현황 — ${collectionName}`} onClose={onClose} footer={footer}>
+      {isLoading && (
+        <div className="documents-center"><Spinner /></div>
+      )}
 
-                {isError && (
-                  <p style={{ color: '#dc2626', fontSize: 13 }}>현황을 불러오지 못했습니다.</p>
-                )}
+      {isError && (
+        <Alert tone="danger">현황을 불러오지 못했습니다.</Alert>
+      )}
 
-                {data && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-                    <StatRow label="임베딩 모델" value={data.embedding_model_label} />
-                    <StatRow label="벡터 차원" value={data.dimension ? `${data.dimension}차원` : '-'} />
-                    <StatRow
-                      label="문서 색인 현황"
-                      value={`${data.indexed_documents} / ${data.total_documents}건 색인 완료`}
-                    />
-                    <StatRow label="실제 저장된 벡터(청크) 수" value={`${data.total_vectors.toLocaleString('en-US')}개`} />
-                    {data.reembed_status && (
-                      <StatRow
-                        label="재임베딩 상태"
-                        value={`${REEMBED_LABELS[data.reembed_status] ?? data.reembed_status}${data.reembed_progress ? ` (${data.reembed_progress})` : ''}`}
-                        warn={data.reembed_status === 'FAILED'}
-                      />
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="modal-btn btn-wrap">
-              <button type="button" onClick={onClose} className="krds-btn medium secondary">닫기</button>
-            </div>
-            <button type="button" onClick={onClose} className="krds-btn medium icon btn-close">
-              <span className="sr-only">닫기</span>
-              <X size={20} />
-            </button>
-          </div>
-        </div>
-      </section>
-    </div>
+      {data && <DescriptionList items={buildItems(data)} />}
+    </Modal>
   )
 }
 
-function StatRow({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
+interface VectorStatsData {
+  embedding_model_label: string
+  dimension: number | null
+  indexed_documents: number
+  total_documents: number
+  total_vectors: number
+  reembed_status?: string | null
+  reembed_progress?: string | null
+}
+
+function buildItems(data: VectorStatsData): DescriptionItem[] {
+  const items: DescriptionItem[] = [
+    { key: 'model', term: <Term>임베딩 모델</Term>, detail: data.embedding_model_label },
+    { key: 'dimension', term: <Term>벡터 차원</Term>, detail: data.dimension ? `${data.dimension}차원` : '-' },
+    {
+      key: 'indexed',
+      term: <Term>문서 색인 현황</Term>,
+      detail: `${data.indexed_documents} / ${data.total_documents}건 색인 완료`,
+    },
+    {
+      key: 'vectors',
+      term: <Term>실제 저장된 벡터(청크) 수</Term>,
+      detail: `${data.total_vectors.toLocaleString('en-US')}개`,
+    },
+  ]
+  if (data.reembed_status) {
+    const label = `${REEMBED_LABELS[data.reembed_status] ?? data.reembed_status}${data.reembed_progress ? ` (${data.reembed_progress})` : ''}`
+    items.push({
+      key: 'reembed',
+      term: <Term>재임베딩 상태</Term>,
+      detail: <span className={data.reembed_status === 'FAILED' ? 'documents-text-danger' : undefined}>{label}</span>,
+    })
+  }
+  return items
+}
+
+function Term({ children }: { children: string }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-3)' }}>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', color: 'var(--color-text-muted)', fontSize: 13 }}>
-        <Layers size={14} />
-        {label}
-      </span>
-      <span style={{ fontWeight: 600, color: warn ? '#dc2626' : 'inherit' }}>{value}</span>
-    </div>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+      <Layers size={14} aria-hidden="true" />
+      {children}
+    </span>
   )
 }

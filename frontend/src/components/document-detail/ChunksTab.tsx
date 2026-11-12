@@ -49,7 +49,7 @@ export default function ChunksTab({
 
   if (isError) {
     return (
-      <p style={{ color: '#dc2626', fontSize: 13, margin: 0 }}>
+      <p style={{ color: 'var(--color-danger)', fontSize: 13, margin: 0 }}>
         청크를 불러오는 중 오류가 발생했습니다.
       </p>
     )
@@ -77,7 +77,7 @@ export default function ChunksTab({
         "검색 제외"된 청크는 검색·채팅에서 사용되지 않습니다.
       </p>
       {chunksResult.chunks.some((c) => !c.embedded) && (
-        <p style={{ fontSize: 12, color: '#b45309', margin: 0 }}>
+        <p style={{ fontSize: 12, color: 'var(--color-warning)', margin: 0 }}>
           아직 임베딩되지 않은 미리보기입니다(검토 승인 후 벡터 저장이 진행됩니다). 이 상태에서는
           수정·검색 제외·삭제를 할 수 없고, 품질 경고에서 언급된 청크 길이를 확인하는 용도로만 쓸 수 있습니다.
           아래 굵게 표시된 청크는 너무 짧거나(50자 미만) 너무 깁니다(2000자 초과).
@@ -93,9 +93,9 @@ export default function ChunksTab({
             id={`chunk-row-${chunk.id}`}
             style={{
               border: isJumpTarget ? '2px solid var(--color-accent)'
-                : (isTooShort || isTooLong) ? '1px solid #fde68a' : '1px solid #e2e8f0',
+                : (isTooShort || isTooLong) ? '1px solid var(--color-warning-border)' : '1px solid var(--color-border)',
               borderRadius: 'var(--radius-md)',
-              padding: 'var(--space-3)', background: (isTooShort || isTooLong) ? '#fffbeb' : '#fff',
+              padding: 'var(--space-3)', background: (isTooShort || isTooLong) ? 'var(--color-warning-bg)' : 'var(--color-surface)',
               opacity: chunk.disabled ? 0.55 : 1,
             }}
           >
@@ -104,13 +104,13 @@ export default function ChunksTab({
                 청크 #{chunk.chunk_index + 1}
                 {isPdfDoc && chunk.page_number ? ` · ${chunk.page_number}쪽` : ''}
               </span>
-              <span style={{ fontSize: 11, color: (isTooShort || isTooLong) ? '#b45309' : 'var(--color-text-muted)' }}>
+              <span style={{ fontSize: 11, color: (isTooShort || isTooLong) ? 'var(--color-warning)' : 'var(--color-text-muted)' }}>
                 {chunk.text.length}자{isTooShort ? ' · 너무 짧음' : isTooLong ? ' · 너무 김' : ''}
               </span>
-              {!chunk.embedded && <span className="krds-badge small bg-warning">임베딩 전 미리보기</span>}
-              {chunk.edited && <span className="krds-badge small bg-information">수정됨</span>}
-              {chunk.disabled && <span className="krds-badge small bg-gray">검색 제외</span>}
-              {chunk.chunk_type && <span className="krds-badge small bg-gray">{chunk.chunk_type}</span>}
+              {!chunk.embedded && <span className="ds-badge ds-badge--warning">임베딩 전 미리보기</span>}
+              {chunk.edited && <span className="ds-badge ds-badge--info">수정됨</span>}
+              {chunk.disabled && <span className="ds-badge ds-badge--neutral">검색 제외</span>}
+              {chunk.chunk_type && <span className="ds-badge ds-badge--neutral">{chunk.chunk_type}</span>}
               {chunk.token_count != null && (
                 <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
                   토큰 ~{chunk.token_count}
@@ -147,7 +147,7 @@ export default function ChunksTab({
                   title="검색/채팅 응답에서 이 청크가 실제로 반환된 횟수"
                   style={{
                     fontSize: 11,
-                    color: chunk.hit_count > 0 ? 'var(--color-text-muted)' : '#b45309',
+                    color: chunk.hit_count > 0 ? 'var(--color-text-muted)' : 'var(--color-warning)',
                   }}
                 >
                   조회 {chunk.hit_count}회{chunk.hit_count === 0 ? ' · 미조회' : ''}
@@ -157,7 +157,7 @@ export default function ChunksTab({
               {chunk.page_number != null && (
                 <button
                   onClick={() => { onOriginalPageChange(chunk.page_number as number); onActivateTab('original') }}
-                  className="krds-btn text small"
+                  className="ds-btn ds-btn--ghost ds-btn--sm"
                   style={{ cursor: 'pointer' }}
                 >
                   원문 대조에서 보기
@@ -167,7 +167,7 @@ export default function ChunksTab({
                 <>
                   <button
                     onClick={() => { onChunkEditIdChange(chunk.id); onChunkEditTextChange(chunk.text) }}
-                    className="krds-btn text small"
+                    className="ds-btn ds-btn--ghost ds-btn--sm"
                     style={{ cursor: 'pointer' }}
                   >
                     수정
@@ -175,7 +175,7 @@ export default function ChunksTab({
                   <button
                     onClick={() => updateChunk.mutate({ docId: documentId, chunkId: chunk.id, disabled: !chunk.disabled })}
                     disabled={updateChunk.isPending}
-                    className="krds-btn text small"
+                    className="ds-btn ds-btn--ghost ds-btn--sm"
                     style={{ cursor: 'pointer' }}
                   >
                     {chunk.disabled ? '검색 포함' : '검색 제외'}
@@ -187,8 +187,8 @@ export default function ChunksTab({
                       }
                     }}
                     disabled={deleteChunk.isPending}
-                    className="krds-btn text small"
-                    style={{ cursor: 'pointer', color: '#dc2626' }}
+                    className="ds-btn ds-btn--ghost ds-btn--sm"
+                    style={{ cursor: 'pointer', color: 'var(--color-danger)' }}
                   >
                     삭제
                   </button>
@@ -200,7 +200,7 @@ export default function ChunksTab({
                 {chunk.prev_chunk_id && (
                   <button
                     onClick={() => document.getElementById(`chunk-row-${chunk.prev_chunk_id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
-                    className="krds-btn text small"
+                    className="ds-btn ds-btn--ghost ds-btn--sm"
                     style={{ cursor: 'pointer', fontSize: 11, padding: 0 }}
                   >
                     ◀ 이전 청크
@@ -209,7 +209,7 @@ export default function ChunksTab({
                 {chunk.next_chunk_id && (
                   <button
                     onClick={() => document.getElementById(`chunk-row-${chunk.next_chunk_id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
-                    className="krds-btn text small"
+                    className="ds-btn ds-btn--ghost ds-btn--sm"
                     style={{ cursor: 'pointer', fontSize: 11, padding: 0 }}
                   >
                     다음 청크 ▶
@@ -221,7 +221,7 @@ export default function ChunksTab({
               <div style={{ marginBottom: 'var(--space-2)' }}>
                 <button
                   onClick={() => onExpandedParentChunkIdChange(expandedParentChunkId === chunk.id ? null : chunk.id)}
-                  className="krds-btn text small"
+                  className="ds-btn ds-btn--ghost ds-btn--sm"
                   style={{ cursor: 'pointer', fontSize: 11, padding: 0, color: 'var(--color-text-muted)' }}
                 >
                   {expandedParentChunkId === chunk.id ? '▾' : '▸'} 상위 청크 보기 (Parent Retrieval)
@@ -230,8 +230,8 @@ export default function ChunksTab({
                   <pre style={{
                     fontSize: 11, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                     fontFamily: 'inherit', margin: '6px 0 0', padding: 'var(--space-2)',
-                    background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)',
-                    color: '#475569',
+                    background: 'var(--color-surface-subtle)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)',
+                    color: 'var(--color-text-secondary)',
                   }}>
                     {chunk.parent_chunk_text}
                   </pre>
@@ -241,7 +241,7 @@ export default function ChunksTab({
             {chunkEditId === chunk.id ? (
               <div>
                 <textarea
-                  className="krds-input"
+                  className="ds-input"
                   value={chunkEditText}
                   onChange={(e) => onChunkEditTextChange(e.target.value)}
                   rows={8}
@@ -251,7 +251,7 @@ export default function ChunksTab({
                   <button
                     onClick={() => onChunkEditIdChange(null)}
                     disabled={updateChunk.isPending}
-                    className="krds-btn secondary small"
+                    className="ds-btn ds-btn--secondary ds-btn--sm"
                     style={{ cursor: 'pointer' }}
                   >
                     취소
@@ -264,7 +264,7 @@ export default function ChunksTab({
                       )
                     }
                     disabled={updateChunk.isPending || !chunkEditText.trim()}
-                    className="krds-btn primary small"
+                    className="ds-btn ds-btn--primary ds-btn--sm"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
                   >
                     {updateChunk.isPending && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />}
@@ -275,7 +275,7 @@ export default function ChunksTab({
             ) : (
               <pre style={{
                 fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                fontFamily: 'inherit', margin: 0, color: '#334155',
+                fontFamily: 'inherit', margin: 0, color: 'var(--color-text)',
               }}>
                 {chunk.text}
               </pre>

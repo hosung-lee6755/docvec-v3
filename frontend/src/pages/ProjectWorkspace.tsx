@@ -1,9 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useParams } from 'react-router-dom'
-import {
-  Settings, X, Pencil, Check, UserPlus, UserMinus, Loader2, Bot, RotateCcw, Info, Users as UsersIcon,
-  KeyRound, Trash2,
-} from 'lucide-react'
+import { Settings, Pencil, Check, UserPlus, UserMinus, Loader2, Bot, RotateCcw, Info, Users as UsersIcon, KeyRound, Trash2 } from 'lucide-react'
 import {
   useProject,
   useUpdateProject,
@@ -16,11 +13,16 @@ import {
   useDeleteProjectApiKey,
 } from '../hooks/useProjects'
 import { useChatModels } from '../hooks/useChat'
+import {
+  Alert, Badge, Button, Field, IconButton, Input, Modal, Page, PageHeader, Select, Spinner, Tabs, Textarea,
+} from '../components/ui'
 
 const API_KEY_PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
 }
+
+const ROLE_LABELS: Record<string, string> = { owner: '소유자', editor: '편집자', viewer: '조회자' }
 
 const TABS = [
   { to: 'collections', label: '컬렉션' },
@@ -30,41 +32,45 @@ const TABS = [
   { to: 'workflows', label: '워크플로우' },
 ]
 
+type SettingsTab = 'info' | 'members' | 'ai'
+
+const SETTINGS_TAB_ITEMS: ReadonlyArray<{ value: SettingsTab; label: React.ReactNode }> = [
+  { value: 'info', label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)' }}><Info size={14} aria-hidden="true" />기본정보</span> },
+  { value: 'members', label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)' }}><UsersIcon size={14} aria-hidden="true" />멤버</span> },
+  { value: 'ai', label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)' }}><Bot size={14} aria-hidden="true" />AI 관리</span> },
+]
+
 export default function ProjectWorkspace() {
   const { projectId } = useParams<{ projectId: string }>()
   const { data: project, isLoading } = useProject(projectId ?? null)
   const [showSettings, setShowSettings] = useState(false)
 
   if (isLoading || !project) {
-    return <div className="krds-spinner" role="status"><span className="sr-only">로딩 중</span></div>
+    return <Spinner />
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>{project.name}</h1>
-        <button
-          type="button"
-          onClick={() => setShowSettings(true)}
-          title="프로젝트 설정"
-          aria-label="프로젝트 설정"
-          className="krds-btn text xsmall icon-btn"
-        >
-          <Settings size={16} />
-        </button>
-      </div>
+    <Page>
+      <PageHeader
+        title={project.name}
+        actions={
+          <IconButton label="프로젝트 설정" onClick={() => setShowSettings(true)}>
+            <Settings size={16} aria-hidden="true" />
+          </IconButton>
+        }
+      />
 
-      <nav style={{ display: 'flex', gap: 'var(--space-1)', borderBottom: '1px solid var(--color-border)', marginBottom: 'var(--space-6)' }}>
+      <nav aria-label="프로젝트 메뉴" style={{ display: 'flex', gap: 'var(--space-1)', borderBottom: '1px solid var(--color-border)', marginBottom: 'var(--space-5)' }}>
         {TABS.map((t) => (
           <NavLink
             key={t.to}
             to={t.to}
             style={({ isActive }) => ({
-              padding: 'var(--space-2) var(--space-4)',
-              fontSize: 14,
+              padding: 'var(--space-2) var(--space-3)',
+              fontSize: 'var(--text-sm)',
               textDecoration: 'none',
-              color: isActive ? '#1d4ed8' : 'var(--color-text-muted)',
-              borderBottom: isActive ? '2px solid #1d4ed8' : '2px solid transparent',
+              color: isActive ? 'var(--color-primary)' : 'var(--color-text-muted)',
+              borderBottom: isActive ? '2px solid var(--color-primary)' : '2px solid transparent',
               fontWeight: isActive ? 600 : 400,
             })}
           >
@@ -73,18 +79,16 @@ export default function ProjectWorkspace() {
         ))}
       </nav>
 
-      <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>
+      <div style={{ flex: '1 1 auto', minHeight: 0 }}>
         <Outlet />
       </div>
 
       {showSettings && (
         <ProjectSettingsModal projectId={project.id} onClose={() => setShowSettings(false)} />
       )}
-    </div>
+    </Page>
   )
 }
-
-type SettingsTab = 'info' | 'members' | 'ai'
 
 function ProjectSettingsModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const { data: project } = useProject(projectId)
@@ -92,69 +96,35 @@ function ProjectSettingsModal({ projectId, onClose }: { projectId: string; onClo
 
   if (!project) return null
 
-  const settingsTabs: { key: SettingsTab; label: string; icon: React.ReactNode }[] = [
-    { key: 'info', label: '기본정보', icon: <Info size={14} /> },
-    { key: 'members', label: '멤버', icon: <UsersIcon size={14} /> },
-    { key: 'ai', label: 'AI 관리', icon: <Bot size={14} /> },
-  ]
-
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50,
-    }}>
-      <section className="krds-modal fade shown in" role="dialog">
-        <div className="modal-dialog modal-md">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2 className="modal-title">프로젝트 설정</h2>
-              <p style={{ margin: 'var(--space-1) 0 0', fontSize: 13, color: 'var(--color-text-muted)' }}>
-                {project.name}
-              </p>
-            </div>
-            <div className="modal-conts">
-              <div className="conts-area" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-                <div style={{ display: 'flex', gap: 'var(--space-1)', borderBottom: '1px solid var(--color-border)' }}>
-                  {settingsTabs.map((t) => (
-                    <button
-                      key={t.key}
-                      type="button"
-                      onClick={() => setTab(t.key)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 'var(--space-1)',
-                        padding: 'var(--space-2) var(--space-3)', fontSize: 13,
-                        background: 'none', border: 'none', cursor: 'pointer',
-                        color: tab === t.key ? '#1d4ed8' : 'var(--color-text-muted)',
-                        borderBottom: tab === t.key ? '2px solid #1d4ed8' : '2px solid transparent',
-                        fontWeight: tab === t.key ? 600 : 400,
-                      }}
-                    >
-                      {t.icon}
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-
-                {tab === 'info' && <ProjectInfoTab projectId={projectId} />}
-                {tab === 'members' && <ProjectMembersTab projectId={projectId} />}
-                {tab === 'ai' && <ProjectAiTab projectId={projectId} />}
-
-                <div className="modal-btn btn-wrap">
-                  <button type="button" className="krds-btn medium secondary" onClick={onClose}>
-                    닫기
-                  </button>
-                </div>
-              </div>
-            </div>
-            <button type="button" className="krds-btn medium icon btn-close close-modal" onClick={onClose}>
-              <span className="sr-only">닫기</span>
-              <X size={20} />
-            </button>
-          </div>
+    <Modal
+      isOpen
+      size="lg"
+      isDismissible={false}
+      title="프로젝트 설정"
+      onClose={onClose}
+      footer={<Button variant="secondary" onClick={onClose}>닫기</Button>}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+        <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>{project.name}</p>
+        <Tabs
+          items={SETTINGS_TAB_ITEMS}
+          value={tab}
+          onChange={setTab}
+          label="프로젝트 설정 항목"
+          idPrefix="project-settings"
+        />
+        <div role="tabpanel" id="project-settings-panel-info" aria-labelledby="project-settings-tab-info" hidden={tab !== 'info'}>
+          {tab === 'info' && <ProjectInfoTab projectId={projectId} />}
         </div>
-        <div className="modal-back"></div>
-      </section>
-    </div>
+        <div role="tabpanel" id="project-settings-panel-members" aria-labelledby="project-settings-tab-members" hidden={tab !== 'members'}>
+          {tab === 'members' && <ProjectMembersTab projectId={projectId} />}
+        </div>
+        <div role="tabpanel" id="project-settings-panel-ai" aria-labelledby="project-settings-tab-ai" hidden={tab !== 'ai'}>
+          {tab === 'ai' && <ProjectAiTab projectId={projectId} />}
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -165,6 +135,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    if (!saved) return undefined
+    const timer = setTimeout(() => setSaved(false), 2000)
+    return () => clearTimeout(timer)
+  }, [saved])
 
   if (!project) return null
 
@@ -179,41 +155,38 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     await updateProject.mutateAsync({ id: projectId, name: name.trim(), description: description.trim() || undefined })
     setEditing(false)
     setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
   }
 
   if (!editing) {
     return (
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          <p style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>{project.name}</p>
+          <p style={{ margin: 0, fontSize: 'var(--text-lg)', fontWeight: 600 }}>{project.name}</p>
           {project.is_owner && (
-            <button type="button" onClick={startEdit} className="krds-btn text xsmall icon-btn" title="수정">
-              <Pencil size={14} />
-            </button>
+            <IconButton label="수정" onClick={startEdit}><Pencil size={14} aria-hidden="true" /></IconButton>
           )}
         </div>
-        <p style={{ margin: 'var(--space-2) 0 0', fontSize: 13, color: 'var(--color-text-muted)' }}>
+        <p style={{ margin: 'var(--space-2) 0 0', fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>
           {project.description || '설명이 없습니다.'}
         </p>
-        {saved && <p style={{ fontSize: 12, color: '#16a34a', margin: 'var(--space-2) 0 0' }}>저장되었습니다.</p>}
+        {saved && <p role="status" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-success)', margin: 'var(--space-2) 0 0' }}>저장되었습니다.</p>}
       </div>
     )
   }
 
   return (
     <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-      <input autoFocus value={name} onChange={(e) => setName(e.target.value)} className="krds-input" />
-      <textarea
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        className="krds-input"
-        rows={2}
-        placeholder="설명 (선택 사항)"
-      />
+      <Field label="프로젝트 이름">
+        {(id) => <Input id={id} autoFocus value={name} onChange={(e) => setName(e.target.value)} />}
+      </Field>
+      <Field label="설명">
+        {(id) => (
+          <Textarea id={id} value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="설명 (선택 사항)" />
+        )}
+      </Field>
       <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-        <button type="submit" className="krds-btn small primary" disabled={updateProject.isPending}>저장</button>
-        <button type="button" className="krds-btn small secondary" onClick={() => setEditing(false)}>취소</button>
+        <Button type="submit" variant="primary" size="sm" disabled={updateProject.isPending}>저장</Button>
+        <Button variant="secondary" size="sm" onClick={() => setEditing(false)}>취소</Button>
       </div>
     </form>
   )
@@ -246,98 +219,87 @@ function ProjectMembersTab({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       {project.is_owner && (
-        <form onSubmit={handleInvite} style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', marginBottom: 'var(--space-3)' }}>
-          <input
+        <form onSubmit={handleInvite} style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+          <Input
             type="email"
+            aria-label="초대할 이메일"
             value={inviteEmail}
             onChange={(e) => setInviteEmail(e.target.value)}
             placeholder="user@example.com"
-            className="krds-input"
             style={{ flex: '1 1 auto' }}
             required
           />
-          <select
-            className="krds-form-select"
+          <Select
+            aria-label="초대할 권한"
             style={{ flex: '0 0 128px', width: 128 }}
             value={inviteRole}
             onChange={(e) => setInviteRole(e.target.value as 'viewer' | 'editor')}
           >
             <option value="viewer">조회자</option>
             <option value="editor">편집자</option>
-          </select>
-          <button
+          </Select>
+          <Button
             type="submit"
-            className="krds-btn small primary"
+            variant="primary"
+            size="sm"
             disabled={inviteMember.isPending || !inviteEmail.trim()}
-            style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
+            icon={inviteMember.isPending
+              ? <Loader2 size={14} aria-hidden="true" style={{ animation: 'spin 1s linear infinite' }} />
+              : <UserPlus size={14} aria-hidden="true" />}
           >
-            {inviteMember.isPending
-              ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-              : <UserPlus size={14} />}
             초대
-          </button>
+          </Button>
         </form>
       )}
-      {inviteError && (
-        <p style={{ fontSize: 13, color: '#dc2626', marginBottom: 'var(--space-3)' }}>{inviteError}</p>
-      )}
-      <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 var(--space-3)', lineHeight: 1.6 }}>
+      {inviteError && <Alert tone="danger">{inviteError}</Alert>}
+      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', margin: 0, lineHeight: 1.6 }}>
         프로젝트 멤버는 이 프로젝트에 속한 모든 컬렉션·문서·채팅에 자동으로 접근합니다.
         특정 컬렉션에서 일부 멤버를 제외하려면 해당 컬렉션의 공유 설정에서 접근 범위를 제한하세요.
       </p>
-      <ul style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', margin: 0, padding: 0, listStyle: 'none' }}>
-        {memberData?.items.map((m) => (
-          <li
-            key={m.user_id}
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: 'var(--space-2) var(--space-3)', border: '1px solid #e2e8f0',
-              borderRadius: 'var(--radius-md)', background: '#fff',
-            }}
-          >
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 500 }}>{m.username || m.email}</div>
-              <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{m.email}</div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0 }}>
-              {confirmRemoveUserId === m.user_id ? (
-                <>
-                  <span style={{ fontSize: 12, color: '#dc2626', whiteSpace: 'nowrap' }}>제거할까요?</span>
-                  <button
-                    type="button"
-                    onClick={() => { removeMember.mutate({ projectId, userId: m.user_id }); setConfirmRemoveUserId(null) }}
-                    className="krds-btn xsmall primary"
-                  >확인</button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmRemoveUserId(null)}
-                    className="krds-btn xsmall secondary"
-                  >취소</button>
-                </>
-              ) : (
-                <>
-                  <span className="krds-badge xsmall bg-information">
-                    {m.role === 'owner' ? '소유자' : m.role === 'editor' ? '편집자' : '조회자'}
-                  </span>
+      <div className="ds-table-wrap">
+        <table className="ds-table ds-table--compact" aria-label="프로젝트 멤버">
+          <thead>
+            <tr>
+              <th scope="col">사용자</th>
+              <th scope="col">권한</th>
+              <th scope="col"><span className="sr-only">작업</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {memberData?.items.map((m) => (
+              <tr key={m.user_id}>
+                <td>
+                  {m.username || m.email}
+                  <span className="ds-cell-sub">{m.email}</span>
+                </td>
+                <td><Badge tone="info">{ROLE_LABELS[m.role] ?? m.role}</Badge></td>
+                <td>
                   {m.role !== 'owner' && project.is_owner && (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmRemoveUserId(m.user_id)}
-                      className="krds-btn text xsmall icon-btn"
-                      title="멤버 제거"
-                      aria-label="멤버 제거"
-                    >
-                      <UserMinus size={16} />
-                    </button>
+                    confirmRemoveUserId === m.user_id ? (
+                      <span style={{ display: 'inline-flex', gap: 'var(--space-2)', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>제거할까요?</span>
+                        <Button size="sm" variant="danger" onClick={() => {
+                          removeMember.mutate({ projectId, userId: m.user_id })
+                          setConfirmRemoveUserId(null)
+                        }}>
+                          확인
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmRemoveUserId(null)}>취소</Button>
+                      </span>
+                    ) : (
+                      <IconButton label="멤버 제거" tone="danger" onClick={() => setConfirmRemoveUserId(m.user_id)}>
+                        <UserMinus size={16} aria-hidden="true" />
+                      </IconButton>
+                    )
                   )}
-                </>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -377,12 +339,12 @@ function ProjectAiTab({ projectId }: { projectId: string }) {
   if (!project.is_owner) {
     return (
       <div>
-        <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-3)' }}>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', margin: '0 0 var(--space-3)' }}>
           이 프로젝트의 AI 지침은 소유자만 수정할 수 있습니다.
         </p>
         <pre style={{
-          margin: 0, padding: 'var(--space-3)', background: '#f8fafc', borderRadius: 'var(--radius-md)',
-          fontSize: 13, whiteSpace: 'pre-wrap', fontFamily: 'inherit',
+          margin: 0, padding: 'var(--space-3)', background: 'var(--color-surface-subtle)', borderRadius: 'var(--radius-md)',
+          fontSize: 'var(--text-sm)', whiteSpace: 'pre-wrap', fontFamily: 'inherit',
         }}>
           {project.system_prompt || defaultPrompt || '기본 지침을 사용합니다.'}
         </pre>
@@ -392,37 +354,28 @@ function ProjectAiTab({ projectId }: { projectId: string }) {
 
   return (
     <div>
-      <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-3)' }}>
-        이 프로젝트 안에서의 채팅에 사용할 AI 지침입니다. 비워두면 개인 지침 또는 기본 지침이 사용됩니다.
-      </p>
-      <textarea
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        rows={10}
-        placeholder={defaultPrompt}
-        className="krds-input small"
-        style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
-      />
+      <Field label="AI 지침" hint="이 프로젝트 안에서의 채팅에 사용할 AI 지침입니다. 비워두면 개인 지침 또는 기본 지침이 사용됩니다.">
+        {(id) => (
+          <Textarea
+            id={id}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            rows={10}
+            placeholder={defaultPrompt}
+            style={{ resize: 'vertical', lineHeight: 1.5 }}
+          />
+        )}
+      </Field>
       <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={setSystemPrompt.isPending}
-          className="krds-btn small primary"
-        >
-          {saved ? <Check size={14} /> : null}
+        <Button variant="primary" size="sm" onClick={handleSave} disabled={setSystemPrompt.isPending}
+          icon={saved ? <Check size={14} aria-hidden="true" /> : undefined}>
           저장
-        </button>
+        </Button>
         {!!project.system_prompt && (
-          <button
-            type="button"
-            onClick={handleReset}
-            disabled={setSystemPrompt.isPending}
-            className="krds-btn small text"
-          >
-            <RotateCcw size={14} />
+          <Button variant="ghost" size="sm" onClick={handleReset} disabled={setSystemPrompt.isPending}
+            icon={<RotateCcw size={14} aria-hidden="true" />}>
             기본값으로 초기화
-          </button>
+          </Button>
         )}
       </div>
 
@@ -454,70 +407,70 @@ function ProjectApiKeySection({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div style={{ marginTop: 'var(--space-6)', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--color-border)' }}>
+    <section style={{ marginTop: 'var(--space-6)', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--color-border)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
-        <KeyRound size={14} />
-        <span style={{ fontSize: 14, fontWeight: 600 }}>프로젝트 API 키</span>
+        <KeyRound size={14} aria-hidden="true" />
+        <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, margin: 0 }}>프로젝트 API 키</h3>
       </div>
-      <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-3)' }}>
+      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', margin: '0 0 var(--space-3)' }}>
         이 프로젝트에서만 사용되는 OpenAI / Anthropic API 키입니다. 등록하면 이 프로젝트의 멤버는
         개인 API 키가 없어도 프로젝트 채팅에서 해당 모델을 사용할 수 있습니다.
       </p>
 
-      {isLoading && <div className="krds-spinner" role="status"><span className="sr-only">로딩 중</span></div>}
+      {isLoading && <Spinner />}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
         {data?.items.map((item) => (
           <div
             key={item.provider}
-            style={{ border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)' }}
+            style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)' }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-2)' }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{API_KEY_PROVIDER_LABELS[item.provider] ?? item.provider}</span>
-              <span className={`krds-badge small ${item.registered ? 'bg-primary' : 'bg-secondary'}`}>
+              <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>{API_KEY_PROVIDER_LABELS[item.provider] ?? item.provider}</span>
+              <Badge tone={item.registered ? 'success' : 'neutral'} hasDot>
                 {item.registered ? '등록됨' : '미등록'}
-              </span>
+              </Badge>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-              <input
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+              <Input
                 type="password"
+                aria-label={`${API_KEY_PROVIDER_LABELS[item.provider] ?? item.provider} API 키`}
                 value={drafts[item.provider] || ''}
                 onChange={(e) => setDrafts((d) => ({ ...d, [item.provider]: e.target.value }))}
                 placeholder={item.registered ? '새 API 키로 교체...' : 'API 키 입력...'}
-                className="krds-input small"
+                controlSize="sm"
                 style={{ flex: '1 1 220px' }}
               />
-              <button
-                type="button"
+              <Button
+                size="sm"
+                variant="primary"
                 onClick={() => handleSave(item.provider)}
                 disabled={setApiKey.isPending || !(drafts[item.provider] || '').trim()}
-                className="krds-btn small primary"
+                icon={savedProvider === item.provider ? <Check size={14} aria-hidden="true" /> : undefined}
               >
-                {savedProvider === item.provider ? <Check size={14} /> : null}
                 저장
-              </button>
+              </Button>
               {item.registered && (
-                <button
-                  type="button"
+                <Button
+                  size="sm"
+                  variant="danger"
                   onClick={() => deleteApiKey.mutate({ projectId, provider: item.provider })}
                   disabled={deleteApiKey.isPending}
-                  className="krds-btn small text"
-                  style={{ color: '#dc2626' }}
+                  icon={<Trash2 size={14} aria-hidden="true" />}
                 >
-                  <Trash2 size={14} />
                   삭제
-                </button>
+                </Button>
               )}
             </div>
             {item.updated_at && (
-              <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 'var(--space-2) 0 0' }}>
+              <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', margin: 'var(--space-2) 0 0' }}>
                 마지막 업데이트: {new Date(item.updated_at).toLocaleString('ko-KR')}
               </p>
             )}
           </div>
         ))}
       </div>
-    </div>
+    </section>
   )
 }

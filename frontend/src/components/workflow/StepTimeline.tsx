@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import type { WorkflowRunStep } from '../../hooks/useWorkflows'
+import { Badge } from '../ui'
+import '../../styles/screens/pipeline.css'
 
 const STEP_STATUS_LABELS: Record<string, string> = {
   PENDING: '대기', RUNNING: '실행 중', COMPLETED: '완료', FAILED: '실패', SKIPPED: '건너뜀',
@@ -17,47 +19,49 @@ interface StepTimelineProps {
   renderStepActions?: (step: WorkflowRunStep) => ReactNode
 }
 
+function StepIcon({ status }: { status: string }) {
+  if (status === 'COMPLETED') return <CheckCircle2 size={14} className="wf-step__icon--success" aria-hidden="true" />
+  if (status === 'FAILED') return <XCircle size={14} className="wf-step__icon--danger" aria-hidden="true" />
+  if (status === 'PENDING' || status === 'RUNNING') {
+    return <Loader2 size={14} className="wf-step__icon--primary pipeline-spin" aria-hidden="true" />
+  }
+  return null
+}
+
 export default function StepTimeline({ steps, blockName, renderStepActions }: StepTimelineProps) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+    <div className="wf-steps">
       {steps.map((step) => {
         const output = step.output
           ? Object.fromEntries(Object.entries(step.output).filter(([k]) => k !== 'text' && k !== 'changes'))
           : null
         return (
-          <div key={step.id} style={{
-            padding: 'var(--space-2)', background: '#f8fafc', borderRadius: 'var(--radius-sm)',
-            display: 'flex', flexDirection: 'column', gap: 4,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 13 }}>
-              {step.status === 'COMPLETED' && <CheckCircle2 size={14} style={{ color: '#16a34a' }} />}
-              {step.status === 'FAILED' && <XCircle size={14} style={{ color: '#dc2626' }} />}
-              {(step.status === 'PENDING' || step.status === 'RUNNING') && (
-                <Loader2 size={14} style={{ animation: 'spin 1s linear infinite', color: '#2563eb' }} />
-              )}
-              <strong>{step.label ?? blockName?.(step.block_instance_id) ?? step.block_instance_id.slice(0, 8)}</strong>
-              <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                {STEP_STATUS_LABELS[step.status] ?? step.status}
+          <div key={step.id} className="wf-step">
+            <div className="wf-step__head">
+              <StepIcon status={step.status} />
+              <span className="wf-step__name">
+                {step.label ?? blockName?.(step.block_instance_id) ?? step.block_instance_id.slice(0, 8)}
               </span>
+              <span className="wf-step__status">{STEP_STATUS_LABELS[step.status] ?? step.status}</span>
               {step.cached && (
-                <span className="krds-badge xsmall bg-secondary" title="이전 실행 결과를 그대로 재사용함">캐시</span>
+                <Badge tone="neutral" title="이전 실행 결과를 그대로 재사용함">캐시</Badge>
               )}
               {renderStepActions && step.status === 'COMPLETED' && (
                 <span style={{ marginLeft: 'auto' }}>{renderStepActions(step)}</span>
               )}
             </div>
             {step.error_message && (
-              <div style={{ fontSize: 12, color: '#b91c1c' }}>{step.error_message}</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>{step.error_message}</div>
             )}
             {!!step.warnings?.length && (
-              <div style={{ fontSize: 12, color: '#b45309' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-warning-text)' }}>
                 {step.warnings.join(' · ')}
               </div>
             )}
             {output && Object.keys(output).length > 0 && (
               <pre style={{
-                margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                color: '#475569', maxHeight: 120, overflow: 'auto',
+                margin: 0, fontSize: 'var(--text-xs)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                color: 'var(--color-text-secondary)', maxHeight: 120, overflow: 'auto', fontFamily: 'var(--font-mono)',
               }}>
                 {JSON.stringify(output, null, 2)}
               </pre>
@@ -65,7 +69,6 @@ export default function StepTimeline({ steps, blockName, renderStepActions }: St
           </div>
         )
       })}
-      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
   )
 }

@@ -5,31 +5,28 @@ import { useProfile, useUpdateProfile, useChangePassword, useSetSystemPrompt } f
 import { useChatModels } from '../hooks/useChat'
 import { useAuthStore } from '../store/authStore'
 import AccessTokenSection from '../components/settings/AccessTokenSection'
+import { ROLE_LABELS } from '../lib/roleLabels'
+import {
+  Alert, Badge, Button, Card, DescriptionList, Field, Input, Page, PageBody, PageHeader, Textarea,
+} from '../components/ui'
+import '../styles/screens/user.css'
 
 const PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
 }
 
-const ROLE_LABELS: Record<string, string> = {
-  admin: '관리자',
-  editor: '편집자',
-  viewer: '조회자',
-}
 
 function SectionCard({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div style={{
-      background: '#fff', border: '1px solid #e2e8f0',
-      borderRadius: 'var(--radius-md)', padding: 'var(--space-4)',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-3)' }}>
-        {icon}
-        <span style={{ fontWeight: 600 }}>{title}</span>
-      </div>
+    <Card title={<span className="user-settings__card-title">{icon}{title}</span>}>
       {children}
-    </div>
+    </Card>
   )
+}
+
+function Loading() {
+  return <div className="user-spinner" role="status"><span className="sr-only">로딩 중</span></div>
 }
 
 function ProfileSection() {
@@ -56,47 +53,35 @@ function ProfileSection() {
   }
 
   if (isLoading || !profile) {
-    return <div className="krds-spinner" role="status"><span className="sr-only">로딩 중</span></div>
+    return <Loading />
   }
 
   return (
     <SectionCard title="프로필" icon={<UserIcon size={16} />}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-        <div>
-          <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 4px' }}>이메일</p>
-          <p style={{ margin: 0, fontSize: 14 }}>{profile.email}</p>
-        </div>
+      <div className="user-settings__stack">
+        <DescriptionList items={[
+          { key: 'email', term: '이메일', detail: profile.email },
+          { key: 'role', term: '역할', detail: ROLE_LABELS[profile.role] ?? profile.role },
+          { key: 'created', term: '가입일', detail: new Date(profile.created_at).toLocaleDateString('ko-KR') },
+        ]} />
 
-        <div>
-          <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 4px' }}>이름</p>
-          <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="krds-input small"
-              style={{ flex: '1 1 260px' }}
-            />
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={updateProfile.isPending || !username.trim() || username.trim() === profile.username}
-              className="krds-btn small primary"
-            >
-              {saved ? <Check size={14} /> : null}
-              저장
-            </button>
+        <div className="user-settings__row">
+          <div className="user-settings__grow">
+            <Field label="이름">
+              {(id) => (
+                <Input id={id} controlSize="sm" value={username} onChange={(e) => setUsername(e.target.value)} />
+              )}
+            </Field>
           </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 'var(--space-6)' }}>
-          <div>
-            <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 4px' }}>역할</p>
-            <p style={{ margin: 0, fontSize: 14 }}>{ROLE_LABELS[profile.role] ?? profile.role}</p>
-          </div>
-          <div>
-            <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 4px' }}>가입일</p>
-            <p style={{ margin: 0, fontSize: 14 }}>{new Date(profile.created_at).toLocaleDateString('ko-KR')}</p>
-          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleSave}
+            disabled={updateProfile.isPending || !username.trim() || username.trim() === profile.username}
+            icon={saved ? <Check size={14} /> : undefined}
+          >
+            저장
+          </Button>
         </div>
       </div>
     </SectionCard>
@@ -133,43 +118,43 @@ function PasswordSection() {
 
   return (
     <SectionCard title="비밀번호 변경" icon={<Lock size={16} />}>
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', maxWidth: 320 }}>
-        <input
+      <form onSubmit={handleSubmit} className="user-settings__stack user-settings__stack--narrow">
+        <Input
           type="password"
+          controlSize="sm"
           value={currentPassword}
           onChange={(e) => setCurrentPassword(e.target.value)}
           placeholder="현재 비밀번호"
-          className="krds-input small"
+          aria-label="현재 비밀번호"
         />
-        <input
+        <Input
           type="password"
+          controlSize="sm"
           value={newPassword}
           onChange={(e) => setNewPassword(e.target.value)}
           placeholder="새 비밀번호 (8자 이상)"
-          className="krds-input small"
+          aria-label="새 비밀번호"
         />
-        <input
+        <Input
           type="password"
+          controlSize="sm"
           value={confirmPassword}
           onChange={(e) => setConfirmPassword(e.target.value)}
           placeholder="새 비밀번호 확인"
-          className="krds-input small"
+          aria-label="새 비밀번호 확인"
         />
-        {mismatch && (
-          <p style={{ fontSize: 12, color: '#dc2626', margin: 0 }}>새 비밀번호가 일치하지 않습니다.</p>
-        )}
-        {changePassword.isError && (
-          <p style={{ fontSize: 12, color: '#dc2626', margin: 0 }}>현재 비밀번호가 일치하지 않습니다.</p>
-        )}
-        <button
+        {mismatch && <Alert tone="danger">새 비밀번호가 일치하지 않습니다.</Alert>}
+        {changePassword.isError && <Alert tone="danger">현재 비밀번호가 일치하지 않습니다.</Alert>}
+        <Button
           type="submit"
+          variant="primary"
+          size="sm"
           disabled={!canSubmit || changePassword.isPending}
-          className="krds-btn small primary"
-          style={{ alignSelf: 'flex-start' }}
+          className="user-settings__submit"
+          icon={saved ? <Check size={14} /> : undefined}
         >
-          {saved ? <Check size={14} /> : null}
           변경
-        </button>
+        </Button>
       </form>
     </SectionCard>
   )
@@ -207,41 +192,45 @@ function SystemPromptSection() {
   }
 
   if (profileLoading || !profile) {
-    return <div className="krds-spinner" role="status"><span className="sr-only">로딩 중</span></div>
+    return <Loading />
   }
 
   return (
     <SectionCard title="시스템 프롬프트" icon={<Bot size={16} />}>
-      <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-3)' }}>
+      <p className="user-settings__muted">
         AI 답변 생성 시 사용할 지침을 직접 지정할 수 있습니다. 비워두면 기본 지침이 사용됩니다.
       </p>
-      <textarea
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        rows={14}
-        className="krds-input small"
-        style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
-      />
-      <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
-        <button
-          type="button"
+      <Field label="지침 내용">
+        {(id) => (
+          <Textarea
+            id={id}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            rows={14}
+            className="user-settings__prompt"
+          />
+        )}
+      </Field>
+      <div className="user-settings__actions">
+        <Button
+          variant="primary"
+          size="sm"
           onClick={handleSave}
           disabled={setSystemPrompt.isPending || !value.trim()}
-          className="krds-btn small primary"
+          icon={saved ? <Check size={14} /> : undefined}
         >
-          {saved ? <Check size={14} /> : null}
           저장
-        </button>
+        </Button>
         {!!profile.system_prompt && (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={handleReset}
             disabled={setSystemPrompt.isPending}
-            className="krds-btn small text"
+            icon={<RotateCcw size={14} />}
           >
-            <RotateCcw size={14} />
             기본값으로 초기화
-          </button>
+          </Button>
         )}
       </div>
     </SectionCard>
@@ -272,63 +261,60 @@ function ApiKeySection() {
 
   return (
     <SectionCard title="AI 답변 API 키" icon={<KeyRound size={16} />}>
-      <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: '0 0 var(--space-4)' }}>
+      <p className="user-settings__muted user-settings__intro">
         AI 답변 기능에서 사용할 OpenAI / Anthropic API 키를 등록합니다. 키는 암호화되어 저장되며,
         본인 계정의 답변 생성 요청에만 사용됩니다. 로컬 모델(Qwen)은 키 등록 없이 바로 사용할 수
         있습니다.
       </p>
 
-      {isLoading && <div className="krds-spinner" role="status"><span className="sr-only">로딩 중</span></div>}
+      {isLoading && <Loading />}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+      <div className="user-settings__stack">
         {data?.items.map((item) => (
-          <div
-            key={item.provider}
-            style={{
-              border: '1px solid #e2e8f0',
-              borderRadius: 'var(--radius-md)', padding: 'var(--space-3)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-2)' }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{PROVIDER_LABELS[item.provider] ?? item.provider}</span>
-              <span className={`krds-badge small ${item.registered ? 'bg-primary' : 'bg-secondary'}`}>
+          <div key={item.provider} className="user-settings__key">
+            <div className="user-settings__key-head">
+              <span className="user-settings__key-name">{PROVIDER_LABELS[item.provider] ?? item.provider}</span>
+              <Badge tone={item.registered ? 'info' : 'neutral'} hasDot>
                 {item.registered ? '등록됨' : '미등록'}
-              </span>
+              </Badge>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-              <input
-                type="password"
-                value={drafts[item.provider] || ''}
-                onChange={(e) => setDrafts((d) => ({ ...d, [item.provider]: e.target.value }))}
-                placeholder={item.registered ? '새 API 키로 교체...' : 'API 키 입력...'}
-                className="krds-input small"
-                style={{ flex: '1 1 220px' }}
-              />
-              <button
-                type="button"
+            <div className="user-settings__row">
+              <Field label={`${PROVIDER_LABELS[item.provider] ?? item.provider} API 키`}>
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="password"
+                    controlSize="sm"
+                    value={drafts[item.provider] || ''}
+                    onChange={(e) => setDrafts((d) => ({ ...d, [item.provider]: e.target.value }))}
+                    placeholder={item.registered ? '새 API 키로 교체...' : 'API 키 입력...'}
+                  />
+                )}
+              </Field>
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={() => handleSave(item.provider)}
                 disabled={setApiKey.isPending || !(drafts[item.provider] || '').trim()}
-                className="krds-btn small primary"
+                icon={savedProvider === item.provider ? <Check size={14} /> : undefined}
               >
-                {savedProvider === item.provider ? <Check size={14} /> : null}
                 저장
-              </button>
+              </Button>
               {item.registered && (
-                <button
-                  type="button"
+                <Button
+                  variant="danger"
+                  size="sm"
                   onClick={() => deleteApiKey.mutate(item.provider)}
                   disabled={deleteApiKey.isPending}
-                  className="krds-btn small text"
-                  style={{ color: '#dc2626' }}
+                  icon={<Trash2 size={14} />}
                 >
-                  <Trash2 size={14} />
                   삭제
-                </button>
+                </Button>
               )}
             </div>
             {item.updated_at && (
-              <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 'var(--space-2) 0 0' }}>
+              <p className="user-settings__muted user-settings__updated">
                 마지막 업데이트: {new Date(item.updated_at).toLocaleString('ko-KR')}
               </p>
             )}
@@ -342,7 +328,7 @@ function ApiKeySection() {
 type SettingsTab = 'ai' | 'account' | 'agent'
 
 const TABS: { key: SettingsTab; label: string }[] = [
-  { key: 'account', label: '계정관리' },
+  { key: 'account', label: '계정 관리' },
   { key: 'ai', label: 'AI 관리' },
   { key: 'agent', label: '외부 에이전트' },
 ]
@@ -351,49 +337,42 @@ export default function SettingsPage() {
   const [tab, setTab] = useState<SettingsTab>('account')
 
   return (
-    <div>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 'var(--space-6)' }}>설정</h1>
+    <Page>
+      <PageHeader title="설정" />
 
-      <div style={{ display: 'flex', gap: 'var(--space-8)', alignItems: 'flex-start' }}>
-        <nav style={{ width: 180, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              style={{
-                background: tab === t.key ? '#eff6ff' : 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                textAlign: 'left',
-                borderRadius: 'var(--radius-md, 8px)',
-                padding: '10px 12px',
-                fontSize: 14,
-                color: tab === t.key ? '#1d4ed8' : '#475569',
-                fontWeight: tab === t.key ? 600 : 500,
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
+      <PageBody>
+        <div className="user-settings">
+          <nav className="user-settings__nav" aria-label="설정 메뉴">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTab(t.key)}
+                aria-current={tab === t.key ? 'page' : undefined}
+                className={`user-settings__nav-item${tab === t.key ? ' is-active' : ''}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
 
-        <div style={{ flex: '1 1 auto', maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-          {tab === 'ai' && (
-            <>
-              <SystemPromptSection />
-              <ApiKeySection />
-            </>
-          )}
-          {tab === 'agent' && <AccessTokenSection />}
-          {tab === 'account' && (
-            <>
-              <ProfileSection />
-              <PasswordSection />
-            </>
-          )}
+          <div className="user-settings__content">
+            {tab === 'ai' && (
+              <>
+                <SystemPromptSection />
+                <ApiKeySection />
+              </>
+            )}
+            {tab === 'agent' && <AccessTokenSection />}
+            {tab === 'account' && (
+              <>
+                <ProfileSection />
+                <PasswordSection />
+              </>
+            )}
+          </div>
         </div>
-      </div>
-    </div>
+      </PageBody>
+    </Page>
   )
 }

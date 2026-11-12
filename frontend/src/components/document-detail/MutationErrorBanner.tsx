@@ -17,22 +17,22 @@ export default function MutationErrorBanner({ failures }: { failures: MutationFa
     <div
       role="alert"
       style={{
-        marginBottom: 'var(--space-4)', padding: 'var(--space-3) var(--space-4)', background: '#fef2f2',
-        border: '1px solid #fecaca', borderRadius: 'var(--radius-md)', display: 'flex',
+        marginBottom: 'var(--space-4)', padding: 'var(--space-3) var(--space-4)', background: 'var(--color-danger-bg)',
+        border: '1px solid var(--color-danger-border)', borderRadius: 'var(--radius-md)', display: 'flex',
         flexDirection: 'column', gap: 'var(--space-2)',
       }}
     >
       {failures.map((failure) => (
         <div key={failure.label} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <AlertTriangle size={16} style={{ color: '#dc2626', flexShrink: 0 }} aria-hidden="true" />
-          <span style={{ flex: 1, fontSize: 13, color: '#991b1b' }}>
+          <AlertTriangle size={16} style={{ color: 'var(--color-danger)', flexShrink: 0 }} aria-hidden="true" />
+          <span style={{ flex: 1, fontSize: 13, color: 'var(--color-danger)' }}>
             {failure.label}에 실패했습니다. 잠시 후 다시 시도하세요.
           </span>
           <button
             type="button"
             onClick={failure.onDismiss}
             aria-label={`${failure.label} 오류 닫기`}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#991b1b', display: 'inline-flex' }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-danger)', display: 'inline-flex' }}
           >
             <X size={14} aria-hidden="true" />
           </button>

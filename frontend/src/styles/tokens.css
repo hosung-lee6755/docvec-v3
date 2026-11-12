@@ -1,0 +1,132 @@
+/* 디자인 토큰 — 색, 글자, 간격, 모서리, 그림자의 단일 출처(v3 마일스톤 8).
+   시안: 새 색상 조합(https://claude.ai/artifact/E8c1bgYHGKydYKqtEe2iaQ).
+   글자색은 모두 흰 바탕 대비 4.5:1 이상이다. 기존 이름(--color-text-muted 등)은 그대로 두고
+   값만 바꿔, 예전 화면 코드도 새 색을 따르게 한다. */
+:root {
+  /* 바탕과 면 */
+  --color-bg: #f5f6f8;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #fbfbfc;
+  --color-surface-muted: #f1f3f6;
+  --color-border: #dfe3e9;
+  --color-border-subtle: #edf0f3;
+  --color-border-strong: #cdd2da;
+
+  /* 글자 */
+  --color-text: #151a23;
+  --color-text-secondary: #4a5260;
+  --color-text-muted: #5a6270;
+  --color-text-subtle: #687080;
+  --color-text-disabled: #a3aab5;
+  --color-text-inverse: #ffffff;
+
+  /* 주 색: 버튼, 선택, 링크, 인용 번호 */
+  --color-primary: #1f56c7;
+  --color-primary-hover: #1a4aae;
+  --color-primary-pressed: #17439c;
+  --color-primary-subtle: #edf2fc;
+  --color-primary-border: #c9d7f5;
+  --color-ink: #12213f;
+  --color-ink-border: #3a4b6e;
+  /* 예전 이름 */
+  --color-accent: var(--color-primary);
+  --color-accent-hover: var(--color-primary-hover);
+
+  /* 상태: 글자, 바탕, 점, 테두리 */
+  --color-success: #146c43;
+  --color-success-bg: #e7f5ee;
+  --color-success-dot: #1a8a55;
+  --color-success-border: #9cd6b9;
+  --color-warning: #8f4f00;
+  --color-warning-bg: #fff3dc;
+  --color-warning-dot: #c47700;
+  --color-warning-border: #fdd382;
+  --color-danger: #b42318;
+  --color-danger-bg: #fdecea;
+  --color-danger-dot: #d1362a;
+  --color-danger-border: #f5b3ab;
+  --color-danger-pressed: #912018;
+  /* 짙은 남색 막대(일괄 작업) 위의 위험 글자 */
+  --color-danger-on-ink: #ffb4ab;
+  --color-info: var(--color-primary);
+  --color-info-bg: var(--color-primary-subtle);
+  --color-info-border: var(--color-primary-border);
+  --color-neutral: #4a5260;
+  --color-neutral-bg: #eef0f3;
+  --color-neutral-dot: #8a92a0;
+
+  /* 행 강조(관리 화면의 문제 행) */
+  --color-row-selected: #edf2fc;
+  --color-row-warning: #fffaf0;
+  --color-row-danger: #fff6f5;
+  --color-row-hover: #f7f8fa;
+
+  /* 보안등급: 상태 색과 다른 계열. 등급이 높을수록 진하다 */
+  --color-level-public: #4a5260;
+  --color-level-public-bg: #ffffff;
+  --color-level-public-border: #dfe3e9;
+  --color-level-internal: #2f4a6e;
+  --color-level-internal-bg: #f0f3f8;
+  --color-level-internal-border: #cdd6e4;
+  --color-level-confidential: #7a2560;
+  --color-level-confidential-bg: #f8eef5;
+  --color-level-confidential-border: #e3c8dc;
+
+  /* 근거 형광 */
+  --color-highlight: #fff3c4;
+
+  /* 예전 이름(설정 화면 일부가 쓴다) */
+  --color-warning-text: var(--color-warning);
+
+  /* 글자 */
+  --font-sans: 'Pretendard GOV', 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Malgun Gothic', sans-serif;
+  /* 한글 글꼴로 넘어가면 역슬래시가 ₩로 보이므로(UNC 경로 등) Consolas를 먼저 둔다. */
+  --font-mono: Consolas, 'SFMono-Regular', Menlo, ui-monospace, 'D2Coding', monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --leading-tight: 1.35;
+  --leading-normal: 1.55;
+
+  /* 간격 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* 모서리 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* 높이 */
+  --control-h-sm: 28px;
+  --control-h-md: 32px;
+  --control-h-lg: 36px;
+
+  /* 그림자와 초점 */
+  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.16), 0 4px 8px rgba(16, 24, 40, 0.06);
+  --focus-ring: 0 0 0 3px rgba(31, 86, 199, 0.28);
+
+  /* 움직임 */
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* 레이아웃 */
+  --sidebar-w: 240px;
+}

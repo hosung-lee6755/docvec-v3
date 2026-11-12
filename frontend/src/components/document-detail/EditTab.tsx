@@ -50,7 +50,7 @@ export default function EditTab({
 
   if (isContentError) {
     return (
-      <p style={{ color: '#dc2626', fontSize: 13, margin: 0 }}>
+      <p style={{ color: 'var(--color-danger)', fontSize: 13, margin: 0 }}>
         본문을 불러오는 중 오류가 발생했습니다.
       </p>
     )
@@ -109,7 +109,7 @@ export default function EditTab({
           <button
             type="button"
             onClick={() => onActivateTab('structure')}
-            className="krds-btn text small"
+            className="ds-btn ds-btn--ghost ds-btn--sm"
             style={{ cursor: 'pointer', alignSelf: 'flex-start', padding: 0 }}
           >
             구조 탭에서 전체 보기
@@ -124,7 +124,7 @@ export default function EditTab({
           {(revisionsResult?.revisions ?? []).map((rev, i) => (
             <div key={rev.id} style={{
               display: 'flex', gap: 10, alignItems: 'center',
-              border: '1px solid #e2e8f0', borderRadius: 6, padding: '6px 10px',
+              border: '1px solid var(--color-border)', borderRadius: 6, padding: '6px 10px',
             }}>
               <span style={{ flexShrink: 0, fontWeight: 600 }}>
                 {REVISION_SOURCE_LABELS[rev.source] ?? rev.source}
@@ -146,7 +146,7 @@ export default function EditTab({
                     }
                   }}
                   disabled={restoreRevision.isPending}
-                  className="krds-btn secondary small"
+                  className="ds-btn ds-btn--secondary ds-btn--sm"
                   style={{ flexShrink: 0, cursor: 'pointer' }}
                 >
                   복원
@@ -165,8 +165,8 @@ export default function EditTab({
       {showJson ? (
         <pre style={{
           flex: 1, minHeight: 0, overflow: 'auto', fontSize: 12, lineHeight: 1.6,
-          fontFamily: 'monospace', color: '#1e2124', background: '#f8fafc',
-          border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)',
+          fontFamily: 'var(--font-mono)', color: 'var(--color-text)', background: 'var(--color-surface-subtle)',
+          border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)',
           padding: 'var(--space-3)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0,
         }}>
           {toBlocksJson(editedContent)}
@@ -174,18 +174,18 @@ export default function EditTab({
       ) : (
         <div className="textarea-wrap" style={{ flex: 1, minHeight: 0 }}>
           <textarea
-            className="krds-input"
+            className="ds-input"
             value={editedContent}
             onChange={(e) => onEditedContentChange(e.target.value)}
             style={{
               width: '100%', height: '100%', boxSizing: 'border-box', fontSize: 13, lineHeight: 1.7,
-              fontFamily: 'inherit', color: '#1e2124', resize: 'none',
+              fontFamily: 'inherit', color: 'var(--color-text)', resize: 'none',
             }}
           />
         </div>
       )}
       {reprocess.isError && (
-        <p style={{ color: '#dc2626', fontSize: 13, marginTop: 'var(--space-3)', flexShrink: 0 }}>
+        <p style={{ color: 'var(--color-danger)', fontSize: 13, marginTop: 'var(--space-3)', flexShrink: 0 }}>
           재처리를 시작하지 못했습니다.
         </p>
       )}

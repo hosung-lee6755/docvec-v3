@@ -45,44 +45,44 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>탐지 {detections.length}건</p>
-      <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)' }}>
+      <div style={{ overflowX: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
-            <tr style={{ background: '#f8fafc' }}>
+            <tr style={{ background: 'var(--color-surface-subtle)' }}>
               {[
                 '유형', '탐지 값(마스킹)', '위치', '신뢰도', '조치', '승인',
                 ...(isAdmin ? ['원문'] : []),
               ].map((h) => (
-                <th key={h} style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>{h}</th>
+                <th key={h} style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid var(--color-border)' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {detections.map((d) => (
               <tr key={d.id}>
-                <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>{d.entity_type}</td>
-                <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', fontFamily: 'monospace' }}>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)' }}>{d.entity_type}</td>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)', fontFamily: 'var(--font-mono)' }}>
                   {d.masked_value ?? '-'}
                 </td>
-                <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', color: 'var(--color-text-muted)' }}>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)', color: 'var(--color-text-muted)' }}>
                   {d.page_number != null ? `${d.page_number}페이지` : '-'}
                 </td>
-                <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)' }}>
                   {d.confidence != null ? d.confidence.toFixed(2) : '-'}
                 </td>
-                <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)' }}>
                   {PII_ACTION_LABELS[d.action] ?? d.action}
                 </td>
-                <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                  {d.approved_by && <span className="krds-badge xsmall bg-success">승인됨</span>}
-                  {!d.approved_by && d.rejected && <span className="krds-badge xsmall bg-gray">해제됨</span>}
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)' }}>
+                  {d.approved_by && <span className="ds-badge ds-badge--success">승인됨</span>}
+                  {!d.approved_by && d.rejected && <span className="ds-badge ds-badge--neutral">해제됨</span>}
                   {!d.approved_by && !d.rejected && (
                     <span style={{ display: 'flex', gap: 4 }}>
                       <button
                         type="button"
                         onClick={() => approve.mutate({ documentId, detectionId: d.id })}
                         disabled={approve.isPending || reject.isPending}
-                        className="krds-btn text xsmall"
+                        className="ds-btn ds-btn--ghost ds-btn--sm"
                         style={{ cursor: 'pointer' }}
                       >
                         승인
@@ -91,7 +91,7 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
                         type="button"
                         onClick={() => reject.mutate({ documentId, detectionId: d.id })}
                         disabled={approve.isPending || reject.isPending}
-                        className="krds-btn text xsmall"
+                        className="ds-btn ds-btn--ghost ds-btn--sm"
                         style={{ cursor: 'pointer' }}
                       >
                         해제
@@ -100,18 +100,18 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
                   )}
                 </td>
                 {isAdmin && (
-                  <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)' }}>
                     <button
                       type="button"
                       onClick={() => handleReveal(d.id)}
                       disabled={reveal.isPending}
-                      className="krds-btn text xsmall"
+                      className="ds-btn ds-btn--ghost ds-btn--sm"
                       style={{ cursor: 'pointer' }}
                     >
                       {revealed[d.id] != null ? '숨기기' : '원문 보기'}
                     </button>
                     {revealed[d.id] != null && (
-                      <div style={{ marginTop: 4, fontFamily: 'monospace', fontSize: 11, color: '#dc2626' }}>
+                      <div style={{ marginTop: 4, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--color-danger)' }}>
                         {revealed[d.id]}
                       </div>
                     )}

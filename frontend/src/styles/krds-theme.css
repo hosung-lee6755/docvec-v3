@@ -1,0 +1,226 @@
+/* KRDS를 새 디자인 체계에 맞춘다(v3 마일스톤 8). krds.min.css 다음에 읽어야 한다(main.tsx).
+   KRDS 파일은 고치지 않고, KRDS가 쓰는 기본 단계 변수와 크기 변수를 다시 정의한다.
+   그래서 krds-btn, krds-badge, krds-input 같은 기존 클래스도 새 색과 밀도를 따른다. */
+
+/* 글꼴: KRDS에 들어 있는 Pretendard GOV를 직접 싣는다(외부 글꼴 서버 없음). */
+@font-face {
+  font-family: 'Pretendard GOV';
+  font-weight: 400;
+  font-display: swap;
+  src: url('../../node_modules/krds-uiux/resources/fonts/PretendardGOV-Regular.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Pretendard GOV';
+  font-weight: 500;
+  font-display: swap;
+  src: url('../../node_modules/krds-uiux/resources/fonts/PretendardGOV-Medium.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Pretendard GOV';
+  font-weight: 600 700;
+  font-display: swap;
+  src: url('../../node_modules/krds-uiux/resources/fonts/PretendardGOV-Bold.subset.woff2') format('woff2');
+}
+
+:root {
+  /* 주 색 단계 */
+  --krds-color-light-primary-5: #f4f7fd;
+  --krds-color-light-primary-10: #edf2fc;
+  --krds-color-light-primary-20: #c9d7f5;
+  --krds-color-light-primary-30: #9db6ec;
+  --krds-color-light-primary-40: #6c8fdf;
+  --krds-color-light-primary-50: #1f56c7;
+  --krds-color-light-primary-60: #1a4aae;
+  --krds-color-light-primary-70: #17439c;
+  --krds-color-light-primary-80: #12357a;
+  --krds-color-light-primary-90: #0d2754;
+  --krds-color-light-primary-95: #081733;
+
+  /* 회색 단계 */
+  --krds-color-light-gray-0: #ffffff;
+  --krds-color-light-gray-5: #f5f6f8;
+  --krds-color-light-gray-10: #edf0f3;
+  --krds-color-light-gray-20: #dfe3e9;
+  --krds-color-light-gray-30: #cdd2da;
+  --krds-color-light-gray-40: #a3aab5;
+  --krds-color-light-gray-50: #8a92a0;
+  --krds-color-light-gray-60: #687080;
+  --krds-color-light-gray-70: #4a5260;
+  --krds-color-light-gray-80: #343b47;
+  --krds-color-light-gray-90: #1e242e;
+  --krds-color-light-gray-95: #151a23;
+  --krds-color-light-gray-100: #0b0e13;
+
+  /* 상태 단계 */
+  --krds-color-light-danger-5: #fdecea;
+  --krds-color-light-danger-10: #fbd9d5;
+  --krds-color-light-danger-20: #f5b3ab;
+  --krds-color-light-danger-30: #ee8a7f;
+  --krds-color-light-danger-40: #e35f52;
+  --krds-color-light-danger-50: #d1362a;
+  --krds-color-light-danger-60: #b42318;
+  --krds-color-light-danger-70: #912018;
+  --krds-color-light-danger-80: #6e1a14;
+  --krds-color-light-danger-90: #4a120e;
+  --krds-color-light-danger-95: #2e0b08;
+
+  --krds-color-light-warning-5: #fff3dc;
+  --krds-color-light-warning-10: #ffe7b8;
+  --krds-color-light-warning-20: #fdd382;
+  --krds-color-light-warning-30: #f5b544;
+  --krds-color-light-warning-40: #e09a1a;
+  --krds-color-light-warning-50: #c47700;
+  --krds-color-light-warning-60: #8f4f00;
+  --krds-color-light-warning-70: #74400a;
+  --krds-color-light-warning-80: #57300a;
+  --krds-color-light-warning-90: #3a2007;
+  --krds-color-light-warning-95: #241404;
+
+  --krds-color-light-success-5: #e7f5ee;
+  --krds-color-light-success-10: #cdebdc;
+  --krds-color-light-success-20: #9cd6b9;
+  --krds-color-light-success-30: #67be93;
+  --krds-color-light-success-40: #36a473;
+  --krds-color-light-success-50: #1a8a55;
+  --krds-color-light-success-60: #146c43;
+  --krds-color-light-success-70: #105636;
+  --krds-color-light-success-80: #0c4129;
+  --krds-color-light-success-90: #082b1b;
+  --krds-color-light-success-95: #041a10;
+
+  --krds-color-light-information-5: #f4f7fd;
+  --krds-color-light-information-10: #edf2fc;
+  --krds-color-light-information-20: #c9d7f5;
+  --krds-color-light-information-30: #9db6ec;
+  --krds-color-light-information-40: #6c8fdf;
+  --krds-color-light-information-50: #1f56c7;
+  --krds-color-light-information-60: #1a4aae;
+  --krds-color-light-information-70: #17439c;
+  --krds-color-light-information-80: #12357a;
+  --krds-color-light-information-90: #0d2754;
+  --krds-color-light-information-95: #081733;
+
+  /* 보조 버튼은 파란 외곽선 대신 흰 바탕에 회색 테두리 */
+  --krds-light-color-button-secondary-border: var(--krds-color-light-gray-20);
+  --krds-light-color-button-secondary-fill: var(--krds-color-light-gray-0);
+  --krds-light-color-button-secondary-fill-hover: var(--krds-color-light-gray-5);
+  --krds-light-color-button-secondary-fill-pressed: var(--krds-color-light-gray-10);
+
+  --krds-typo-font-type: 'Pretendard GOV';
+}
+
+/* 밀도: KRDS 기본(32~56px)보다 조밀하게. html 접두로 특이도만 올린다 */
+html .krds-btn {
+  --krds-button--size-height-xsmall: var(--control-h-sm);
+  --krds-button--size-height-small: var(--control-h-md);
+  --krds-button--size-height-medium: var(--control-h-lg);
+  --krds-button--size-height-large: 40px;
+  --krds-button--padding-x-xsmall: 10px;
+  --krds-button--padding-x-small: 12px;
+  --krds-button--padding-x-medium: 14px;
+  --krds-button--padding-x-large: 16px;
+  --krds-button--pc-font-size-xsmall: var(--text-sm);
+  --krds-button--pc-font-size-small: var(--text-sm);
+  --krds-button--pc-font-size-medium: var(--text-base);
+  --krds-button--pc-font-size-large: var(--text-base);
+  --krds-button--radius-xsmall: var(--radius-sm);
+  --krds-button--radius-small: var(--radius-md);
+  --krds-button--radius-medium: var(--radius-md);
+  --krds-button--radius-large: var(--radius-md);
+  --krds-button--font-weight-small: var(--weight-medium);
+  --krds-button--font-weight-medium: var(--weight-medium);
+  --krds-button--font-weight-large: var(--weight-medium);
+  font-family: var(--font-sans);
+  transition: background-color var(--duration-fast), border-color var(--duration-fast), color var(--duration-fast);
+}
+html .krds-btn.secondary {
+  color: var(--color-text);
+}
+html .krds-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* 브라우저 기본 monospace는 한글 고정폭 글꼴로 넘어가 역슬래시를 ₩로 그린다(UNC 경로 등). */
+html :is(code, kbd, samp, pre) {
+  font-family: var(--font-mono);
+}
+/* KRDS의 전역 :focus 규칙은 마우스로 누른 단추와 링크에도 두꺼운 테두리를 남긴다.
+   키보드로 옮긴 초점(:focus-visible)에서만 테두리가 보이게 한다. */
+html :is(button, a, summary, [role='tab'], [role='button']):focus:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+html .krds-input,
+html .krds-form-select {
+  height: var(--control-h-lg);
+  min-height: var(--control-h-lg);
+  padding: 0 var(--space-3);
+  font-size: var(--text-base);
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  border-radius: var(--radius-md);
+  border-color: var(--color-border);
+}
+html .krds-form-select {
+  padding-right: 32px;
+}
+html textarea.krds-input {
+  height: auto;
+  padding: var(--space-2) var(--space-3);
+  line-height: var(--leading-normal);
+}
+html .krds-input:focus,
+html .krds-form-select:focus {
+  border-color: var(--color-primary);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+html .krds-badge {
+  font-size: var(--text-xs);
+  border-radius: var(--radius-sm);
+}
+
+html .krds-modal .modal-content,
+html .krds-modal .modal-dialog {
+  border-radius: var(--radius-lg);
+}
+
+/* KRDS는 자기 표식(.krds-form-check)을 그리려고 모든 기본 체크박스와 라디오를 1px로 숨긴다(!important).
+   화면 코드는 이제 KRDS 표식을 쓰지 않으므로 기본 입력을 다시 보이게 하고 주 색을 입힌다. */
+html input[type='checkbox'],
+html input[type='radio'] {
+  position: static !important;
+  width: 16px !important;
+  height: 16px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  clip: auto !important;
+  white-space: normal !important;
+  flex-shrink: 0;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+  vertical-align: middle;
+}
+html input[type='checkbox']:disabled,
+html input[type='radio']:disabled { cursor: not-allowed; }
+html input[type='checkbox']:focus-visible,
+html input[type='radio']:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* KRDS는 모든 table에 table-layout:fixed를 걸어 열 폭을 똑같이 나눈다. 그러면 줄바꿈하지 않는 칸(날짜 등)이
+   옆 칸으로 넘쳐 겹친다. 내용에 맞게 폭을 나누도록 되돌린다. */
+html table { table-layout: auto; }
+
+/* KRDS는 legend를 caption, hr과 함께 화면에서 숨긴다(sr-only). 우리 화면의 legend는 보이는 묶음 제목이므로
+   되돌린다. 화면 낭독기 전용으로 숨길 때는 className="sr-only"를 쓴다. */
+html legend:not(.sr-only) {
+  position: static !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0 !important;
+  overflow: visible !important;
+  clip: auto !important;
+  white-space: normal !important;
+}

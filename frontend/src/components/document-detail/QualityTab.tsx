@@ -1,3 +1,4 @@
+import { toneFromKrdsClass } from '../ui'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import type { TabKey } from './documentDetailHelpers'
 import type { QualityReport } from '../../hooks/useDocumentRuns'
@@ -53,7 +54,7 @@ export default function QualityTab({
         <span style={{ fontSize: 32, fontWeight: 700 }}>
           {qualityReport.overall_score != null ? qualityReport.overall_score.toFixed(1) : '-'}
         </span>
-        <span className={`krds-badge small ${qualityStatusDisplay(qualityReport.status, qualityReport.warnings?.length ?? 0).badgeClass}`}>
+        <span className={`ds-badge ds-badge--${toneFromKrdsClass(qualityStatusDisplay(qualityReport.status, qualityReport.warnings?.length ?? 0).badgeClass)}`}>
           {qualityStatusDisplay(qualityReport.status, qualityReport.warnings?.length ?? 0).label}
         </span>
       </div>
@@ -68,7 +69,7 @@ export default function QualityTab({
           {QUALITY_CRITERIA.map((c) => (
             <div key={c.key} style={{ fontSize: 12, lineHeight: 1.6 }}>
               <strong>{c.label}</strong>
-              <span className="krds-badge small bg-gray" style={{ marginLeft: 6 }}>{c.basis}</span>
+              <span className="ds-badge ds-badge--neutral" style={{ marginLeft: 6 }}>{c.basis}</span>
               <div>{c.how}</div>
               <div style={{ color: 'var(--color-text-muted)' }}>보지 않는 것·한계: {c.limits}</div>
             </div>
@@ -86,10 +87,10 @@ export default function QualityTab({
                 <span style={{ fontSize: 12, width: 120, flexShrink: 0, color: 'var(--color-text-muted)' }}>
                   {QUALITY_CATEGORY_LABELS[category] ?? category}
                 </span>
-                <div style={{ flex: 1, height: 8, background: '#e2e8f0', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ flex: 1, height: 8, background: 'var(--color-border)', borderRadius: 4, overflow: 'hidden' }}>
                   <div style={{
                     width: `${Math.max(0, Math.min(100, score))}%`, height: '100%',
-                    background: score >= 70 ? '#16a34a' : score >= 40 ? '#d97706' : '#dc2626',
+                    background: score >= 70 ? 'var(--color-success)' : score >= 40 ? 'var(--color-warning-dot)' : 'var(--color-danger)',
                   }} />
                 </div>
                 <span style={{ fontSize: 12, width: 36, textAlign: 'right' }}>{score.toFixed(0)}</span>
@@ -129,7 +130,7 @@ export default function QualityTab({
                 }}
                 disabled={!targetTab}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#b45309',
+                  display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--color-warning)',
                   background: 'none', border: 'none', padding: 0, textAlign: 'left', width: '100%',
                   cursor: targetTab ? 'pointer' : 'default',
                 }}
@@ -154,11 +155,11 @@ export default function QualityTab({
         </div>
       )}
       {isWaitingReview && latestRun && (
-        <div style={{ display: 'flex', gap: 'var(--space-2)', paddingTop: 'var(--space-3)', borderTop: '1px solid #e2e8f0' }}>
+        <div style={{ display: 'flex', gap: 'var(--space-2)', paddingTop: 'var(--space-3)', borderTop: '1px solid var(--color-border)' }}>
           <button
             onClick={() => cancelRun.mutate(latestRun.id)}
             disabled={cancelRun.isPending || resumeRun.isPending}
-            className="krds-btn secondary medium"
+            className="ds-btn ds-btn--secondary"
             style={{ cursor: 'pointer' }}
           >
             반려
@@ -166,7 +167,7 @@ export default function QualityTab({
           <button
             onClick={() => resumeRun.mutate(latestRun.id)}
             disabled={cancelRun.isPending || resumeRun.isPending}
-            className="krds-btn primary medium"
+            className="ds-btn ds-btn--primary"
             style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
           >
             {resumeRun.isPending && <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />}
@@ -175,7 +176,7 @@ export default function QualityTab({
         </div>
       )}
       {(cancelRun.isError || resumeRun.isError) && (
-        <p style={{ color: '#dc2626', fontSize: 12, margin: 0 }}>작업을 처리하지 못했습니다.</p>
+        <p style={{ color: 'var(--color-danger)', fontSize: 12, margin: 0 }}>작업을 처리하지 못했습니다.</p>
       )}
     </div>
   )

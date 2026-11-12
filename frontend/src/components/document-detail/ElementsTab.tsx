@@ -53,7 +53,7 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
   }
 
   if (isError) {
-    return <p style={{ color: '#dc2626', fontSize: 13, margin: 0 }}>요소를 불러오는 중 오류가 발생했습니다.</p>
+    return <p style={{ color: 'var(--color-danger)', fontSize: 13, margin: 0 }}>요소를 불러오는 중 오류가 발생했습니다.</p>
   }
 
   if (!elements.length) {
@@ -80,12 +80,12 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
           <div
             key={el.id}
             style={{
-              border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)',
-              padding: 'var(--space-3)', background: '#fff',
+              border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)',
+              padding: 'var(--space-3)', background: 'var(--color-surface)',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 'var(--space-2)' }}>
-              <span className="krds-badge small bg-information">{TYPE_LABELS[el.type] ?? el.type}</span>
+              <span className="ds-badge ds-badge--info">{TYPE_LABELS[el.type] ?? el.type}</span>
               {el.page != null && <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{el.page}쪽</span>}
               {el.metadata.order != null && (
                 <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>순서 {el.metadata.order}</span>
@@ -95,9 +95,9 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
                   {el.metadata.section_path.join(' > ')}
                 </span>
               )}
-              {el.metadata.is_header && <span className="krds-badge small bg-gray">머리말</span>}
-              {el.metadata.is_footer && <span className="krds-badge small bg-gray">꼬리말</span>}
-              {el.metadata.is_caption && <span className="krds-badge small bg-gray">캡션</span>}
+              {el.metadata.is_header && <span className="ds-badge ds-badge--neutral">머리말</span>}
+              {el.metadata.is_footer && <span className="ds-badge ds-badge--neutral">꼬리말</span>}
+              {el.metadata.is_caption && <span className="ds-badge ds-badge--neutral">캡션</span>}
               {el.type === 'table' && el.metadata.table_rows != null && (
                 <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
                   {el.metadata.table_rows}행 × {el.metadata.table_cols}열
@@ -114,12 +114,12 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
                     .filter(Boolean).join(' · ')}
                 </span>
               )}
-              {el.user_corrected && <span className="krds-badge small bg-information">수정됨</span>}
+              {el.user_corrected && <span className="ds-badge ds-badge--info">수정됨</span>}
               <span style={{ flex: 1 }} />
               {!isEditing && (
                 <button
                   onClick={() => handleStartEdit(el)}
-                  className="krds-btn text small"
+                  className="ds-btn ds-btn--ghost ds-btn--sm"
                   style={{ cursor: 'pointer' }}
                 >
                   수정
@@ -129,7 +129,7 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
             {isEditing ? (
               <div>
                 <textarea
-                  className="krds-input"
+                  className="ds-input"
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
                   rows={8}
@@ -142,7 +142,7 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
                       value={editStyle}
                       onChange={(e) => setEditStyle(e.target.value)}
                       placeholder="예: Heading1"
-                      style={{ fontSize: 11, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px', width: 90 }}
+                      style={{ fontSize: 11, border: '1px solid var(--color-border)', borderRadius: 4, padding: '2px 6px', width: 90 }}
                     />
                   </label>
                   <label>
@@ -152,7 +152,7 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
                       value={editFontSize}
                       onChange={(e) => setEditFontSize(e.target.value)}
                       placeholder="pt"
-                      style={{ fontSize: 11, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px', width: 60 }}
+                      style={{ fontSize: 11, border: '1px solid var(--color-border)', borderRadius: 4, padding: '2px 6px', width: 60 }}
                     />
                   </label>
                   <label>
@@ -161,7 +161,7 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
                       value={editFontName}
                       onChange={(e) => setEditFontName(e.target.value)}
                       placeholder="예: 맑은 고딕"
-                      style={{ fontSize: 11, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px', width: 100 }}
+                      style={{ fontSize: 11, border: '1px solid var(--color-border)', borderRadius: 4, padding: '2px 6px', width: 100 }}
                     />
                   </label>
                 </div>
@@ -169,7 +169,7 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
                   <button
                     onClick={() => setEditId(null)}
                     disabled={updateElement.isPending}
-                    className="krds-btn secondary small"
+                    className="ds-btn ds-btn--secondary ds-btn--sm"
                     style={{ cursor: 'pointer' }}
                   >
                     취소
@@ -177,7 +177,7 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
                   <button
                     onClick={() => handleSave(el.id)}
                     disabled={updateElement.isPending || !editText.trim()}
-                    className="krds-btn primary small"
+                    className="ds-btn ds-btn--primary ds-btn--sm"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
                   >
                     {updateElement.isPending && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />}
@@ -188,7 +188,7 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
             ) : (
               <pre style={{
                 fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                fontFamily: 'inherit', margin: 0, color: '#334155',
+                fontFamily: 'inherit', margin: 0, color: 'var(--color-text)',
               }}>
                 {displayText || <span style={{ color: 'var(--color-text-muted)' }}>(내용 없음)</span>}
               </pre>

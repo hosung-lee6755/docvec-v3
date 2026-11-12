@@ -34,7 +34,7 @@ export default function OcrConfidencePanel({ documentId }: { documentId: string 
   const { data, isLoading, isError } = useOcrConfidence(documentId)
   if (isLoading) return null
   if (isError) {
-    return <p role="alert" style={{ fontSize: 12, color: '#dc2626', margin: 0 }}>OCR 신뢰도를 불러오지 못했습니다.</p>
+    return <p role="alert" style={{ fontSize: 12, color: 'var(--color-danger)', margin: 0 }}>OCR 신뢰도를 불러오지 못했습니다.</p>
   }
   if (!data || !data.pages.length) {
     return (
@@ -66,7 +66,7 @@ export default function OcrConfidencePanel({ documentId }: { documentId: string 
             style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 14 }}>
             <span style={{
               width: 12, height: Math.max(2, p.confidence * BAR_HEIGHT), borderRadius: 2,
-              background: p.low ? '#f59e0b' : 'var(--color-accent)',
+              background: p.low ? 'var(--color-warning-dot)' : 'var(--color-accent)',
             }} />
             <span style={{ fontSize: 9, color: 'var(--color-text-muted)' }}>{p.page_number}</span>
             <span className="sr-only">{p.page_number}쪽 {percent(p.confidence)}{p.low ? ' 기준 미달' : ''}</span>

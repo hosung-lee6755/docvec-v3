@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Loader2, X } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import { useDocumentRuns, useReprocessImpact, useStartPartialReprocess } from '../hooks/useDocumentRuns'
 import { useWorkflowRun } from '../hooks/useWorkflows'
+import { Alert, Button, Card, Field, Input, Modal, Select, Spinner, Textarea } from './ui'
+import '../styles/screens/documents.css'
 
 const ENTRY_BLOCK_TYPE = 'file_validate'
 
@@ -85,191 +87,152 @@ export default function ReprocessModal({
     onClose()
   }
 
+  const footer = (
+    <>
+      <Button variant="secondary" onClick={onClose}>취소</Button>
+      <Button
+        variant="primary"
+        onClick={handleSubmit}
+        disabled={!canSubmit || startReprocess.isPending || impactLoading}
+        icon={startReprocess.isPending ? <Spinner size={14} /> : undefined}
+      >
+        재처리 시작
+      </Button>
+    </>
+  )
+
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50,
-    }}>
-      <section className="krds-modal fade shown in" role="dialog">
-        <div className="modal-dialog modal-md">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2 className="modal-title">문서 재처리</h2>
-            </div>
-            <div className="modal-conts">
-              <div className="conts-area" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-                <div className="form-group">
-                  <div className="form-tit"><label>시작 지점</label></div>
-                  <div className="form-conts" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                    <div style={{ display: 'inline-flex', gap: 4 }}>
-                      <button
-                        type="button"
-                        onClick={() => setMode('full')}
-                        aria-pressed={mode === 'full'}
-                        className={mode === 'full' ? 'krds-btn primary small' : 'krds-btn secondary small'}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        전체 (파일 검증부터)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setMode('specific')}
-                        aria-pressed={mode === 'specific'}
-                        disabled={steps.length === 0}
-                        className={mode === 'specific' ? 'krds-btn primary small' : 'krds-btn secondary small'}
-                        style={{ cursor: steps.length === 0 ? 'not-allowed' : 'pointer' }}
-                      >
-                        특정 블록부터
-                      </button>
-                    </div>
-                    {mode === 'full' && (
-                      <div className="krds-form-check" style={{ marginLeft: 'var(--space-5)' }}>
-                        <input
-                          type="checkbox"
-                          className="chk"
-                          id="reprocess_latest_version"
-                          checked={useLatestVersion}
-                          onChange={(e) => setUseLatestVersion(e.target.checked)}
-                        />
-                        <label htmlFor="reprocess_latest_version" style={{ fontSize: 13 }}>
-                          최신 게시 버전으로 처리
-                        </label>
-                        <p style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 2 }}>
-                          워크플로우를 수정해 새 버전을 게시했다면 켜세요(예: 텍스트 추출 엔진 변경).
-                          끄면 이 문서를 처리했던 버전 그대로 다시 실행하므로 변경한 설정이 반영되지 않습니다.
-                        </p>
-                      </div>
-                    )}
-                    {mode === 'specific' && (
-                      <select
-                        className="krds-form-select"
-                        style={{ marginLeft: 'var(--space-5)' }}
-                        value={selectedInstanceId ?? ''}
-                        onChange={(e) => setSelectedInstanceId(e.target.value)}
-                      >
-                        {steps.map((s) => (
-                          <option key={s.id} value={s.block_instance_id}>
-                            {s.label ?? s.block_type}{s.status === 'FAILED' ? ' (실패)' : ''}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    {mode === 'specific' && selectedStep?.status === 'FAILED' && (
-                      <div style={{
-                        marginLeft: 'var(--space-5)', fontSize: 12, color: '#b91c1c',
-                        display: 'flex', alignItems: 'center', gap: 'var(--space-1)',
-                      }}>
-                        <AlertTriangle size={13} /> {selectedStep.error_message ?? '실패 사유 정보 없음'}
-                      </div>
-                    )}
-                    {mode === 'specific' && selectedStep && (
-                      <div className="form-group" style={{ marginLeft: 'var(--space-5)', marginTop: 'var(--space-1)' }}>
-                        <div className="form-tit"><label htmlFor="reprocess_timeout_override">시간 제한(초) 조정 (선택)</label></div>
-                        <div className="form-conts">
-                          <input
-                            id="reprocess_timeout_override"
-                            type="number"
-                            min={1}
-                            max={7200}
-                            className="krds-input"
-                            style={{ maxWidth: 160 }}
-                            value={timeoutOverrideSeconds}
-                            onChange={(e) => setTimeoutOverrideSeconds(e.target.value)}
-                            placeholder="예: 1200"
-                          />
-                          <p style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>
-                            비워두면 블록에 설정된 기본 시간 제한을 그대로 사용합니다. 이 재처리에만 적용되며,
-                            워크플로우의 저장된 설정은 바뀌지 않습니다.
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div style={{
-                  border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)',
-                  padding: 'var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)',
-                }}>
-                  <strong style={{ fontSize: 13 }}>영향 범위 미리보기</strong>
-                  {impactLoading && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 12, color: 'var(--color-text-muted)' }}>
-                      <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> 계산 중...
-                    </div>
-                  )}
-                  {impactError && (
-                    <div style={{ fontSize: 12, color: '#b91c1c' }}>영향 범위를 불러오지 못했습니다.</div>
-                  )}
-                  {impact && !impactLoading && (
-                    <>
-                      <div style={{ fontSize: 12, color: '#475569' }}>
-                        <strong>재실행 블록:</strong> {impact.affectedBlocks.length > 0 ? impact.affectedBlocks.join(' → ') : '없음'}
-                      </div>
-                      {mode === 'specific' && reusedLabels.length > 0 && (
-                        <div style={{ fontSize: 12, color: '#475569' }}>
-                          <strong>캐시 재사용:</strong> {reusedLabels.join(', ')}
-                        </div>
-                      )}
-                      <div style={{ fontSize: 12, color: '#475569', display: 'flex', gap: 'var(--space-4)' }}>
-                        <span>영향 노드 수: {impact.affectedNodeCount}</span>
-                        <span>영향 청크 수: {impact.affectedChunkCount}</span>
-                      </div>
-                      {impact.fullReprocessingRequired && (
-                        <div style={{
-                          display: 'flex', alignItems: 'center', gap: 'var(--space-1)',
-                          fontSize: 12, color: '#b45309',
-                        }}>
-                          <AlertTriangle size={13} /> 하위 사전/설정 변경으로 전체 재처리가 필요합니다.
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-
-                <div className="form-group">
-                  <div className="form-tit"><label htmlFor="reprocess_reason">사유 (선택)</label></div>
-                  <div className="form-conts">
-                    <textarea
-                      id="reprocess_reason"
-                      className="krds-input"
-                      rows={2}
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      placeholder="재처리 사유를 입력하세요"
-                    />
-                  </div>
-                </div>
-
-                {startReprocess.isError && (
-                  <div style={{ fontSize: 12, color: '#b91c1c' }}>재처리 시작에 실패했습니다.</div>
-                )}
-
-                <div className="modal-btn btn-wrap">
-                  <button type="button" className="krds-btn medium secondary" onClick={onClose}>
-                    취소
-                  </button>
-                  <button
-                    type="button"
-                    className="krds-btn medium primary"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit || startReprocess.isPending || impactLoading}
-                    style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
-                  >
-                    {startReprocess.isPending && <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />}
-                    재처리 시작
-                  </button>
-                </div>
-              </div>
-            </div>
-            <button type="button" className="krds-btn medium icon btn-close close-modal" onClick={onClose}>
-              <span className="sr-only">닫기</span>
-              <X size={20} />
-            </button>
+    <Modal isOpen title="문서 재처리" onClose={onClose} footer={footer} size="lg">
+      <div className="documents-stack">
+        <div role="group" aria-label="시작 지점" className="documents-stack">
+          <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+            <Button
+              size="sm"
+              variant={mode === 'full' ? 'primary' : 'secondary'}
+              aria-pressed={mode === 'full'}
+              onClick={() => setMode('full')}
+            >
+              전체 (파일 검증부터)
+            </Button>
+            <Button
+              size="sm"
+              variant={mode === 'specific' ? 'primary' : 'secondary'}
+              aria-pressed={mode === 'specific'}
+              disabled={steps.length === 0}
+              onClick={() => setMode('specific')}
+            >
+              특정 블록부터
+            </Button>
           </div>
+
+          {mode === 'full' && (
+            <div className="documents-stack" style={{ gap: 'var(--space-1)' }}>
+              <label className="documents-check">
+                <input
+                  type="checkbox"
+                  checked={useLatestVersion}
+                  onChange={(e) => setUseLatestVersion(e.target.checked)}
+                />
+                <span>최신 게시 버전으로 처리</span>
+              </label>
+              <p className="documents-note">
+                워크플로우를 수정해 새 버전을 게시했다면 켜세요(예: 텍스트 추출 엔진 변경).
+                끄면 이 문서를 처리했던 버전 그대로 다시 실행하므로 변경한 설정이 반영되지 않습니다.
+              </p>
+            </div>
+          )}
+
+          {mode === 'specific' && (
+            <Field label="재시작할 블록">
+              {(id) => (
+                <Select
+                  id={id}
+                  controlSize="sm"
+                  value={selectedInstanceId ?? ''}
+                  onChange={(e) => setSelectedInstanceId(e.target.value)}
+                >
+                  {steps.map((s) => (
+                    <option key={s.id} value={s.block_instance_id}>
+                      {s.label ?? s.block_type}{s.status === 'FAILED' ? ' (실패)' : ''}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+          )}
+
+          {mode === 'specific' && selectedStep?.status === 'FAILED' && (
+            <Alert tone="danger">
+              <AlertTriangle size={13} aria-hidden="true" /> {selectedStep.error_message ?? '실패 사유 정보 없음'}
+            </Alert>
+          )}
+
+          {mode === 'specific' && selectedStep && (
+            <Field
+              label="시간 제한(초) 조정 (선택)"
+              hint="비워두면 블록에 설정된 기본 시간 제한을 그대로 사용합니다. 이 재처리에만 적용되며, 워크플로우의 저장된 설정은 바뀌지 않습니다."
+            >
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={1}
+                  max={7200}
+                  controlSize="sm"
+                  style={{ maxWidth: 160 }}
+                  value={timeoutOverrideSeconds}
+                  onChange={(e) => setTimeoutOverrideSeconds(e.target.value)}
+                  placeholder="예: 1200"
+                />
+              )}
+            </Field>
+          )}
         </div>
-        <div className="modal-back"></div>
-      </section>
-      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
-    </div>
+
+        <Card title="영향 범위 미리보기">
+          <div className="documents-preview">
+            {impactLoading && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                <Spinner size={14} /> 계산 중...
+              </div>
+            )}
+            {impactError && <span className="documents-text-danger">영향 범위를 불러오지 못했습니다.</span>}
+            {impact && !impactLoading && (
+              <>
+                <div><strong>재실행 블록:</strong> {impact.affectedBlocks.length > 0 ? impact.affectedBlocks.join(' → ') : '없음'}</div>
+                {mode === 'specific' && reusedLabels.length > 0 && (
+                  <div><strong>캐시 재사용:</strong> {reusedLabels.join(', ')}</div>
+                )}
+                <div className="documents-preview-meta">
+                  <span>영향 노드 수: {impact.affectedNodeCount}</span>
+                  <span>영향 청크 수: {impact.affectedChunkCount}</span>
+                </div>
+                {impact.fullReprocessingRequired && (
+                  <span className="documents-text-warning" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}>
+                    <AlertTriangle size={13} aria-hidden="true" /> 하위 사전/설정 변경으로 전체 재처리가 필요합니다.
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+        </Card>
+
+        <Field label="사유 (선택)">
+          {(id) => (
+            <Textarea
+              id={id}
+              rows={2}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="재처리 사유를 입력하세요"
+            />
+          )}
+        </Field>
+
+        {startReprocess.isError && (
+          <Alert tone="danger">재처리 시작에 실패했습니다.</Alert>
+        )}
+      </div>
+    </Modal>
   )
 }

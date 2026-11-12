@@ -14,14 +14,14 @@ interface VersionHistoryPanelProps {
   documentId: string
 }
 
-const DIFF_ADDED_COLOR = '#15803d'
-const DIFF_REMOVED_COLOR = '#b91c1c'
+const DIFF_ADDED_COLOR = 'var(--color-success)'
+const DIFF_REMOVED_COLOR = 'var(--color-danger)'
 
 function diffLineStyle(line: string): CSSProperties {
   const isAdded = line.startsWith('+') && !line.startsWith('+++')
   const isRemoved = line.startsWith('-') && !line.startsWith('---')
-  if (isAdded) return { color: DIFF_ADDED_COLOR, background: '#f0fdf4' }
-  if (isRemoved) return { color: DIFF_REMOVED_COLOR, background: '#fef2f2' }
+  if (isAdded) return { color: DIFF_ADDED_COLOR, background: 'var(--color-success-bg)' }
+  if (isRemoved) return { color: DIFF_REMOVED_COLOR, background: 'var(--color-danger-bg)' }
   if (line.startsWith('@@')) return { color: 'var(--color-text-muted)' }
   return {}
 }
@@ -32,7 +32,7 @@ function canRestore(version: DocumentVersion): boolean {
 
 function ErrorText({ message }: { message: string | null }) {
   if (!message) return null
-  return <p role="alert" style={{ fontSize: 12, color: '#dc2626', margin: 0 }}>{message}</p>
+  return <p role="alert" style={{ fontSize: 12, color: 'var(--color-danger)', margin: 0 }}>{message}</p>
 }
 
 function VersionDiff({ baseId, currentId }: { baseId: string; currentId: string }) {
@@ -52,7 +52,7 @@ function VersionDiff({ baseId, currentId }: { baseId: string; currentId: string 
       {diff.length === 0 ? (
         <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>두 버전의 본문이 같습니다.</p>
       ) : (
-        <pre style={{ fontSize: 12, maxHeight: 280, overflow: 'auto', margin: 0, padding: 'var(--space-2)', background: '#f8fafc', borderRadius: 'var(--radius-sm)', whiteSpace: 'pre-wrap' }}>
+        <pre style={{ fontSize: 12, maxHeight: 280, overflow: 'auto', margin: 0, padding: 'var(--space-2)', background: 'var(--color-surface-subtle)', borderRadius: 'var(--radius-sm)', whiteSpace: 'pre-wrap' }}>
           {diff.map((line, index) => (
             <span key={index} style={{ display: 'block', ...diffLineStyle(line) }}>{line || ' '}</span>
           ))}
@@ -117,31 +117,31 @@ export default function VersionHistoryPanel({ documentId }: VersionHistoryPanelP
 
       <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
         {items.map((version) => (
-          <li key={version.id} style={{ border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)', padding: 'var(--space-2) var(--space-3)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <li key={version.id} style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-2) var(--space-3)', display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
               <strong style={{ fontSize: 13 }}>{version.version_number}번 버전</strong>
-              <span className="krds-badge xsmall bg-gray">{LIFECYCLE_STATE_LABELS[version.lifecycle_state]}</span>
+              <span className="ds-badge ds-badge--neutral">{LIFECYCLE_STATE_LABELS[version.lifecycle_state]}</span>
               <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                 {STATUS_LABELS[version.status] ?? version.status} · {new Date(version.created_at).toLocaleDateString('ko-KR')}
               </span>
-              {version.is_retrievable && <span className="krds-badge xsmall bg-success">검색에 쓰임</span>}
+              {version.is_retrievable && <span className="ds-badge ds-badge--success">검색에 쓰임</span>}
               {version.id === documentId && <span style={{ fontSize: 12, color: 'var(--color-accent)' }}>지금 보는 문서</span>}
             </div>
             <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
               {canRestore(version) && (
-                <button type="button" className="krds-btn xsmall secondary" disabled={restore.isPending} onClick={() => handleRestore(version)}>
+                <button type="button" className="ds-btn ds-btn--secondary ds-btn--sm" disabled={restore.isPending} onClick={() => handleRestore(version)}>
                   이 버전을 현재 버전으로
                 </button>
               )}
               {version.lifecycle_state === 'current' && (
-                <button type="button" className="krds-btn xsmall secondary" disabled={archive.isPending} onClick={() => handleArchive(version)}>
+                <button type="button" className="ds-btn ds-btn--secondary ds-btn--sm" disabled={archive.isPending} onClick={() => handleArchive(version)}>
                   보관
                 </button>
               )}
               {current && version.id !== current.id && (
                 <button
                   type="button"
-                  className="krds-btn xsmall tertiary"
+                  className="ds-btn ds-btn--ghost ds-btn--sm"
                   aria-pressed={compareId === version.id}
                   onClick={() => setCompareId(compareId === version.id ? null : version.id)}
                 >
@@ -172,13 +172,13 @@ export default function VersionHistoryPanel({ documentId }: VersionHistoryPanelP
               type="date"
               value={expiryValue}
               onChange={(e) => setExpiryDraft(e.target.value)}
-              className="krds-input small"
+              className="ds-input"
             />
-            <button type="button" className="krds-btn xsmall primary" disabled={setExpiry.isPending || !expiryValue || expiryValue === serverExpiry} onClick={handleSaveExpiry}>
+            <button type="button" className="ds-btn ds-btn--primary ds-btn--sm" disabled={setExpiry.isPending || !expiryValue || expiryValue === serverExpiry} onClick={handleSaveExpiry}>
               만료일 저장
             </button>
             {pageItem.expires_at && (
-              <button type="button" className="krds-btn xsmall tertiary" disabled={setExpiry.isPending} onClick={handleClearExpiry}>
+              <button type="button" className="ds-btn ds-btn--ghost ds-btn--sm" disabled={setExpiry.isPending} onClick={handleClearExpiry}>
                 만료일 지우기
               </button>
             )}

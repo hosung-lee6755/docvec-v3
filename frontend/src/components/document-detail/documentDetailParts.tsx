@@ -2,25 +2,29 @@ import { useState, type CSSProperties } from 'react'
 import { Save, Copy, Check, X } from 'lucide-react'
 import type { DocumentLanguage, SecurityLevel } from '../../hooks/useDocumentMetadata'
 import { DOCUMENT_LANGUAGE_OPTIONS, documentLanguageLabel } from './documentDetailHelpers'
+import { Segmented } from '../ui'
+import { SECURITY_LEVEL_LABELS } from '../../hooks/useAccess'
 
 // 메타정보 편집 컨트롤 공통 모양 — 버튼은 테두리 상자로, 셀렉트는 오른쪽 ▼ 화살표로 "누르는 것"임을 드러낸다.
 const CHEVRON_ICON =
   "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23475569' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>\")"
 
 export const EDIT_BUTTON_STYLE: CSSProperties = {
-  background: '#fff',
-  border: '1px solid #256ef4',
+  background: 'var(--color-surface)',
+  border: '1px solid var(--color-primary)',
   borderRadius: 4,
   cursor: 'pointer',
   padding: '1px 10px',
-  color: '#256ef4',
+  color: 'var(--color-primary)',
   fontSize: 12,
   lineHeight: 1.6,
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
 }
 
 const ICON_BUTTON_STYLE: CSSProperties = {
-  background: '#fff',
-  border: '1px solid #cbd5e1',
+  background: 'var(--color-surface)',
+  border: '1px solid var(--color-border-strong)',
   borderRadius: 4,
   cursor: 'pointer',
   padding: 3,
@@ -30,11 +34,11 @@ const ICON_BUTTON_STYLE: CSSProperties = {
 
 export const SELECT_STYLE: CSSProperties = {
   fontSize: 12,
-  color: '#0f172a',
-  border: '1px solid #94a3b8',
+  color: 'var(--color-text)',
+  border: '1px solid var(--color-text-subtle)',
   borderRadius: 4,
   padding: '3px 26px 3px 8px',
-  backgroundColor: '#fff',
+  backgroundColor: 'var(--color-surface)',
   backgroundImage: CHEVRON_ICON,
   backgroundRepeat: 'no-repeat',
   backgroundPosition: 'right 8px center',
@@ -46,21 +50,21 @@ export const SELECT_STYLE: CSSProperties = {
 
 // UI Components
 
+const VIEW_MODE_OPTIONS = [
+  { value: 'text', label: '텍스트' },
+  { value: 'json', label: 'JSON' },
+] as const
+
+/** 텍스트와 JSON 표시를 바꾸는 분절 단추. */
 export function ViewModeToggle({ showJson, onChange }: { showJson: boolean; onChange: (v: boolean) => void }) {
   return (
-    <div style={{ display: 'inline-flex', gap: 4, marginBottom: 'var(--space-3)' }} role="group" aria-label="표시 모드 선택">
-      {[{ v: false, label: '텍스트' }, { v: true, label: 'JSON' }].map((opt) => (
-        <button
-          key={String(opt.v)}
-          onClick={() => onChange(opt.v)}
-          aria-pressed={showJson === opt.v}
-          type="button"
-          className={showJson === opt.v ? 'krds-btn primary small' : 'krds-btn secondary small'}
-          style={{ cursor: 'pointer' }}
-        >
-          {opt.label}
-        </button>
-      ))}
+    <div style={{ marginBottom: 'var(--space-3)' }}>
+      <Segmented
+        label="표시 모드 선택"
+        options={VIEW_MODE_OPTIONS}
+        value={showJson ? 'json' : 'text'}
+        onChange={(value) => onChange(value === 'json')}
+      />
     </div>
   )
 }
@@ -69,7 +73,9 @@ export function Row({ label, children }: { label: string; children: React.ReactN
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: '140px 1fr',
+      // 옆 패널(약 340px) 안에서 값 칸이 충분히 넓도록 이름 칸을 줄인다.
+      gridTemplateColumns: '96px minmax(0, 1fr)',
+      columnGap: 'var(--space-3)',
       padding: 'var(--space-3) 0',
       borderBottom: '1px solid var(--color-border)',
     }}>
@@ -90,16 +96,16 @@ export function CopyableValue({ value, display }: { value: string; display: stri
   }
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ fontFamily: 'monospace', fontSize: 11, overflowWrap: 'anywhere', wordBreak: 'break-all' }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, overflowWrap: 'anywhere', wordBreak: 'break-all' }}>
         {display}
       </span>
       <button
         onClick={handleCopy}
         title="전체 값 복사"
-        className="krds-btn text small"
+        className="ds-btn ds-btn--ghost ds-btn--sm"
         style={{ cursor: 'pointer', padding: 2, display: 'inline-flex', alignItems: 'center' }}
       >
-        {copied ? <Check size={12} style={{ color: '#16a34a' }} /> : <Copy size={12} />}
+        {copied ? <Check size={12} style={{ color: 'var(--color-success)' }} /> : <Copy size={12} />}
       </button>
     </span>
   )
@@ -148,7 +154,7 @@ export function EditableMetaField({
           onChange={(e) => setDraft(e.target.value)}
           maxLength={maxLength}
           autoFocus
-          style={{ fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 8px', width: 160 }}
+          style={{ fontSize: 12, border: '1px solid var(--color-border)', borderRadius: 4, padding: '2px 8px', width: 160 }}
         />
         <button
           onClick={() => { onSave(allowEmpty ? draft : draft.trim()); setEditing(false) }}
@@ -210,7 +216,7 @@ export function DateMetaField({
             onChange={(e) => { setDraft(e.target.value); setError('') }}
             placeholder="YYYY-MM-DD"
             autoFocus
-            style={{ fontSize: 12, border: `1px solid ${error ? '#dc2626' : '#e2e8f0'}`, borderRadius: 4, padding: '2px 8px', width: 160 }}
+            style={{ fontSize: 12, border: `1px solid ${error ? 'var(--color-danger)' : 'var(--color-border)'}`, borderRadius: 4, padding: '2px 8px', width: 160 }}
           />
           <button
             onClick={() => {
@@ -239,7 +245,7 @@ export function DateMetaField({
             <X size={14} />
           </button>
         </span>
-        {error && <span style={{ fontSize: 12, color: '#dc2626' }}>{error}</span>}
+        {error && <span style={{ fontSize: 12, color: 'var(--color-danger)' }}>{error}</span>}
       </span>
     </Row>
   )
@@ -259,7 +265,7 @@ export function SecurityLevelField({
       >
         <option value="">미입력</option>
         {SECURITY_LEVEL_OPTIONS.map((level) => (
-          <option key={level} value={level}>{level}</option>
+          <option key={level} value={level}>{SECURITY_LEVEL_LABELS[level] ?? level}</option>
         ))}
       </select>
     </Row>
@@ -273,12 +279,12 @@ export function AutoValueControls({ isEdited, onReset }: { isEdited: boolean; on
   if (!isEdited) return null
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-      <span className="krds-badge xsmall bg-information">직접 수정됨</span>
+      <span className="ds-badge ds-badge--info">직접 수정됨</span>
       <button
         type="button"
         onClick={onReset}
-        className="krds-btn text xsmall"
-        style={{ padding: 0, cursor: 'pointer', color: '#256ef4' }}
+        className="ds-btn ds-btn--ghost ds-btn--sm"
+        style={{ padding: 0, cursor: 'pointer', color: 'var(--color-primary)' }}
       >
         자동값으로 되돌리기
       </button>

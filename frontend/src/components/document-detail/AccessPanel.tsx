@@ -91,7 +91,7 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
         {entries.length > 0 && (
           <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6 }}>
             {entries.map((e) => (
-              <span key={entryKey(e)} className="krds-badge small bg-information" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span key={entryKey(e)} className="ds-badge ds-badge--info" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 {PRINCIPAL_LABEL[e.principal_type]} · {e.display_name ?? `삭제된 ${PRINCIPAL_LABEL[e.principal_type]}`}
                 {!isSourceManaged && <button
                   type="button"
@@ -112,7 +112,8 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
             value={candidate}
             onChange={(e) => setCandidate(e.target.value)}
             aria-label="허용 목록에 추가할 사용자 또는 그룹"
-            style={{ fontSize: 12, border: '1px solid #e2e8f0', borderRadius: 4, padding: '2px 6px', maxWidth: 220 }}
+            className="ds-select ds-select--sm"
+            style={{ width: 'auto', maxWidth: 220 }}
           >
             <option value="">사용자·그룹 추가…</option>
             {groupOptions.length > 0 && (
@@ -126,11 +127,11 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
               </optgroup>
             )}
           </select>
-          <button type="button" className="krds-btn xsmall secondary" disabled={!candidate || replaceAcl.isPending || !canAdd} onClick={handleAdd}>
+          <button type="button" className="ds-btn ds-btn--secondary ds-btn--sm" disabled={!candidate || replaceAcl.isPending || !canAdd} onClick={handleAdd}>
             추가
           </button>
           {acl.data.restricted && (
-            <button type="button" className="krds-btn text xsmall" disabled={replaceAcl.isPending || !canRelax} onClick={() => save([])}>
+            <button type="button" className="ds-btn ds-btn--ghost ds-btn--sm" disabled={replaceAcl.isPending || !canRelax} onClick={() => save([])}>
               제한 해제
             </button>
           )}
@@ -140,7 +141,7 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
             허용 대상을 늘리거나 제한을 푸는 일은 업로더나 컬렉션 소유자만 할 수 있습니다.
           </span>
         )}
-        {replaceAcl.isError && <span style={{ fontSize: 12, color: '#dc2626' }}>{errorMessage(replaceAcl.error)}</span>}
+        {replaceAcl.isError && <span style={{ fontSize: 12, color: 'var(--color-danger)' }}>{errorMessage(replaceAcl.error)}</span>}
       </span>
     </Row>
   )

@@ -1,9 +1,13 @@
 import { useState } from 'react'
-import { Loader2, Pencil, Trash2, X } from 'lucide-react'
+import { Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
 import {
   useCleaningRules, useCreateCleaningRule, useUpdateCleaningRule, useDeleteCleaningRule,
   type CleaningRule, type CleaningRuleInput, type CleaningRuleType, type CleaningRuleScope,
 } from '../hooks/useCleaningRules'
+import {
+  Badge, Button, EmptyState, Field, IconButton, Input, Modal, Page, PageHeader, Select,
+} from '../components/ui'
+import '../styles/screens/pipeline.css'
 
 const RULE_TYPE_LABELS: Record<CleaningRuleType, string> = {
   REGEX_REPLACE: '정규식 치환', EXACT_REMOVE: '문자열 제거', LINE_FILTER: '라인 필터',
@@ -17,6 +21,18 @@ const EMPTY_FORM: CleaningRuleInput = {
   scope: 'PARAGRAPH', priority: 0, enabled: true,
 }
 
+function patternLabel(ruleType: CleaningRuleType): string {
+  if (ruleType === 'REGEX_REPLACE') return '정규식 패턴'
+  if (ruleType === 'LINE_FILTER') return '라인 매치 정규식'
+  return '제거할 문자열'
+}
+
+function patternPlaceholder(ruleType: CleaningRuleType): string {
+  if (ruleType === 'REGEX_REPLACE') return '예: \\s{2,}'
+  if (ruleType === 'LINE_FILTER') return '예: ^페이지\\s*\\d+$'
+  return '예: (주)데이터구루 내부용'
+}
+
 function RuleFormModal({
   initial, onCancel, onSave, isSaving,
 }: {
@@ -28,147 +44,111 @@ function RuleFormModal({
   const [form, setForm] = useState<CleaningRuleInput>(initial)
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50,
-    }}>
-      <section className="krds-modal fade shown in" role="dialog">
-        <div className="modal-dialog modal-md">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2 className="modal-title">정제 규칙</h2>
-            </div>
-            <div className="modal-conts">
-              <div className="conts-area" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-                <div className="form-group">
-                  <div className="form-tit"><label htmlFor="cleaning_rule_name">이름</label></div>
-                  <div className="form-conts">
-                    <input
-                      id="cleaning_rule_name"
-                      className="krds-input"
-                      value={form.rule_name}
-                      onChange={(e) => setForm({ ...form, rule_name: e.target.value })}
-                      placeholder="예: 반복 머리말 제거"
-                    />
-                  </div>
-                </div>
+    <Modal
+      isOpen
+      title="정제 규칙"
+      onClose={onCancel}
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onCancel}>취소</Button>
+          <Button
+            variant="primary"
+            onClick={() => onSave(form)}
+            disabled={isSaving || !form.rule_name.trim() || !form.pattern.trim()}
+          >
+            저장
+          </Button>
+        </>
+      )}
+    >
+      <div className="pipeline-modal-stack">
+        <Field label="이름">
+          {(id) => (
+            <Input
+              id={id}
+              value={form.rule_name}
+              onChange={(e) => setForm({ ...form, rule_name: e.target.value })}
+              placeholder="예: 반복 머리말 제거"
+            />
+          )}
+        </Field>
 
-                <div className="form-group">
-                  <div className="form-tit"><label htmlFor="cleaning_rule_type">유형</label></div>
-                  <div className="form-conts">
-                    <select
-                      id="cleaning_rule_type"
-                      className="krds-form-select"
-                      value={form.rule_type}
-                      onChange={(e) => setForm({ ...form, rule_type: e.target.value as CleaningRuleType })}
-                    >
-                      {(Object.keys(RULE_TYPE_LABELS) as CleaningRuleType[]).map((t) => (
-                        <option key={t} value={t}>{RULE_TYPE_LABELS[t]}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
+        <Field label="유형">
+          {(id) => (
+            <Select
+              id={id}
+              value={form.rule_type}
+              onChange={(e) => setForm({ ...form, rule_type: e.target.value as CleaningRuleType })}
+            >
+              {(Object.keys(RULE_TYPE_LABELS) as CleaningRuleType[]).map((t) => (
+                <option key={t} value={t}>{RULE_TYPE_LABELS[t]}</option>
+              ))}
+            </Select>
+          )}
+        </Field>
 
-                <div className="form-group">
-                  <div className="form-tit">
-                    <label htmlFor="cleaning_rule_pattern">
-                      {form.rule_type === 'REGEX_REPLACE' ? '정규식 패턴' : form.rule_type === 'LINE_FILTER' ? '라인 매치 정규식' : '제거할 문자열'}
-                    </label>
-                  </div>
-                  <div className="form-conts">
-                    <input
-                      id="cleaning_rule_pattern"
-                      className="krds-input"
-                      value={form.pattern}
-                      onChange={(e) => setForm({ ...form, pattern: e.target.value })}
-                      style={{ fontFamily: 'monospace' }}
-                      placeholder={
-                        form.rule_type === 'REGEX_REPLACE' ? '예: \\s{2,}'
-                          : form.rule_type === 'LINE_FILTER' ? '예: ^페이지\\s*\\d+$'
-                          : '예: (주)데이터구루 내부용'
-                      }
-                    />
-                  </div>
-                </div>
+        <Field label={patternLabel(form.rule_type)}>
+          {(id) => (
+            <Input
+              id={id}
+              value={form.pattern}
+              onChange={(e) => setForm({ ...form, pattern: e.target.value })}
+              style={{ fontFamily: 'var(--font-mono)' }}
+              placeholder={patternPlaceholder(form.rule_type)}
+            />
+          )}
+        </Field>
 
-                {form.rule_type === 'REGEX_REPLACE' && (
-                  <div className="form-group">
-                    <div className="form-tit"><label htmlFor="cleaning_rule_replacement">치환 결과 (비우면 제거)</label></div>
-                    <div className="form-conts">
-                      <input
-                        id="cleaning_rule_replacement"
-                        className="krds-input"
-                        value={form.replacement ?? ''}
-                        onChange={(e) => setForm({ ...form, replacement: e.target.value })}
-                        style={{ fontFamily: 'monospace' }}
-                        placeholder="예: 공백 1칸 (비우면 매치된 부분을 완전히 제거)"
-                      />
-                    </div>
-                  </div>
-                )}
+        {form.rule_type === 'REGEX_REPLACE' && (
+          <Field label="치환 결과 (비우면 제거)">
+            {(id) => (
+              <Input
+                id={id}
+                value={form.replacement ?? ''}
+                onChange={(e) => setForm({ ...form, replacement: e.target.value })}
+                style={{ fontFamily: 'var(--font-mono)' }}
+                placeholder="예: 공백 1칸 (비우면 매치된 부분을 완전히 제거)"
+              />
+            )}
+          </Field>
+        )}
 
-                <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
-                  <div className="form-group" style={{ flex: 1 }}>
-                    <div className="form-tit"><label htmlFor="cleaning_rule_scope">적용 범위</label></div>
-                    <div className="form-conts">
-                      <select
-                        id="cleaning_rule_scope"
-                        className="krds-form-select"
-                        value={form.scope}
-                        onChange={(e) => setForm({ ...form, scope: e.target.value as CleaningRuleScope })}
-                      >
-                        {(Object.keys(SCOPE_LABELS) as CleaningRuleScope[]).map((s) => (
-                          <option key={s} value={s}>{SCOPE_LABELS[s]}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div className="form-group" style={{ width: 100 }}>
-                    <div className="form-tit"><label htmlFor="cleaning_rule_priority">우선순위</label></div>
-                    <div className="form-conts">
-                      <input
-                        id="cleaning_rule_priority"
-                        type="number"
-                        className="krds-input"
-                        value={form.priority}
-                        onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="krds-form-check">
-                  <input
-                    type="checkbox"
-                    id="cleaning_rule_enabled"
-                    checked={form.enabled}
-                    onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
-                  />
-                  <label htmlFor="cleaning_rule_enabled">활성화</label>
-                </div>
-
-                <div className="modal-btn btn-wrap">
-                  <button type="button" onClick={onCancel} className="krds-btn medium secondary">취소</button>
-                  <button
-                    type="button"
-                    onClick={() => onSave(form)}
-                    disabled={isSaving || !form.rule_name.trim() || !form.pattern.trim()}
-                    className="krds-btn medium primary"
-                  >
-                    저장
-                  </button>
-                </div>
-              </div>
-            </div>
-            <button type="button" className="krds-btn medium icon btn-close close-modal" onClick={onCancel}>
-              <span className="sr-only">닫기</span>
-              <X size={20} />
-            </button>
-          </div>
+        <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
+          <Field label="적용 범위" className="pipeline-field-grow">
+            {(id) => (
+              <Select
+                id={id}
+                value={form.scope}
+                onChange={(e) => setForm({ ...form, scope: e.target.value as CleaningRuleScope })}
+              >
+                {(Object.keys(SCOPE_LABELS) as CleaningRuleScope[]).map((s) => (
+                  <option key={s} value={s}>{SCOPE_LABELS[s]}</option>
+                ))}
+              </Select>
+            )}
+          </Field>
+          <Field label="우선순위" className="pipeline-field-narrow">
+            {(id) => (
+              <Input
+                id={id}
+                type="number"
+                value={form.priority}
+                onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
+              />
+            )}
+          </Field>
         </div>
-        <div className="modal-back"></div>
-      </section>
-    </div>
+
+        <label className="block-panel__check">
+          <input
+            type="checkbox"
+            checked={form.enabled}
+            onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
+          />
+          활성화
+        </label>
+      </div>
+    </Modal>
   )
 }
 
@@ -191,95 +171,95 @@ export default function CleaningRulesPage() {
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700, margin: '0 0 4px' }}>정제 규칙</h1>
-          <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: 0 }}>
-            텍스트 정제 블록이 문서 처리 시 적용하는 사용자 정의 규칙입니다.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setEditing('new')}
-          className="krds-btn primary small"
-          style={{ cursor: 'pointer' }}
-        >
-          + 새 규칙
-        </button>
-      </div>
+    <Page>
+      <PageHeader
+        title="정제 규칙"
+        subtitle="텍스트 정제 블록이 문서 처리 시 적용하는 사용자 정의 규칙입니다."
+        actions={(<>
+          {data && <span className="ds-toolbar__meta">{`${rules.length}건`}</span>}
+          <Button variant="primary" icon={<Plus size={14} aria-hidden="true" />} onClick={() => setEditing('new')}>
+            새 규칙
+          </Button>
+        </>)}
+      />
 
-      {isLoading && (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-8)' }}>
-          <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--color-text-muted)' }} />
-        </div>
-      )}
 
-      {!isLoading && !rules.length && (
-        <p style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>등록된 정제 규칙이 없습니다.</p>
-      )}
+      <div style={{ padding: 'var(--space-4) var(--space-5)', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+        {isLoading && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-8)' }}>
+            <Loader2 size={20} className="pipeline-spin" style={{ color: 'var(--color-text-muted)' }} aria-label="불러오는 중" />
+          </div>
+        )}
 
-      {!!rules.length && (
-        <div style={{ overflowX: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: 'rgba(148,163,184,0.08)' }}>
-                {['이름', '유형', '패턴', '치환', '범위', '우선순위', '활성화', '작업'].map((h) => (
-                  <th key={h} style={{ textAlign: 'left', padding: '8px 12px', borderBottom: '1px solid var(--color-border)' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rules.map((rule) => (
-                <tr key={rule.id}>
-                  <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)' }}>{rule.rule_name}</td>
-                  <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)' }}>{RULE_TYPE_LABELS[rule.rule_type as CleaningRuleType] ?? rule.rule_type}</td>
-                  <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)', fontFamily: 'monospace', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {rule.pattern ?? '-'}
-                  </td>
-                  <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)', fontFamily: 'monospace' }}>
-                    {rule.replacement || '(제거)'}
-                  </td>
-                  <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)' }}>{SCOPE_LABELS[rule.scope]}</td>
-                  <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)' }}>{rule.priority}</td>
-                  <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)' }}>
-                    <span className={`krds-badge xsmall ${rule.enabled ? 'bg-success' : 'bg-gray'}`}>
-                      {rule.enabled ? '사용' : '중지'}
-                    </span>
-                  </td>
-                  <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)' }}>
-                    {confirmDeleteId === rule.id ? (
-                      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-                        <span style={{ fontSize: 12, color: '#dc2626' }}>삭제하시겠습니까?</span>
-                        <button
-                          type="button"
-                          onClick={() => del.mutate(rule.id, { onSuccess: () => setConfirmDeleteId(null) })}
-                          disabled={del.isPending}
-                          className="krds-btn xsmall primary"
-                        >
-                          확인
-                        </button>
-                        <button type="button" onClick={() => setConfirmDeleteId(null)} className="krds-btn xsmall secondary">
-                          취소
-                        </button>
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        <button type="button" onClick={() => setEditing(rule)} className="krds-btn text xsmall icon-btn">
-                          <Pencil size={13} />
-                        </button>
-                        <button type="button" onClick={() => setConfirmDeleteId(rule.id)} className="krds-btn text xsmall icon-btn danger">
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    )}
-                  </td>
+        {!isLoading && !rules.length && (
+          <EmptyState title="등록된 정제 규칙이 없습니다." description="새 규칙을 만들면 텍스트 정제 블록이 문서 처리 때 적용합니다." />
+        )}
+
+        {!!rules.length && (
+          <div className="ds-table-wrap">
+            <table className="ds-table">
+              <thead>
+                <tr>
+                  <th>이름</th>
+                  <th>유형</th>
+                  <th>패턴</th>
+                  <th>치환</th>
+                  <th>범위</th>
+                  <th className="ds-cell-num">우선순위</th>
+                  <th>활성화</th>
+                  <th aria-label="작업" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {rules.map((rule) => (
+                  <tr key={rule.id} className={rule.enabled ? undefined : 'is-warning'}>
+                    <td>{rule.rule_name}</td>
+                    <td>{RULE_TYPE_LABELS[rule.rule_type as CleaningRuleType] ?? rule.rule_type}</td>
+                    <td style={{
+                      fontFamily: 'var(--font-mono)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {rule.pattern ?? '-'}
+                    </td>
+                    <td style={{ fontFamily: 'var(--font-mono)' }}>{rule.replacement || '(제거)'}</td>
+                    <td>{SCOPE_LABELS[rule.scope]}</td>
+                    <td className="ds-cell-num">{rule.priority}</td>
+                    <td>
+                      <Badge tone={rule.enabled ? 'success' : 'neutral'} hasDot>
+                        {rule.enabled ? '사용' : '중지'}
+                      </Badge>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {confirmDeleteId === rule.id ? (
+                        <div className="pipeline-confirm">
+                          <span className="pipeline-confirm__text">삭제하시겠습니까?</span>
+                          <Button
+                            variant="danger-solid"
+                            size="sm"
+                            onClick={() => del.mutate(rule.id, { onSuccess: () => setConfirmDeleteId(null) })}
+                            disabled={del.isPending}
+                          >
+                            확인
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteId(null)}>취소</Button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'inline-flex', gap: 'var(--space-1)' }}>
+                          <IconButton label="규칙 수정" onClick={() => setEditing(rule)}>
+                            <Pencil size={13} aria-hidden="true" />
+                          </IconButton>
+                          <IconButton label="규칙 삭제" tone="danger" onClick={() => setConfirmDeleteId(rule.id)}>
+                            <Trash2 size={13} aria-hidden="true" />
+                          </IconButton>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {editing && (
         <RuleFormModal
@@ -297,7 +277,6 @@ export default function CleaningRulesPage() {
           isSaving={create.isPending || update.isPending}
         />
       )}
-
-    </div>
+    </Page>
   )
 }

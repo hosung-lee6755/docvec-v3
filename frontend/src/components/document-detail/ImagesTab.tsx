@@ -24,7 +24,7 @@ export default function ImagesTab({
 
   if (isError) {
     return (
-      <p style={{ color: '#dc2626', fontSize: 13, margin: 0 }}>
+      <p style={{ color: 'var(--color-danger)', fontSize: 13, margin: 0 }}>
         그림 데이터를 불러오는 중 오류가 발생했습니다.
       </p>
     )
@@ -53,8 +53,8 @@ export default function ImagesTab({
             그림 {i + 1}{isPdfDoc ? ` · ${img.page_number}쪽` : ''}
           </div>
           <div style={{
-            border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)',
-            padding: 'var(--space-3)', background: '#f8fafc',
+            border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)',
+            padding: 'var(--space-3)', background: 'var(--color-surface-subtle)',
             display: 'flex', justifyContent: 'center',
           }}>
             <img

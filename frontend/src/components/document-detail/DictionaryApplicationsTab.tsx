@@ -16,7 +16,7 @@ const ENTRY_TYPE_LABELS: Record<string, string> = {
   stopword: '불용어', synonym: '동의어', custom_word: '사용자사전',
 }
 
-const CELL: React.CSSProperties = { padding: '6px 10px', borderBottom: '1px solid #f1f5f9', verticalAlign: 'top' }
+const CELL: React.CSSProperties = { padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)', verticalAlign: 'top' }
 
 interface DictionaryApplicationsTabProps {
   documentId: string
@@ -51,7 +51,7 @@ function InContext({ app }: { app: DictionaryApplicationItem }) {
   return (
     <span style={{ lineHeight: 1.6 }}>
       {app.context_before ? <span style={{ color: 'var(--color-text-muted)' }}>…{app.context_before}</span> : null}
-      <mark style={{ background: '#fef08a', padding: '0 2px', borderRadius: 2 }}>
+      <mark style={{ background: 'var(--color-highlight)', padding: '0 2px', borderRadius: 2 }}>
         {changed ? <><s>{app.original_text}</s> → {app.normalized_text}</> : app.original_text}
       </mark>
       {app.context_after ? <span style={{ color: 'var(--color-text-muted)' }}>{app.context_after}…</span> : null}
@@ -110,12 +110,12 @@ export default function DictionaryApplicationsTab({
               return (
                 <li key={e.entryId} style={{
                   display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '4px 8px',
-                  border: '1px solid #e2e8f0', borderRadius: 999, opacity: isOff ? 0.6 : 1,
+                  border: '1px solid var(--color-border)', borderRadius: 999, opacity: isOff ? 0.6 : 1,
                 }}>
-                  <span className="krds-badge xsmall bg-gray">{e.kind}</span>
+                  <span className="ds-badge ds-badge--neutral">{e.kind}</span>
                   <span style={{ textDecoration: isOff ? 'line-through' : 'none' }}>{e.term}</span>
                   <span style={{ color: 'var(--color-text-muted)' }}>{e.count ? `${e.count}건` : '적용 안 됨'}</span>
-                  <button type="button" className="krds-btn text xsmall" disabled={toggle.isPending}
+                  <button type="button" className="ds-btn ds-btn--ghost ds-btn--sm" disabled={toggle.isPending}
                     onClick={() => toggle.mutate({ documentId, entryId: e.entryId, exclude: !isOff })}>
                     {isOff ? '다시 적용' : '이 문서에서 끄기'}
                   </button>
@@ -124,19 +124,19 @@ export default function DictionaryApplicationsTab({
             })}
           </ul>
           {toggle.isError && (
-            <p role="alert" style={{ fontSize: 12, color: '#dc2626', margin: 'var(--space-1) 0 0' }}>
+            <p role="alert" style={{ fontSize: 12, color: 'var(--color-danger)', margin: 'var(--space-1) 0 0' }}>
               바꾸지 못했습니다. 이 문서를 편집할 권한이 있는지 확인하세요.
             </p>
           )}
         </section>
       )}
 
-      <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-sm)' }}>
+      <div style={{ overflowX: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
-            <tr style={{ background: '#f8fafc' }}>
+            <tr style={{ background: 'var(--color-surface-subtle)' }}>
               {['유형', '사전 항목', '바뀐 자리', '사전버전', '작업'].map((h) => (
-                <th key={h} style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>{h}</th>
+                <th key={h} style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid var(--color-border)' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -149,13 +149,13 @@ export default function DictionaryApplicationsTab({
                 <td style={CELL}>v{app.dictionary_version}</td>
                 <td style={CELL}>
                   {app.reverted ? (
-                    <span className="krds-badge xsmall bg-gray">취소됨</span>
+                    <span className="ds-badge ds-badge--neutral">취소됨</span>
                   ) : (
                     <button
                       type="button"
                       onClick={() => revert.mutate({ documentId, appId: app.id })}
                       disabled={revert.isPending}
-                      className="krds-btn text xsmall"
+                      className="ds-btn ds-btn--ghost ds-btn--sm"
                       title="이 문서에서 같은 표현은 다음 처리부터 바꾸지 않습니다"
                     >
                       적용 취소
@@ -171,8 +171,8 @@ export default function DictionaryApplicationsTab({
       {needsReprocess && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-          padding: 'var(--space-2) var(--space-3)', background: '#fffbeb',
-          border: '1px solid #fde68a', borderRadius: 'var(--radius-sm)', fontSize: 12, color: '#92400e',
+          padding: 'var(--space-2) var(--space-3)', background: 'var(--color-warning-bg)',
+          border: '1px solid var(--color-warning-border)', borderRadius: 'var(--radius-sm)', fontSize: 12, color: 'var(--color-warning)',
         }}>
           <AlertTriangle size={14} />
           <span style={{ flex: 1 }}>
@@ -184,7 +184,7 @@ export default function DictionaryApplicationsTab({
           <button
             type="button"
             onClick={onReprocessFromDictionary}
-            className="krds-btn secondary xsmall"
+            className="ds-btn ds-btn--secondary ds-btn--sm"
           >
             사전 블록부터 재처리
           </button>

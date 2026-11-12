@@ -97,8 +97,8 @@ describe('VersionHistoryPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '현재 버전과 비교' }))
     expect(screen.getByText(/1번 버전 → 2번 버전 · 추가 1줄 · 삭제 1줄/)).toBeInTheDocument()
     expect(screen.getByText(/앞부분만 보여줍니다/)).toBeInTheDocument()
-    expect(screen.getByText('+새 문장')).toHaveStyle({ color: '#15803d' })
-    expect(screen.getByText('-예전 문장')).toHaveStyle({ color: '#b91c1c' })
+    expect(screen.getByText('+새 문장')).toHaveStyle({ color: 'var(--color-success)' })
+    expect(screen.getByText('-예전 문장')).toHaveStyle({ color: 'var(--color-danger)' })
   })
 
   it('shows the server detail when a restore is refused', () => {

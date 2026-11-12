@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Loader2, ShieldOff, ShieldCheck, Trash2, UserPlus, X } from 'lucide-react'
+import { ShieldOff, ShieldCheck, Trash2, UserPlus, X } from 'lucide-react'
 import {
   useAddGroupMember, useCreateGroup, useDeleteGroup, useGroup, useGroups,
   useRemoveGroupMember, useUpdateGroup,
@@ -7,14 +7,13 @@ import {
 import type { Group } from '../hooks/useAccess'
 import { useUsers } from '../hooks/useUsers'
 import { useAuthStore } from '../store/authStore'
+import {
+  Alert, Badge, Button, EmptyState, Field, IconButton, Input, Page, PageBody, PageHeader, Select,
+  SidePanel, Spinner, Split, Stat, StatStrip, Toolbar,
+} from '../components/ui'
 
 // v3 권한 모델 — 문서 접근 허용 목록(ACL)에 넣을 사용자 그룹을 관리한다(관리자 전용).
 // 그룹을 지워도 문서 허용 목록의 해당 항목은 남는다(제한이 풀리지 않도록, fail-closed).
-
-const ERROR_BOX: React.CSSProperties = {
-  background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 'var(--radius-md)',
-  padding: 'var(--space-3)', color: '#dc2626', fontSize: 13, marginBottom: 'var(--space-3)',
-}
 
 function errorMessage(error: unknown, fallback: string): string {
   const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
@@ -36,23 +35,29 @@ function CreateGroupForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', marginBottom: 'var(--space-4)' }}>
-      <input
-        id="group_name" name="group_name" value={name} onChange={(e) => setName(e.target.value)}
-        placeholder="그룹 이름 (예: 품질팀)" maxLength={255} className="krds-input small" style={{ flex: '1 1 160px' }}
-        aria-label="새 그룹 이름"
-      />
-      <input
-        id="group_description" name="group_description" value={description}
-        onChange={(e) => setDescription(e.target.value)} placeholder="설명 (선택)" maxLength={2000}
-        className="krds-input small" style={{ flex: '2 1 220px' }} aria-label="새 그룹 설명"
-      />
-      <button type="submit" className="krds-btn small primary" disabled={!name.trim() || createGroup.isPending}>
+    <form onSubmit={handleSubmit} aria-label="새 그룹 만들기" style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+      <Field label="그룹 이름">
+        {(id) => (
+          <Input
+            id={id} name="group_name" value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="예: 품질팀" maxLength={255} controlSize="sm"
+          />
+        )}
+      </Field>
+      <Field label="설명(선택)">
+        {(id) => (
+          <Input
+            id={id} name="group_description" value={description} onChange={(e) => setDescription(e.target.value)}
+            placeholder="설명" maxLength={2000} controlSize="sm"
+          />
+        )}
+      </Field>
+      <Button type="submit" variant="primary" size="sm" disabled={!name.trim() || createGroup.isPending}>
         그룹 추가
-      </button>
+      </Button>
       {createGroup.isError && (
-        <div style={{ ...ERROR_BOX, flexBasis: '100%', marginBottom: 0 }}>
-          {errorMessage(createGroup.error, '그룹을 만들지 못했습니다.')}
+        <div style={{ flexBasis: '100%' }}>
+          <Alert tone="danger">{errorMessage(createGroup.error, '그룹을 만들지 못했습니다.')}</Alert>
         </div>
       )}
     </form>
@@ -70,8 +75,20 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [draft, setDraft] = useState<{ name: string; description: string } | null>(null)
 
-  if (isLoading) return <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
-  if (isError || !group) return <div style={ERROR_BOX}>그룹 정보를 불러오지 못했습니다.</div>
+  if (isLoading) {
+    return (
+      <SidePanel title="그룹 상세" label="그룹 상세">
+        <Spinner />
+      </SidePanel>
+    )
+  }
+  if (isError || !group) {
+    return (
+      <SidePanel title="그룹 상세" label="그룹 상세">
+        <Alert tone="danger">그룹 정보를 불러오지 못했습니다.</Alert>
+      </SidePanel>
+    )
+  }
 
   // AD에서 동기화되는 그룹은 이름과 구성원을 AD에서 바꾼다(서버도 409로 막는다)
   const isDirectory = group.source === 'ldap'
@@ -88,95 +105,85 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
   }
 
   return (
-    <div>
-      {mutationError && <div style={ERROR_BOX}>{errorMessage(mutationError.error, '요청을 처리하지 못했습니다.')}</div>}
+    <SidePanel
+      eyebrow={isDirectory ? 'AD 동기화 그룹' : '그룹'}
+      title={group.name}
+      label="그룹 상세"
+      actions={isDirectory ? undefined : (
+        <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+          {draft ? null : (
+            <Button variant="secondary" size="sm" onClick={() => setDraft({ name: group.name, description: group.description ?? '' })}>
+              수정
+            </Button>
+          )}
+          {confirmDelete ? (
+            <>
+              <Button variant="danger-solid" size="sm" disabled={deleteGroup.isPending} onClick={() => deleteGroup.mutate(group.id, { onSuccess: onDeleted })}>
+                삭제 확인
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>취소</Button>
+            </>
+          ) : (
+            <IconButton tone="danger" label="그룹 삭제" onClick={() => setConfirmDelete(true)}>
+              <Trash2 size={14} aria-hidden="true" />
+            </IconButton>
+          )}
+        </div>
+      )}
+    >
+      {mutationError && <Alert tone="danger">{errorMessage(mutationError.error, '요청을 처리하지 못했습니다.')}</Alert>}
 
       {draft ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
-          <input
-            value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-            className="krds-input small" maxLength={255} aria-label="그룹 이름"
-          />
-          <input
-            value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-            className="krds-input small" maxLength={2000} aria-label="그룹 설명" placeholder="설명"
-          />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+          <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} maxLength={255} aria-label="그룹 이름" />
+          <Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} maxLength={2000} aria-label="그룹 설명" placeholder="설명" />
           <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-            <button className="krds-btn xsmall primary" onClick={handleSave} disabled={!draft.name.trim() || updateGroup.isPending}>저장</button>
-            <button className="krds-btn xsmall secondary" onClick={() => setDraft(null)}>취소</button>
+            <Button variant="primary" size="sm" onClick={handleSave} disabled={!draft.name.trim() || updateGroup.isPending}>저장</Button>
+            <Button variant="ghost" size="sm" onClick={() => setDraft(null)}>취소</Button>
           </div>
         </div>
       ) : (
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-          <div>
-            <h2 style={{ fontSize: 18, fontWeight: 700 }}>
-              {group.name}
-              {isDirectory && <span className="krds-badge xsmall bg-information" style={{ marginLeft: 8 }}>AD</span>}
-            </h2>
-            <p style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>{group.description || '설명 없음'}</p>
-          </div>
-          {isDirectory ? null : <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
-            <button
-              className="krds-btn xsmall secondary"
-              onClick={() => setDraft({ name: group.name, description: group.description ?? '' })}
-            >수정</button>
-            {confirmDelete ? (
-              <>
-                <button
-                  className="krds-btn xsmall primary"
-                  disabled={deleteGroup.isPending}
-                  onClick={() => deleteGroup.mutate(group.id, { onSuccess: onDeleted })}
-                >삭제 확인</button>
-                <button className="krds-btn xsmall secondary" onClick={() => setConfirmDelete(false)}>취소</button>
-              </>
-            ) : (
-              <button className="krds-btn text xsmall icon-btn danger" aria-label="그룹 삭제" onClick={() => setConfirmDelete(true)}>
-                <Trash2 size={14} />
-              </button>
-            )}
-          </div>}
-        </div>
+        <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>{group.description || '설명 없음'}</p>
       )}
+
       {isDirectory && (
-        <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 'var(--space-3)' }}>
-          사내 AD에서 동기화되는 그룹입니다. 이름과 구성원은 AD에서 바꾸면 다음 동기화 때 반영됩니다.
-        </p>
+        <Alert tone="info">사내 AD에서 동기화되는 그룹입니다. 이름과 구성원은 AD에서 바꾸면 다음 동기화 때 반영됩니다.</Alert>
       )}
       {confirmDelete && (
-        <p style={{ fontSize: 12, color: '#b45309', marginBottom: 'var(--space-3)' }}>
-          그룹을 삭제해도 이 그룹을 허용 목록에 넣은 문서의 제한은 유지됩니다. 해당 문서는 문서 편집자가 허용 목록을 다시 정리해야 합니다.
-        </p>
+        <Alert tone="warning">그룹을 삭제해도 이 그룹을 허용 목록에 넣은 문서의 제한은 유지됩니다. 해당 문서는 문서 편집자가 허용 목록을 다시 정리해야 합니다.</Alert>
       )}
 
-      {!isDirectory && <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-3)' }}>
-        <select
-          value={candidate} onChange={(e) => setCandidate(e.target.value)}
-          className="krds-form-select small" style={{ flex: 1 }} aria-label="추가할 사용자"
-        >
-          <option value="">추가할 사용자 선택</option>
-          {candidates.map((u) => (
-            <option key={u.id} value={u.id}>{u.username} ({u.email})</option>
-          ))}
-        </select>
-        <button
-          className="krds-btn small primary"
-          disabled={!candidate || addMember.isPending}
-          onClick={() => addMember.mutate({ groupId: group.id, userId: candidate }, { onSuccess: () => setCandidate('') })}
-        >
-          <UserPlus size={14} /> 추가
-        </button>
-      </div>}
+      {!isDirectory && (
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <Select
+            controlSize="sm" value={candidate} onChange={(e) => setCandidate(e.target.value)}
+            aria-label="추가할 사용자" style={{ flex: 1, minWidth: 0 }}
+          >
+            <option value="">추가할 사용자 선택</option>
+            {candidates.map((u) => (
+              <option key={u.id} value={u.id}>{u.username} ({u.email})</option>
+            ))}
+          </Select>
+          <Button
+            variant="primary" size="sm"
+            icon={<UserPlus size={14} aria-hidden="true" />}
+            disabled={!candidate || addMember.isPending}
+            onClick={() => addMember.mutate({ groupId: group.id, userId: candidate }, { onSuccess: () => setCandidate('') })}
+          >
+            추가
+          </Button>
+        </div>
+      )}
 
       {group.members.length === 0 ? (
-        <p style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>멤버가 없습니다.</p>
+        <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>멤버가 없습니다.</p>
       ) : (
-        <div className="krds-table-wrap">
-          <table className="tbl col data">
-            <caption>{group.name} 멤버</caption>
+        <div className="ds-table-wrap">
+          <table className="ds-table ds-table--compact">
+            <caption className="sr-only">{group.name} 멤버</caption>
             <thead>
               <tr>
                 <th scope="col">이름</th>
-                <th scope="col">이메일</th>
                 <th scope="col">추가일</th>
                 <th scope="col"><span className="sr-only">작업</span></th>
               </tr>
@@ -184,20 +191,24 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
             <tbody>
               {group.members.map((m) => (
                 <tr key={m.user_id}>
-                  <td style={{ fontWeight: 500 }}>{m.username}</td>
-                  <td style={{ color: 'var(--color-text-muted)' }}>{m.email}</td>
-                  <td style={{ color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>
+                  <td>
+                    <span style={{ fontWeight: 500 }}>{m.username}</span>
+                    <span className="ds-cell-sub">{m.email}</span>
+                  </td>
+                  <td className="ds-cell-muted" style={{ whiteSpace: 'nowrap' }}>
                     {m.added_at ? new Date(m.added_at).toLocaleDateString('ko-KR') : '-'}
                   </td>
                   <td>
-                    {!isDirectory && <button
-                      className="krds-btn text xsmall icon-btn danger"
-                      aria-label={`${m.username} 그룹에서 제거`}
-                      disabled={removeMember.isPending}
-                      onClick={() => removeMember.mutate({ groupId: group.id, userId: m.user_id })}
-                    >
-                      <X size={14} />
-                    </button>}
+                    {!isDirectory && (
+                      <IconButton
+                        tone="danger"
+                        label={`${m.username} 그룹에서 제거`}
+                        disabled={removeMember.isPending}
+                        onClick={() => removeMember.mutate({ groupId: group.id, userId: m.user_id })}
+                      >
+                        <X size={14} aria-hidden="true" />
+                      </IconButton>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -205,51 +216,54 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
           </table>
         </div>
       )}
-    </div>
+    </SidePanel>
   )
 }
 
-function GroupList({ groups, selectedId, onSelect }: {
+function GroupTable({ groups, selectedId, onSelect }: {
   groups: Group[]
   selectedId: string | null
   onSelect: (id: string) => void
 }) {
   if (groups.length === 0) {
-    return (
-      <div style={{ textAlign: 'center', padding: 'var(--space-6)', color: 'var(--color-text-muted)' }}>
-        <ShieldCheck size={40} style={{ margin: '0 auto var(--space-3)', display: 'block', opacity: 0.4 }} />
-        <p>아직 그룹이 없습니다.</p>
-      </div>
-    )
+    return <EmptyState icon={<ShieldCheck size={40} aria-hidden="true" />} title="아직 그룹이 없습니다." />
   }
   return (
-    <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {groups.map((g) => {
-        const isSelected = g.id === selectedId
-        return (
-          <li key={g.id}>
-            <button
-              type="button"
-              onClick={() => onSelect(g.id)}
-              aria-pressed={isSelected}
-              style={{
-                width: '100%', textAlign: 'left', padding: 'var(--space-2) var(--space-3)',
-                borderRadius: 'var(--radius-md)', cursor: 'pointer',
-                border: `1px solid ${isSelected ? 'var(--color-primary, #256ef4)' : '#e2e8f0'}`,
-                background: isSelected ? '#eff6ff' : 'transparent',
-                display: 'flex', justifyContent: 'space-between', gap: 'var(--space-2)',
-              }}
-            >
-              <span style={{ fontWeight: 600 }}>
-                {g.name}
-                {g.source === 'ldap' && <span className="krds-badge xsmall bg-information" style={{ marginLeft: 6 }}>AD</span>}
-              </span>
-              <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{g.member_count}명</span>
-            </button>
-          </li>
-        )
-      })}
-    </ul>
+    <div className="ds-table-wrap">
+      <table className="ds-table">
+        <caption className="sr-only">그룹 목록</caption>
+        <thead>
+          <tr>
+            <th scope="col">그룹</th>
+            <th scope="col" className="ds-cell-num">구성원</th>
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((g) => {
+            const isSelected = g.id === selectedId
+            const isEmpty = g.member_count === 0
+            const rowClass = isSelected ? 'is-selected' : undefined
+            return (
+              <tr key={g.id} className={rowClass}>
+                <td>
+                  <button
+                    type="button"
+                    className="ds-link-btn"
+                    aria-pressed={isSelected}
+                    onClick={() => onSelect(g.id)}
+                  >
+                    {g.name}
+                  </button>
+                  {g.source === 'ldap' && <> <Badge tone="info" isPlain>AD</Badge></>}
+                  {isEmpty && <span className="ds-cell-sub">구성원 없음</span>}
+                </td>
+                <td className="ds-cell-num">{g.member_count}명</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -260,42 +274,52 @@ export default function GroupsPage() {
 
   if (currentUser?.role !== 'admin') {
     return (
-      <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
-        <ShieldOff size={48} style={{ margin: '0 auto var(--space-4)', display: 'block', opacity: 0.4 }} />
-        <p>관리자만 접근할 수 있습니다.</p>
-      </div>
+      <Page>
+        <EmptyState icon={<ShieldOff size={48} aria-hidden="true" />} title="관리자만 접근할 수 있습니다." />
+      </Page>
     )
   }
 
   const groups = data?.items ?? []
+  const directoryCount = groups.filter((g) => g.source === 'ldap').length
+  const memberTotal = groups.reduce((sum, g) => sum + g.member_count, 0)
+  const emptyCount = groups.filter((g) => g.member_count === 0).length
 
   return (
-    <div>
-      <style>{'@keyframes spin { to { transform: rotate(360deg) } }'}</style>
-      <div style={{ marginBottom: 'var(--space-6)' }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700 }}>그룹 관리</h1>
-        <p style={{ fontSize: 13, color: 'var(--color-text-muted)', marginTop: 4 }}>
-          문서의 접근 허용 목록에 넣을 사용자 그룹입니다. 그룹 구성원이 바뀌면 다음 검색·채팅부터 바로 반영됩니다.
-        </p>
-      </div>
+    <Page>
+      <PageHeader
+        title="그룹 관리"
+        subtitle="문서의 접근 허용 목록에 넣을 사용자 그룹입니다. 구성원이 바뀌면 다음 검색·채팅부터 반영됩니다."
+      />
+      <StatStrip>
+        <Stat label="그룹" value={groups.length} />
+        <Stat label="AD 동기화 그룹" value={directoryCount} />
+        <Stat label="구성원 합계" value={memberTotal} />
+        <Stat label="구성원 없는 그룹" value={emptyCount} />
+      </StatStrip>
 
-      <CreateGroupForm />
-
-      {isLoading && <Loader2 size={24} style={{ animation: 'spin 1s linear infinite' }} />}
-      {isError && <div style={ERROR_BOX}>그룹 목록을 불러오지 못했습니다.</div>}
-
-      {!isLoading && !isError && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 280px) 1fr', gap: 'var(--space-6)', alignItems: 'start' }}>
-          <GroupList groups={groups} selectedId={selectedId} onSelect={setSelectedId} />
-          <section aria-label="그룹 상세">
-            {selectedId ? (
-              <GroupDetailPanel key={selectedId} groupId={selectedId} onDeleted={() => setSelectedId(null)} />
-            ) : (
-              <p style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>왼쪽에서 그룹을 선택하세요.</p>
+      <Split
+        main={(
+          <PageBody>
+            <CreateGroupForm />
+            {isLoading && <Spinner />}
+            {isError && <Alert tone="danger">그룹 목록을 불러오지 못했습니다.</Alert>}
+            {!isLoading && !isError && (
+              <>
+                <Toolbar label="그룹 목록 도구" meta={`${groups.length}개`}>
+                  <span className="ds-cell-muted" style={{ fontSize: 'var(--text-sm)' }}>
+                    그룹 이름을 누르면 오른쪽에 상세가 열립니다.
+                  </span>
+                </Toolbar>
+                <GroupTable groups={groups} selectedId={selectedId} onSelect={setSelectedId} />
+              </>
             )}
-          </section>
-        </div>
-      )}
-    </div>
+          </PageBody>
+        )}
+        panel={selectedId && !isLoading && !isError ? (
+          <GroupDetailPanel key={selectedId} groupId={selectedId} onDeleted={() => setSelectedId(null)} />
+        ) : undefined}
+      />
+    </Page>
   )
 }

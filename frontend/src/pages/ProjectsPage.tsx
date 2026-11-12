@@ -9,13 +9,14 @@ import {
   type Project,
 } from '../hooks/useProjects'
 import { useAuthStore } from '../store/authStore'
+import { Button, Field, IconButton, Input, Page, PageBody, PageHeader, Textarea } from '../components/ui'
 
 export default function ProjectsPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
 
   return (
-    <div style={{ display: 'flex', gap: 'var(--space-6)', height: 'calc(100vh - var(--space-8) * 2)' }}>
+    <div className="ds-page" style={{ flexDirection: 'row', height: '100%' }}>
       <ProjectSidebar
         activeId={projectId ?? null}
         onSelect={(id) => navigate(`/projects/${id}`)}
@@ -25,6 +26,25 @@ export default function ProjectsPage() {
         {projectId ? <Outlet /> : <NewProjectForm onCreated={(id) => navigate(`/projects/${id}`)} />}
       </div>
     </div>
+  )
+}
+
+function ProjectRowActions({
+  project, isAdmin, onStartEdit, onAskDelete,
+}: { project: Project; isAdmin: boolean; onStartEdit: () => void; onAskDelete: () => void }) {
+  return (
+    <span style={{ display: 'inline-flex', gap: 'var(--space-1)', flexShrink: 0 }}>
+      {project.is_owner && (
+        <IconButton label="이름 변경" onClick={(e) => { e.stopPropagation(); onStartEdit() }}>
+          <Pencil size={13} aria-hidden="true" />
+        </IconButton>
+      )}
+      {(project.is_owner || isAdmin) && (
+        <IconButton label="삭제" tone="danger" onClick={(e) => { e.stopPropagation(); onAskDelete() }}>
+          <Trash2 size={13} aria-hidden="true" />
+        </IconButton>
+      )}
+    </span>
   )
 }
 
@@ -55,91 +75,100 @@ function ProjectSidebar({
   }
 
   return (
-    <div style={{
-      width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column',
-      borderRight: '1px solid var(--color-border)', paddingRight: 'var(--space-4)',
-    }}>
-      <button type="button" onClick={onNew} className="krds-btn small primary"
-        style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
-        <Plus size={16} /> 새 프로젝트
-      </button>
+    <nav
+      aria-label="프로젝트 목록"
+      style={{
+        width: 264, flexShrink: 0, display: 'flex', flexDirection: 'column',
+        borderRight: '1px solid var(--color-border-subtle)', padding: 'var(--space-4)', minHeight: 0,
+      }}
+    >
+      <Button variant="primary" size="sm" onClick={onNew} icon={<Plus size={14} aria-hidden="true" />}
+        style={{ marginBottom: 'var(--space-4)', alignSelf: 'stretch' }}>
+        새 프로젝트
+      </Button>
 
       <div style={{ flex: '1 1 auto', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {data?.items.map((p) => (
-          <div
-            key={p.id}
-            onClick={() => editingId !== p.id && onSelect(p.id)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-              padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-md, 8px)',
-              cursor: 'pointer', background: p.id === activeId ? '#eff6ff' : 'transparent',
-              color: p.id === activeId ? '#1d4ed8' : '#334155', fontSize: 13,
-            }}
-          >
-            {editingId === p.id ? (
-              <>
-                <input
-                  autoFocus
-                  value={editingName}
-                  onChange={(e) => setEditingName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') commitEdit()
-                    if (e.key === 'Escape') setEditingId(null)
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  className="krds-input small"
-                  style={{ flex: '1 1 auto', minWidth: 0 }}
-                />
-                <button type="button" onClick={(e) => { e.stopPropagation(); commitEdit() }}
-                  className="krds-btn text xsmall icon-btn success" title="저장">
-                  <Check size={14} />
-                </button>
-                <button type="button" onClick={(e) => { e.stopPropagation(); setEditingId(null) }}
-                  className="krds-btn text xsmall icon-btn" title="취소">
-                  <X size={14} />
-                </button>
-              </>
-            ) : confirmDeleteId === p.id ? (
-              <>
-                <span style={{ flex: '1 1 auto', fontSize: 12, color: '#dc2626' }}>삭제할까요?</span>
-                <button type="button" onClick={(e) => { e.stopPropagation(); handleDelete(p.id) }}
-                  className="krds-btn text xsmall icon-btn danger" title="삭제 확인">
-                  <Check size={14} />
-                </button>
-                <button type="button" onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null) }}
-                  className="krds-btn text xsmall icon-btn" title="취소">
-                  <X size={14} />
-                </button>
-              </>
-            ) : (
-              <>
-                <span style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {p.name}
-                </span>
-                <span style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>{p.collection_count}</span>
-                {p.is_owner && (
-                  <button type="button" onClick={(e) => { e.stopPropagation(); startEdit(p) }}
-                    className="krds-btn text xsmall icon-btn" title="이름 변경">
-                    <Pencil size={13} />
+        {data?.items.map((p) => {
+          const isActive = p.id === activeId
+          return (
+            <div
+              key={p.id}
+              onClick={() => editingId !== p.id && onSelect(p.id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+                padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-md)',
+                cursor: 'pointer', fontSize: 'var(--text-sm)',
+                background: isActive ? 'var(--color-primary-subtle)' : 'transparent',
+                color: isActive ? 'var(--color-primary)' : 'var(--color-text)',
+                fontWeight: isActive ? 600 : 400,
+              }}
+            >
+              {editingId === p.id ? (
+                <>
+                  <Input
+                    autoFocus
+                    aria-label="프로젝트 이름"
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitEdit()
+                      if (e.key === 'Escape') setEditingId(null)
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    controlSize="sm"
+                    style={{ flex: '1 1 auto', minWidth: 0 }}
+                  />
+                  <IconButton label="저장" onClick={(e) => { e.stopPropagation(); commitEdit() }}>
+                    <Check size={14} aria-hidden="true" />
+                  </IconButton>
+                  <IconButton label="취소" onClick={(e) => { e.stopPropagation(); setEditingId(null) }}>
+                    <X size={14} aria-hidden="true" />
+                  </IconButton>
+                </>
+              ) : confirmDeleteId === p.id ? (
+                <>
+                  <span style={{ flex: '1 1 auto', fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>삭제할까요?</span>
+                  <IconButton label="삭제 확인" tone="danger" onClick={(e) => { e.stopPropagation(); handleDelete(p.id) }}>
+                    <Check size={14} aria-hidden="true" />
+                  </IconButton>
+                  <IconButton label="취소" onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null) }}>
+                    <X size={14} aria-hidden="true" />
+                  </IconButton>
+                </>
+              ) : (
+                <>
+                  {/* 행 전체 클릭과 별개로, 키보드와 화면 낭독기가 쓸 수 있는 진짜 단추를 둔다. */}
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onSelect(p.id) }}
+                    aria-current={isActive ? 'page' : undefined}
+                    style={{
+                      flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      border: 0, background: 'transparent', padding: 0, font: 'inherit', color: 'inherit',
+                      textAlign: 'left', cursor: 'pointer',
+                    }}
+                  >
+                    {p.name}
                   </button>
-                )}
-                {(p.is_owner || isAdmin) && (
-                  <button type="button" onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(p.id) }}
-                    className="krds-btn text xsmall icon-btn" title="삭제">
-                    <Trash2 size={13} />
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        ))}
+                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-subtle)', flexShrink: 0 }}>{p.collection_count}</span>
+                  <ProjectRowActions
+                    project={p}
+                    isAdmin={isAdmin}
+                    onStartEdit={() => startEdit(p)}
+                    onAskDelete={() => setConfirmDeleteId(p.id)}
+                  />
+                </>
+              )}
+            </div>
+          )
+        })}
         {!data?.items.length && (
-          <p style={{ fontSize: 13, color: 'var(--color-text-muted)', padding: 'var(--space-3)' }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', padding: 'var(--space-3)' }}>
             아직 프로젝트가 없습니다.
           </p>
         )}
       </div>
-    </div>
+    </nav>
   )
 }
 
@@ -159,39 +188,41 @@ function NewProjectForm({ onCreated }: { onCreated: (id: string) => void }) {
   }
 
   return (
-    <div style={{ maxWidth: 480 }}>
-      <h1 style={{ fontSize: 18, fontWeight: 700, marginBottom: 'var(--space-2)' }}>새 프로젝트 만들기</h1>
-      <p style={{ fontSize: 13, color: 'var(--color-text-muted)', marginBottom: 'var(--space-6)' }}>
-        프로젝트를 만들면 그 안에 프로젝트만의 컬렉션·문서·검색·채팅 공간이 생기고, 초대된 멤버는
-        이 공간에 자동으로 접근할 수 있습니다. 특정 컬렉션만 일부 멤버를 제외하고 싶을 때는
-        컬렉션 화면의 공유 설정에서 개별 제한할 수 있습니다.
-      </p>
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="프로젝트 이름"
-          className="krds-input"
-          required
-        />
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="설명 (선택 사항)"
-          className="krds-input"
-          rows={3}
-        />
-        <button
-          type="submit"
-          disabled={createProject.isPending || !name.trim()}
-          className="krds-btn medium primary"
-          style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', justifyContent: 'center', alignSelf: 'flex-start' }}
-        >
-          {createProject.isPending && <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />}
-          만들기
-        </button>
-      </form>
-      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
-    </div>
+    <Page>
+      <PageHeader
+        title="새 프로젝트 만들기"
+        subtitle="프로젝트를 만들면 그 안에 프로젝트만의 컬렉션·문서·검색·채팅 공간이 생기고, 초대된 멤버는 이 공간에 자동으로 접근할 수 있습니다. 특정 컬렉션만 일부 멤버를 제외하고 싶을 때는 컬렉션 화면의 공유 설정에서 개별 제한할 수 있습니다."
+      />
+      <PageBody>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', maxWidth: 480 }}>
+          <Field label="프로젝트 이름">
+            {(id) => (
+              <Input id={id} value={name} onChange={(e) => setName(e.target.value)} placeholder="프로젝트 이름" required />
+            )}
+          </Field>
+          <Field label="설명">
+            {(id) => (
+              <Textarea
+                id={id}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="설명 (선택 사항)"
+                rows={3}
+              />
+            )}
+          </Field>
+          <div>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={createProject.isPending || !name.trim()}
+              icon={createProject.isPending ? <Loader2 size={14} aria-hidden="true" style={{ animation: 'spin 1s linear infinite' }} /> : undefined}
+            >
+              만들기
+            </Button>
+          </div>
+        </form>
+      </PageBody>
+    </Page>
   )
 }

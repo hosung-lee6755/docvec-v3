@@ -50,6 +50,12 @@ export const RUN_TRIGGER_LABELS: Record<string, string> = {
   UPLOAD: '업로드', MANUAL: '수동 실행', REPROCESS: '부분 재처리', COLLECTION_REPROCESS: '컬렉션 재처리',
 }
 
+// 실행 상태를 화면에 보일 한글 이름. 모르는 값은 원래 값을 그대로 보인다.
+export const RUN_STATUS_LABELS: Record<string, string> = {
+  QUEUED: '대기', RUNNING: '실행 중', COMPLETED: '완료',
+  FAILED: '실패', CANCELLED: '취소', WAITING_REVIEW: '검토 대기',
+}
+
 export const RUN_STATUS_BADGE: Record<string, string> = {
   QUEUED: 'bg-gray', RUNNING: 'bg-information', COMPLETED: 'bg-success',
   FAILED: 'bg-danger', CANCELLED: 'bg-gray', WAITING_REVIEW: 'bg-warning',

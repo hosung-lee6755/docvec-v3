@@ -1,4 +1,5 @@
 import type { ConnectorStatus, LevelRule } from '../../hooks/useConnectors'
+import type { BadgeTone } from '../ui/classes'
 
 // 원천 연결 화면에서 쓰는 사람이 읽는 이름표. 값의 정본은 백엔드 sync_engine과 acl_mapping이다.
 
@@ -9,11 +10,11 @@ export const STATUS_LABELS: Record<ConnectorStatus, string> = {
   failed: '실패',
 }
 
-export const STATUS_BADGE: Record<ConnectorStatus, string> = {
-  running: 'bg-information',
-  success: 'bg-success',
-  partial: 'bg-warning',
-  failed: 'bg-danger',
+export const STATUS_TONE: Record<ConnectorStatus, BadgeTone> = {
+  running: 'info',
+  success: 'success',
+  partial: 'warning',
+  failed: 'danger',
 }
 
 const REASON_LABELS: Record<string, string> = {

@@ -90,7 +90,7 @@ v2에서 옮겨 온 영역:
 | 5 | 에이전틱 검색 | 여러 문서와 조건이 얽힌 복합 질문에, 단계적으로 검색하고 근거를 검증한 답이 나온다 | complete | `.claude/plans/m5-agentic-search.plan.md` |
 | 6 | 문서인식·검색 품질 노출 UI (v2 #2) | 사용자가 검색 근거, OCR 신뢰도, 사전 적용 결과를 화면에서 확인하고 설정한다 | complete | `.claude/plans/m6-quality-visibility.plan.md` |
 | 7 | 데이터관리 고도화 (v2 #3) | 문서 버전 수명주기가 정식화되고, 골든쿼리 평가로 품질 회귀를 잡는다 | complete | `.claude/plans/m7-data-lifecycle.plan.md` |
-| 8 | UI/UX 전면 개편 (v2 #5) | 권한·감사·에이전트 관리 화면을 포함한 전체 화면이 새 디자인 체계로 바뀐다 | pending | — |
+| 8 | UI/UX 전면 개편 (v2 #5) | 권한·감사·에이전트 관리 화면을 포함한 전체 화면이 새 디자인 체계로 바뀐다 | complete | `.claude/plans/m8-ui-redesign.plan.md` |
 
 ## Open Questions
 - [ ] 첫 세그먼트를 중견 제조·일반 기업과 공공기관·공기업 중 어디로 할지. 이에 따라 디자인 체계(KRDS 유지 여부), 보안 요구(망분리, 보안등급 체계), 첫 커넥터 대상이 달라진다.

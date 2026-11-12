@@ -162,6 +162,7 @@ const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: str
     preserve_heading: { label: '제목 보존' },
     include_previous_heading: { label: '상위 제목 포함' },
     split_long_paragraph: { label: '긴 문단 분할' },
+    table_chunk_max_rows: { label: '표 청크 최대 행 수', help: '큰 표를 나눌 때 한 청크에 넣을 최대 행 수입니다. 비워 두면 청크 크기에 맞춰 나눕니다.', placeholder: '예: 30' },
   },
   rag_store: {
     embedding_model: { label: '임베딩 모델', help: '비워 두면 컬렉션 기본값을 상속합니다.' },

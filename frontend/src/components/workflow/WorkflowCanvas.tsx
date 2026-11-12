@@ -58,7 +58,7 @@ export default function WorkflowCanvas({
       labelBgStyle: { fill: 'var(--color-surface)' },
       selected: isSelected,
       style: {
-        stroke: isInvalid ? '#dc2626' : isSelected ? 'var(--color-accent)' : color,
+        stroke: isInvalid ? 'var(--color-danger)' : isSelected ? 'var(--color-accent)' : color,
         strokeWidth: isSelected || isInvalid ? 3 : 2,
       },
     }
@@ -134,7 +134,8 @@ export default function WorkflowCanvas({
         <Controls showInteractive={false} />
         <MiniMap
           pannable zoomable
-          maskColor="rgba(15, 23, 42, 0.7)"
+          // react-flow가 SVG 속성으로 받으므로 CSS 변수를 쓸 수 없다. 바탕색(--color-bg)과 같은 값을 반투명으로 쓴다.
+          maskColor="rgba(245, 246, 248, 0.75)"
           nodeColor={(node) => getBlockMeta((node.data as { blockType?: string })?.blockType ?? '').color}
         />
       </ReactFlow>

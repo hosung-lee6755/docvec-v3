@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import type { GoldenQuery } from '../../hooks/useGoldenQueries'
+import { Alert, Button, IconButton, Input } from '../ui'
 
 export interface GoldenDocOption {
   id: string
@@ -52,54 +53,64 @@ export default function GoldenQueryList({ items, docOptions, isSaving, saveError
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 260, overflowY: 'auto' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', maxHeight: 260, overflowY: 'auto' }}>
       {items.map((gq) =>
         editingId === gq.id ? (
-          <div key={gq.id} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', fontSize: 12, padding: 'var(--space-2)', background: '#f8fafc', borderRadius: 'var(--radius-sm)' }}>
-            <input
+          <div
+            key={gq.id}
+            style={{
+              display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', fontSize: 'var(--text-sm)',
+              padding: 'var(--space-3)', background: 'var(--color-surface-subtle)', borderRadius: 'var(--radius-md)',
+            }}
+          >
+            <Input
               type="text"
               aria-label="질문 수정"
               value={draftQuery}
               onChange={(e) => setDraftQuery(e.target.value)}
-              className="krds-input"
-              style={{ width: '100%' }}
+              controlSize="sm"
             />
-            <div style={{ maxHeight: 120, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={{ maxHeight: 120, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
               {optionsFor(gq).map((d) => (
-                <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
                   <input type="checkbox" checked={draftExpected.has(d.id)} onChange={() => toggleDraftExpected(d.id)} />
                   {d.name}
                 </label>
               ))}
             </div>
-            {!canSave && <span style={{ color: '#b45309' }}>질문과 기대 문서를 하나 이상 입력하세요.</span>}
+            {!canSave && <Alert tone="warning">질문과 기대 문서를 하나 이상 입력하세요.</Alert>}
             <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-              <button type="button" onClick={() => handleSave(gq.id)} disabled={isSaving || !canSave} className="krds-btn xsmall primary">
+              <Button size="sm" variant="primary" onClick={() => handleSave(gq.id)} disabled={isSaving || !canSave}>
                 저장
-              </button>
-              <button type="button" onClick={() => setEditingId(null)} className="krds-btn xsmall secondary">
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setEditingId(null)}>
                 취소
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
-          <div key={gq.id} style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)',
-            fontSize: 12, padding: 'var(--space-1) var(--space-2)', background: '#f8fafc', borderRadius: 'var(--radius-sm)',
-          }}>
+          <div
+            key={gq.id}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)',
+              fontSize: 'var(--text-sm)', padding: 'var(--space-2) var(--space-3)',
+              background: 'var(--color-surface-subtle)', borderRadius: 'var(--radius-md)',
+            }}
+          >
             <span>
-              {gq.query} <span style={{ color: 'var(--color-text-muted)' }}>({gq.expected_document_ids.length}개 문서)</span>
+              {gq.query}{' '}
+              <span style={{ color: 'var(--color-text-muted)' }}>({gq.expected_document_ids.length}개 문서)</span>
             </span>
-            <span style={{ display: 'flex', gap: 'var(--space-1)' }}>
-              <button type="button" onClick={() => startEdit(gq)} className="krds-btn text xsmall">수정</button>
-              <button type="button" onClick={() => onDelete(gq.id)} className="krds-btn text xsmall" aria-label="골든 쿼리 삭제">
-                <Trash2 size={12} />
-              </button>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}>
+              <Button size="sm" variant="ghost" onClick={() => startEdit(gq)}>수정</Button>
+              <IconButton label="골든 쿼리 삭제" tone="danger" onClick={() => onDelete(gq.id)}>
+                <Trash2 size={14} aria-hidden="true" />
+              </IconButton>
             </span>
           </div>
         ),
       )}
-      {saveError && <p role="alert" style={{ color: '#dc2626', fontSize: 12, margin: 0 }}>{saveError}</p>}
+      {saveError && <Alert tone="danger">{saveError}</Alert>}
     </div>
   )
 }
