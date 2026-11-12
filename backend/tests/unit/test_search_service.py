@@ -22,7 +22,7 @@ def _stub_access_policy():
     with (
         patch.object(search_service, "build_access_context", new=AsyncMock(return_value=ctx)),
         patch.object(search_service, "load_document_facts", new=AsyncMock(return_value={})),
-        patch.object(search_service, "visible_document_ids", return_value=_AllowAll()),
+        patch.object(search_service, "retrievable_document_ids", return_value=_AllowAll()),
         # 쪽별 OCR 신뢰도 조회(v3 마일스톤 6)는 실제 DB 테스트가 맡는다
         patch.object(search_service, "page_confidences", new=AsyncMock(return_value={})),
     ):

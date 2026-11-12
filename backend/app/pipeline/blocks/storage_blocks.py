@@ -457,6 +457,10 @@ class RagStoreBlock(BaseBlock):
                 doc.status = "INDEXED"
                 doc.updated_at = datetime.utcnow()
                 db.commit()
+                # v3 마일스톤 7: 처리 중이던 새 버전이면 지금 현재 버전으로 올리고 이전 버전을 검색에서 뺀다
+                from app.services.document_lifecycle import promote_on_indexed_sync
+
+                promote_on_indexed_sync(db, doc)
                 return BlockResult(
                     output={
                         "points_upserted": 0, "collection": settings.qdrant_collection_name,
@@ -530,6 +534,10 @@ class RagStoreBlock(BaseBlock):
             doc.status = "INDEXED"
             doc.updated_at = datetime.utcnow()
             db.commit()
+            # v3 마일스톤 7: 처리 중이던 새 버전이면 지금 현재 버전으로 올리고 이전 버전을 검색에서 뺀다
+            from app.services.document_lifecycle import promote_on_indexed_sync
+
+            promote_on_indexed_sync(db, doc)
 
             return BlockResult(
                 output={

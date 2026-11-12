@@ -39,6 +39,8 @@ class QdrantService:
         "owner_id": PayloadSchemaType.KEYWORD,
         "acl": PayloadSchemaType.KEYWORD,
         "sec_rank": PayloadSchemaType.INTEGER,
+        # v3 마일스톤 7: 이전 버전·보관·만료 문서의 포인트(inactive)를 검색에서 뺀다
+        "lifecycle": PayloadSchemaType.KEYWORD,
     }
 
     def ensure_access_indexes(self, name: str) -> None:

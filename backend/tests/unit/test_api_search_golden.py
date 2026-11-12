@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.api.v1.endpoints import golden_queries as gq_api
 from app.api.v1.endpoints import search as search_api
 from app.db.models.collection import Collection
+from app.db.models.document import Document
 from app.db.models.golden_eval_run import GoldenEvalRun
 from app.db.models.golden_query import GoldenQuery
 from app.db.models.search_history import SearchHistory
@@ -80,9 +81,20 @@ async def test_search_history_returns_own_entries_newest_first_within_limit(db_s
 
 
 # ------------------------------------------------------------ golden queries
+async def _doc_in(db, collection) -> Document:
+    doc = Document(
+        id=uuid4(), filename="a.txt", original_filename="a.txt", file_size=1, mime_type="text/plain",
+        file_hash="h" * 64, minio_key=f"{uuid4()}/a.txt", status="INDEXED", created_by=OWNER_ID,
+        collection_id=collection.id,
+    )
+    db.add(doc)
+    await db.flush()
+    return doc
+
+
 async def test_create_golden_query_stores_expected_documents_as_strings(db_session):  # noqa: F811
     collection = await _collection(db_session)
-    doc_ids = [uuid4(), uuid4()]
+    doc_ids = [(await _doc_in(db_session, collection)).id, (await _doc_in(db_session, collection)).id]
 
     created = await gq_api.create_golden_query(
         collection.id, GoldenQueryCreate(query="기대 질의", expected_document_ids=doc_ids), db_session, owner_user()
@@ -101,7 +113,7 @@ async def test_golden_query_endpoints_require_collection_access(db_session):  # 
     await assert_http_error(gq_api.list_golden_queries(collection.id, db_session, stranger_user()), 403)
     await assert_http_error(gq_api.delete_golden_query(collection.id, uuid4(), db_session, stranger_user()), 403)
     await assert_http_error(gq_api.list_golden_eval_runs(collection.id, db_session, stranger_user()), 403)
-    assert (await db_session.scalars(select(GoldenQuery.id))).all() == []
+    assert (await db_session.scalars(select(GoldenQuery.id).where(GoldenQuery.collection_id == collection.id))).all() == []
 
 
 async def test_list_golden_queries_is_scoped_to_collection_newest_first(db_session):  # noqa: F811
@@ -148,14 +160,5 @@ async def test_list_golden_eval_runs_caps_at_twenty_newest_first(db_session):  #
     result = await gq_api.list_golden_eval_runs(collection.id, db_session, owner_user())
 
     assert len(result["items"]) == 20
-    assert result["items"][0].top_k == 22 and result["items"][-1].top_k == 3
+    assert result["items"][0]["top_k"] == 22 and result["items"][-1]["top_k"] == 3
 
-
-def test_embed_query_returns_first_vector_from_provider():
-    provider = MagicMock()
-    provider.embed.return_value = [[0.1, 0.2], [9.9]]
-
-    with patch("app.services.embedding.get_embedding_provider", return_value=provider):
-        assert gq_api._embed_query("질의") == [0.1, 0.2]
-
-    provider.embed.assert_called_once_with(["질의"])

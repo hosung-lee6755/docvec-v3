@@ -94,6 +94,7 @@ def test_payload_unrestricted_and_restricted():
     open_payload = document_access_payload(_facts(collection_default_level="Internal"))
     assert open_payload == {
         "sec_rank": clearance_rank("Internal"), "acl": [UNRESTRICTED_ACL], "owner_id": OTHER,
+        "lifecycle": "active",
     }
     restricted = document_access_payload(_facts(acl_principals=frozenset({group_principal(G)})))
     # 업로더는 항상 목록에 포함되고, 목록은 정렬돼 결정적이다

@@ -13,7 +13,7 @@ from app.services.access_policy import (
     build_access_context,
     load_document_facts,
     qdrant_access_filter,
-    visible_document_ids,
+    retrievable_document_ids,
 )
 from app.services.bm25_service import bm25_rerank
 from app.services.chunk_stats import record_hits
@@ -100,7 +100,7 @@ async def perform_search(
     )
     if hits:
         facts = await load_document_facts(db, {h["payload"].get("document_id") for h in hits})
-        allowed = visible_document_ids(ctx, facts)
+        allowed = retrievable_document_ids(ctx, facts)
         hits = [h for h in hits if h["payload"].get("document_id") in allowed]
     if hits:
         await asyncio.to_thread(record_hits, [h["id"] for h in hits])

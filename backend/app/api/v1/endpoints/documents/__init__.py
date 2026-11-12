@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints.documents import (
     acl,
     chunks,
+    lifecycle,
     listing,
     metadata,
     processing,
@@ -16,7 +17,7 @@ from app.api.v1.endpoints.documents import (
 )
 
 router = APIRouter()
-for _module in (upload, listing, processing, structure, chunks, acl, metadata):
+for _module in (upload, listing, processing, structure, chunks, acl, metadata, lifecycle):
     # include_router는 경로가 ""인 목록 라우트를 거부하므로 선언 순서 그대로 라우트를 이어붙인다.
     router.routes.extend(_module.router.routes)
 

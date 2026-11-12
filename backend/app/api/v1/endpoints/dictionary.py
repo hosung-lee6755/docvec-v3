@@ -196,6 +196,22 @@ def _apply_variants(entry: DictionaryEntry, variants: list[str]) -> None:
         entry.variants.append(DictionaryEntryVariant(variant_term=variant_term, sort_order=i))
 
 
+async def _dictionary_changed(db: AsyncSession, schedule_eval: bool = True) -> None:
+    """사전이 바뀌면 캐시를 다시 읽고, 골든쿼리가 있는 컬렉션의 평가를 예약한다(v3 마일스톤 7).
+    검색어 확장과 키워드 검색이 바로 달라지기 때문이다. 예약이 실패해도 사전 변경은 유지된다."""
+    import logging
+
+    from app.services.golden_eval import schedule_for_all_collections
+
+    await refresh_dictionary_cache(db)
+    if not schedule_eval:
+        return
+    try:
+        await schedule_for_all_collections(db, "dictionary")
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("golden eval scheduling after dictionary change failed", exc_info=True)
+
+
 @router.post("/admin/dictionary", response_model=DictionaryEntryResponse)
 async def create_dictionary_entry(
     data: DictionaryEntryCreate,
@@ -244,7 +260,7 @@ async def create_dictionary_entry(
         .where(DictionaryEntry.id == entry_id)
         .options(selectinload(DictionaryEntry.variants))
     )
-    await refresh_dictionary_cache(db)
+    await _dictionary_changed(db)
     return _serialize(entry)
 
 
@@ -304,7 +320,7 @@ async def update_dictionary_entry(
         .where(DictionaryEntry.id == entry_id_str)
         .options(selectinload(DictionaryEntry.variants))
     )
-    await refresh_dictionary_cache(db)
+    await _dictionary_changed(db)
     return _serialize(entry)
 
 
@@ -324,7 +340,7 @@ async def delete_dictionary_entry(
     await db.flush()
     await db.delete(entry)
     await db.commit()
-    await refresh_dictionary_cache(db)
+    await _dictionary_changed(db)
 
 
 @router.get("/admin/dictionary/entries/{entry_id}/impact", response_model=DictionaryImpactResponse)
@@ -599,7 +615,7 @@ async def import_dictionary_entries(
     if created or updated:
         await bump_revision(db, None, "IMPORT", str(current_user.id))
     await db.commit()
-    await refresh_dictionary_cache(db)
+    await _dictionary_changed(db, schedule_eval=bool(created or updated))
     return DictionaryImportResult(
         created=created, updated=updated, skipped=skipped, skipped_rows=skipped_rows
     )

@@ -146,7 +146,7 @@ async def world(db_session):  # noqa: F811
         patch.object(search_service, "record_hits"),
         patch("app.services.chunk_stats.record_hits"),
         patch("app.services.reranker.cross_encoder_rerank", side_effect=lambda q, c, **kw: c),
-        patch.object(golden_api, "_embed_query", return_value=VECTOR),
+        patch.object(golden_api, "enqueue_run"),
         patch("app.core.rate_limit.enforce_user_rate_limit"),
     ):
         yield SimpleNamespace(db=db, users=users, docs=docs, names=names, col=col, conf_col=conf_col)
@@ -235,7 +235,7 @@ async def test_document_list_tags_and_stats(world, who):
     user = world.users[who]
     listed = await listing_api.list_documents(
         db=world.db, current_user=user, page=1, limit=100, collection_id=None, project_id=None,
-        status=None, filename=None, sort_by="created_at", order="desc",
+        status=None, filename=None, quality=None, lifecycle=None, sort_by="created_at", order="desc",
     )
     ids = [i["id"] if isinstance(i, dict) else i.id for i in listed["items"]]
     assert _keys(world, ids) == EXPECTED[who]
@@ -256,15 +256,46 @@ async def test_golden_eval_only_retrieves_visible_documents(world, who):
         expected_document_ids=[str(d.id) for d in world.docs.values()],
         created_by=str(world.users["owner"].id),
     ))
+    # v3 마일스톤 7: 자동 평가는 컬렉션 소유자 권한으로 워커에서 돈다. 같은 세션으로 워커 함수를 돌리고,
+    # 각 사용자가 조회할 때 볼 수 없는 문서 id와 숨은 기대 문서가 걸린 점수가 가려지는지 본다.
+    from app.services.golden_eval import evaluate_run_sync, new_run
+
+    queued = new_run(str(world.col.id), str(world.users["owner"].id), 20, "dictionary")
+    db.add(queued)
     await db.flush()
+    owner_run = await db.run_sync(lambda s: evaluate_run_sync(s, str(queued.id)))
+    assert owner_run.status == "DONE", owner_run.error_message
     try:
-        run = await golden_api.run_golden_eval(world.col.id, GoldenEvalRunRequest(top_k=50), db, user)
+        run = await golden_api.get_golden_eval_run(world.col.id, queued.id, db, user)
     except HTTPException as exc:
         assert exc.status_code == 403 and not EXPECTED[who]
         return
-    retrieved = _keys(world, run.results[0]["retrieved_document_ids"])
-    in_collection = EXPECTED[who] - {"col_default"}  # 평가는 컬렉션 c 범위
-    assert retrieved == in_collection
+    row = run["results"][0]
+    # 소유자 권한으로 컬렉션 c를 검색한 결과를, 이 사용자가 볼 수 있는 것만 남겨 보여 준다
+    owner_retrieved = EXPECTED["owner"] - {"col_default"}
+    assert _keys(world, row["retrieved_document_ids"]) == owner_retrieved & EXPECTED[who]
+    assert _keys(world, row["expected_document_ids"]) == EXPECTED[who]
+    assert row["masked"] is (EXPECTED[who] != ALL_DOCS)
+    if row["masked"]:
+        assert row["hit"] is None and row["recall"] is None and row["first_hit_rank"] is None
+
+
+@_per_user()
+async def test_golden_eval_run_requires_editor(world, who):
+    """평가 실행은 질의 수만큼 검색을 돌리므로 편집 권한이 필요하다. 열람자는 결과 조회만 한다."""
+    db = world.db
+    db.add(GoldenQuery(
+        collection_id=str(world.col.id), query="q", expected_document_ids=[str(world.docs["pub"].id)],
+        created_by=str(world.users["owner"].id),
+    ))
+    await db.flush()
+    if who == "owner":
+        run = await golden_api.run_golden_eval(world.col.id, GoldenEvalRunRequest(), db, world.users[who])
+        assert run.status == "QUEUED"
+        return
+    with pytest.raises(HTTPException) as exc:
+        await golden_api.run_golden_eval(world.col.id, GoldenEvalRunRequest(), db, world.users[who])
+    assert exc.value.status_code == 403
 
 
 async def test_answer_cache_is_partitioned_by_access(world):

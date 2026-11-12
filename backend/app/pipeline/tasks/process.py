@@ -583,6 +583,10 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
             doc.status = "INDEXED"
             doc.updated_at = datetime.utcnow()
             db.commit()
+            # v3 마일스톤 7: 처리 중이던 새 버전이면 지금 현재 버전으로 올리고 이전 버전을 검색에서 뺀다
+            from app.services.document_lifecycle import promote_on_indexed_sync
+
+            promote_on_indexed_sync(db, doc)
             from app.pipeline.tasks.summary import generate_summary
             generate_summary.delay(document_id)
             from app.pipeline.tasks.metadata import extract_metadata
@@ -637,6 +641,10 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
         doc.status = "INDEXED"
         doc.updated_at = datetime.utcnow()
         db.commit()
+        # v3 마일스톤 7: 처리 중이던 새 버전이면 지금 현재 버전으로 올리고 이전 버전을 검색에서 뺀다
+        from app.services.document_lifecycle import promote_on_indexed_sync
+
+        promote_on_indexed_sync(db, doc)
 
         from app.pipeline.tasks.summary import generate_summary
         generate_summary.delay(document_id)

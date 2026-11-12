@@ -112,6 +112,12 @@ async def _visible_document(ctx: ToolContext, document_id):
         await check_document_access(ctx.db, doc, ctx.user, min_role="viewer")
     except HTTPException:
         raise ToolError(f"문서를 {NOT_FOUND}") from None
+    # 에이전트에는 검색에 쓰이는 현재 버전만 내준다. 이전 버전, 보관, 만료 문서는 없는 것으로 답한다
+    from app.services.access_policy import is_lifecycle_active, load_document_facts
+
+    facts = (await load_document_facts(ctx.db, [str(doc.id)])).get(str(doc.id))
+    if facts is None or not is_lifecycle_active(facts):
+        raise ToolError(f"문서를 {NOT_FOUND}")
     return doc
 
 

@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     mcp_deep_answer_timeout_seconds: int = 300
     # v3 마일스톤 6: 이보다 낮은 OCR 신뢰도의 쪽에서 나온 검색 결과와 인용에 경고를 붙인다(품질 블록 기본값과 같다)
     ocr_low_confidence: float = Field(0.5, ge=0.0, le=1.0)
+    # v3 마일스톤 7: 골든 평가 지표(적중률, 재현율, MRR)가 기준 실행보다 이만큼 넘게 떨어지면 회귀다
+    golden_regression_tolerance: float = Field(0.05, ge=0.0, le=1.0)
+    # 검색 설정·사전·문서 버전이 바뀐 뒤 자동 재평가까지 기다리는 시간(연달아 바뀌면 한 번만 돈다)
+    golden_auto_eval_delay_seconds: int = Field(60, ge=0, le=3600)
     mcp_token_default_days: int = 90
     mcp_token_max_days: int = 365
     mcp_tokens_per_user: int = 10

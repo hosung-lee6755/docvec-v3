@@ -150,7 +150,7 @@ async def test_document_security_level_change_audits_and_syncs(world):
         )
     sync.assert_awaited_once()
     [row] = await _audit(db, "document.security_level_update")
-    assert row.detail == {"from": None, "to": "Confidential"}
+    assert row.detail == {"from": None, "to": "Confidential", "versions": 1}
     # Internal 열람등급(기본값)인 viewer는 더 이상 못 본다
     await _expect(check_document_access(db, doc, world["viewer"]), 403)
 
@@ -200,3 +200,25 @@ async def test_user_clearance_update_is_admin_only_and_audited(world):
     assert result.clearance_level == "Confidential"
     [row] = await _audit(db, "user.clearance_update")
     assert row.detail == {"from": "Internal", "to": "Confidential"}
+
+
+async def test_acl_and_level_changes_apply_to_every_version(world):
+    """v3 마일스톤 7: 한 버전만 바꾸면 되돌리기나 승격 때 예전 권한이 되살아난다."""
+    db, doc, owner, group, viewer = world["db"], world["doc"], world["owner"], world["group"], world["viewer"]
+    old = await make_document(
+        db, owner, world["col"], lineage_id=doc.lineage_id, version_number=2, lifecycle_state="superseded"
+    )
+
+    with patch(SYNC, new=AsyncMock(return_value=[])) as sync:
+        await acl_api.replace_document_acl(doc.id, _acl(("group", group.id)), db, owner)
+        assert set(sync.await_args.args[1]) == {str(doc.id), str(old.id)}
+        await metadata_api.update_document_metadata(
+            doc.id, DocumentMetadataUpdateRequest(security_level="Confidential"), db, owner
+        )
+        assert set(sync.await_args.args[1]) == {str(doc.id), str(old.id)}
+
+    await db.refresh(old)
+    assert old.security_level == "Confidential"
+    await _expect(check_document_access(db, old, viewer), 403)
+    [row] = await _audit(db, "document.acl_update")
+    assert row.detail["versions"] == 2

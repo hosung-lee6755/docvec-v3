@@ -151,7 +151,8 @@ def _acl_rows(document_id, decision: AclDecision) -> list[DocumentAclEntry]:
 
 
 async def _create_document(db, ctx: _Context, path: str, content: bytes, decision: AclDecision,
-                           level: str | None, item: SourceItem, remote: RemoteFile, sd_hash: str) -> Document:
+                           level: str | None, item: SourceItem, remote: RemoteFile, sd_hash: str,
+                           version: dict | None = None) -> Document:
     from app.api.v1.endpoints.documents import upload as upload_api
     from app.services.document_storage import release_original
     from app.services.storage import storage_service
@@ -164,7 +165,7 @@ async def _create_document(db, ctx: _Context, path: str, content: bytes, decisio
     document = Document(
         id=doc_id, filename=name, original_filename=name, file_size=len(content), mime_type=content_type,
         file_hash=_sha256(content), minio_key=key, status="QUEUED", created_by=ctx.service_user.id,
-        collection_id=ctx.connector.collection_id, security_level=level,
+        collection_id=ctx.connector.collection_id, security_level=level, **(version or {}),
     )
     db.add(document)
     db.add_all(_acl_rows(doc_id, decision))  # 처리 시작 전에 권한을 같은 커밋으로 건다
@@ -184,18 +185,30 @@ async def _create_document(db, ctx: _Context, path: str, content: bytes, decisio
 
 
 async def _remove_document(db, ctx: _Context, document_id) -> None:
+    """원천에서 사라졌거나 보류·크기 초과인 문서는 이전 버전까지 계보 전체를 지운다(fail-closed).
+    이전 버전을 남기면 삭제 뒤 승격이 그 버전을 다시 현재 버전으로 올린다(v3 마일스톤 7)."""
     from app.api.v1.endpoints.documents import listing as listing_api
+    from app.services.document_lifecycle import lineage_documents
 
-    if await db.get(Document, document_id) is not None:
-        await listing_api.delete_document(UUID(str(document_id)), db, ctx.service_user)
+    document = await db.get(Document, document_id)
+    if document is None:
+        return
+    for version in await lineage_documents(db, document.lineage_id):
+        await listing_api.delete_document(UUID(str(version.id)), db, ctx.service_user)
 
 
 async def _apply_access(db, document: Document, decision: AclDecision, level: str | None) -> None:
-    await db.execute(delete(DocumentAclEntry).where(DocumentAclEntry.document_id == document.id))
-    db.add_all(_acl_rows(document.id, decision))
-    document.security_level = level
+    """원천 권한을 계보의 모든 버전에 건다. 이전 버전에 옛 권한이 남으면 권한을 잃은 사람이
+    버전 이력으로 옛 내용을 볼 수 있다(v3 마일스톤 7)."""
+    from app.services.document_lifecycle import lineage_documents
+
+    versions = await lineage_documents(db, document.lineage_id) or [document]
+    for version in versions:
+        await db.execute(delete(DocumentAclEntry).where(DocumentAclEntry.document_id == version.id))
+        db.add_all(_acl_rows(version.id, decision))
+        version.security_level = level
     await db.commit()
-    await sync_document_access(db, [str(document.id)])
+    await sync_document_access(db, [str(v.id) for v in versions])
 
 
 # -- 파일 한 개 ----------------------------------------------------------------
@@ -276,8 +289,15 @@ async def _sync_file(db, ctx: _Context, client: SourceClient, remote: RemoteFile
         counts["added"] += 1
         return
     if content is not None and _sha256(content) != existing.content_hash:
-        await _remove_document(db, ctx, document.id)
-        await _create_document(db, ctx, path, content, decision, level, item, remote, sd_hash)
+        # 내용이 바뀌면 새 버전으로 잇는다. 새 버전이 처리를 마치면(INDEXED) 현재 버전이 되고
+        # 이 문서는 이전 버전이 된다. 그 전까지는 이 문서가 계속 검색된다(v3 마일스톤 7).
+        # 새 버전에도 같은 권한이 걸리므로, 권한도 바뀌었으면 이전 버전들에도 맞춘다.
+        from app.services.document_lifecycle import next_version_fields
+
+        if existing.sd_hash != sd_hash or document.security_level != level:
+            await _apply_access(db, document, decision, level)
+        version = await next_version_fields(db, document.lineage_id)
+        await _create_document(db, ctx, path, content, decision, level, item, remote, sd_hash, version)
         counts["content_changed"] += 1
         return
     if existing.sd_hash != sd_hash or document.security_level != level:

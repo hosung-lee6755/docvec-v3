@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 # 문서가 사라졌는데 포인트가 남은 경우 등 판정 재료가 없을 때 쓰는 값 — 아무도 매칭되지
 # 않는 ACL이라 소유자 조건 외에는 검색되지 않는다.
-_DENY_ALL_PAYLOAD = {"sec_rank": 2, "acl": ["!none"], "owner_id": None, "collection_id": None}
+_DENY_ALL_PAYLOAD = {
+    "sec_rank": 2, "acl": ["!none"], "owner_id": None, "collection_id": None, "lifecycle": "inactive",
+}
 
 
 def point_access_payload(facts: DocumentAccessFacts | None) -> dict:

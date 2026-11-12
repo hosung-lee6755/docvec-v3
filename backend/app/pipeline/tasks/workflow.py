@@ -720,6 +720,11 @@ def _maybe_complete_run(db, run_id: str) -> None:
             doc.error_message = None
             doc.updated_at = datetime.utcnow()
     db.commit()
+    if run.document_id and doc is not None and doc.status == "INDEXED":
+        # rag_store가 캐시로 건너뛰어 승격을 못 한 경우를 여기서 맞춘다(멱등)
+        from app.services.document_lifecycle import promote_on_indexed_sync
+
+        promote_on_indexed_sync(db, doc)
     _maybe_trigger_analysis(db, run)
 
 

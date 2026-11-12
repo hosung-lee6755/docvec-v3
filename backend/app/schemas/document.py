@@ -10,6 +10,9 @@ class DocumentUploadResponse(BaseModel):
     filename: str
     status: str
     created_at: datetime
+    # v3 마일스톤 7: 같은 이름의 문서에 이어 붙은 새 버전이면 2 이상이다
+    version_number: int = 1
+    lineage_id: UUID | None = None
 
 
 class DocumentResponse(BaseModel):
@@ -64,6 +67,12 @@ class DocumentResponse(BaseModel):
     document_created_at: datetime | None = None
     # v3 마일스톤 6: 최근 품질 검사 결과(SUCCESS, SUCCESS_WITH_WARNING, PARTIAL_FAILURE, FAILURE)
     quality_status: str | None = None
+    # v3 마일스톤 7: 버전과 수명주기
+    lineage_id: UUID | None = None
+    version_number: int = 1
+    lifecycle_state: str = "current"
+    expires_at: datetime | None = None
+    archived_at: datetime | None = None
     # 쪽별 OCR 신뢰도는 응답에 싣지 않고, 기준 미달 쪽 수만 계산해 보낸다(목록 배지용)
     ocr_page_confidence: list | None = Field(default=None, exclude=True)
 

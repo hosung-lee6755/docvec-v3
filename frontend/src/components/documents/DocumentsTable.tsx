@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, Trash2 } from 'lucide-react'
 import { type Document, type DocumentSortBy, type SortOrder } from '../../hooks/useDocuments'
 import { STATUS_BADGE_CLASSES, STATUS_LABELS } from '../../lib/documentStatus'
+import { formatLocalDate } from '../../lib/documentLifecycle'
 
 // 통과(SUCCESS)는 배지를 달지 않는다. 눈여겨볼 판정만 보인다.
 const QUALITY_BADGES: Record<string, { label: string; className: string }> = {
@@ -8,6 +9,27 @@ const QUALITY_BADGES: Record<string, { label: string; className: string }> = {
   REVIEW_REQUIRED: { label: '검토 필요', className: 'bg-warning' },
   PARTIAL_FAILURE: { label: '부분 실패', className: 'bg-danger' },
   FAILURE: { label: '품질 실패', className: 'bg-danger' },
+}
+
+// 버전·수명주기 배지. 현재 버전(current)이고 만료일이 없으면 아무것도 달지 않는다.
+function lifecycleBadges(doc: Document): { key: string; label: string; className: string; title?: string }[] {
+  const badges: { key: string; label: string; className: string; title?: string }[] = []
+  if (doc.version_number > 1) {
+    badges.push({ key: 'version', label: `v${doc.version_number}`, className: 'bg-information', title: `같은 문서의 ${doc.version_number}번째 버전입니다.` })
+  }
+  if (doc.lifecycle_state === 'archived') {
+    badges.push({ key: 'archived', label: '보관됨', className: 'bg-gray', title: '보관된 문서는 검색과 답변에 쓰이지 않습니다. 문서 상세에서 다시 꺼낼 수 있습니다.' })
+  }
+  if (doc.lifecycle_state === 'superseded') {
+    badges.push({ key: 'superseded', label: '이전 버전', className: 'bg-gray', title: '새 버전이 현재 버전이 되어 검색에서 빠졌습니다. 이력은 문서 상세에서 볼 수 있습니다.' })
+  }
+  if (doc.lifecycle_state === 'pending') {
+    badges.push({ key: 'pending', label: '새 버전 처리 중', className: 'bg-information', title: '새 버전을 처리하는 중입니다. 완료되면 현재 버전이 됩니다.' })
+  }
+  if (doc.expires_at) {
+    badges.push({ key: 'expires', label: `만료 ${formatLocalDate(doc.expires_at)}`, className: 'bg-warning', title: '만료일이 지나면 자동으로 보관됩니다.' })
+  }
+  return badges
 }
 
 interface DocumentsTableProps {
@@ -142,6 +164,16 @@ export function DocumentsTable({
                     OCR 낮음 {doc.low_ocr_pages?.length}쪽
                   </span>
                 )}
+                {lifecycleBadges(doc).map((badge) => (
+                  <span
+                    key={badge.key}
+                    className={`krds-badge xsmall ${badge.className}`}
+                    style={{ marginLeft: 'var(--space-2)' }}
+                    title={badge.title}
+                  >
+                    {badge.label}
+                  </span>
+                ))}
                 {doc.status === 'FAILED' && doc.error_message && (
                   <span style={{ marginLeft: 'var(--space-2)', fontSize: 11, color: 'var(--color-danger)' }} title={doc.error_message}>⚠</span>
                 )}

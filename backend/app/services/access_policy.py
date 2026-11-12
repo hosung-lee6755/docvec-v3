@@ -8,6 +8,10 @@
          유효 등급 = 문서 security_level → 컬렉션 default_security_level → Public
       3) ACL: 문서 ACL이 비어 있으면 제한 없음, 있으면 내 주체(u:<id>, g:<id>) 중 하나 포함
 
+검색 가능(v3 마일스톤 7): 열람 가능하면서 현재 버전(lifecycle_state=current)이고 만료일이
+지나지 않은 문서만 검색과 답변의 근거가 된다(can_retrieve). 열람(can_view)은 이전 버전과
+보관 문서도 포함한다 — 목록, 버전 이력, 감사 화면은 열람 기준을 쓴다.
+
 판정의 정본은 Postgres다. Qdrant 페이로드(sec_rank/acl/owner_id)는 검색 단계에서 거르기
 위한 사본이며, 검색 결과는 LLM에 넣기 전에 Postgres 기준으로 다시 확인한다(fail-closed).
 
@@ -19,6 +23,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue, Range
 from sqlalchemy import and_, case, exists, false, func, or_, select, tuple_, union
@@ -38,6 +43,19 @@ _LOWEST_RANK = 0
 _HIGHEST_RANK = len(SECURITY_LEVELS) - 1
 
 DEFAULT_CLEARANCE_LEVEL = "Internal"
+
+# 문서 수명주기(v3 마일스톤 7). pending은 처리 중인 새 버전이다.
+LIFECYCLE_PENDING = "pending"
+LIFECYCLE_CURRENT = "current"
+LIFECYCLE_SUPERSEDED = "superseded"
+LIFECYCLE_ARCHIVED = "archived"
+LIFECYCLE_STATES: tuple[str, ...] = (
+    LIFECYCLE_PENDING, LIFECYCLE_CURRENT, LIFECYCLE_SUPERSEDED, LIFECYCLE_ARCHIVED,
+)
+# Qdrant 페이로드의 lifecycle 값. 검색 필터는 inactive만 걸러, 필드가 없는 옛 포인트는 통과시키고
+# Postgres 재확인(can_retrieve)이 막는다.
+PAYLOAD_LIFECYCLE_ACTIVE = "active"
+PAYLOAD_LIFECYCLE_INACTIVE = "inactive"
 DEFAULT_DOCUMENT_LEVEL = "Public"
 UNRESTRICTED_ACL = "*"
 
@@ -134,6 +152,8 @@ class DocumentAccessFacts:
     security_level: str | None
     collection_default_level: str | None
     acl_principals: frozenset[str]
+    lifecycle_state: str = LIFECYCLE_CURRENT
+    expires_at: datetime | None = None
 
 
 def effective_level_rank(facts: DocumentAccessFacts) -> int:
@@ -151,6 +171,28 @@ def can_view(ctx: AccessContext, facts: DocumentAccessFacts) -> bool:
     if facts.acl_principals and not (facts.acl_principals & ctx.principals):
         return False
     return True
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def is_lifecycle_active(facts: DocumentAccessFacts, now: datetime | None = None) -> bool:
+    """현재 버전이고 만료일이 지나지 않았는가(권한과 무관한 수명주기 조건)."""
+    if facts.lifecycle_state != LIFECYCLE_CURRENT:
+        return False
+    if facts.expires_at is None:
+        return True
+    return _as_aware(facts.expires_at) > (now or _utcnow())
+
+
+def can_retrieve(ctx: AccessContext, facts: DocumentAccessFacts, now: datetime | None = None) -> bool:
+    """검색과 답변의 근거로 쓸 수 있는가 = 열람 가능 AND 수명주기 활성. 업로더 본인도 예외 없다."""
+    return is_lifecycle_active(facts, now) and can_view(ctx, facts)
 
 
 RELAX_FORBIDDEN_DETAIL = "보안등급을 낮추거나 접근 제한을 푸는 일은 문서 업로더나 컬렉션 소유자만 할 수 있습니다"
@@ -183,7 +225,11 @@ def document_access_payload(facts: DocumentAccessFacts) -> dict:
         acl_values = sorted(acl)
     else:
         acl_values = [UNRESTRICTED_ACL]
-    return {"sec_rank": effective_level_rank(facts), "acl": acl_values, "owner_id": owner}
+    lifecycle = PAYLOAD_LIFECYCLE_ACTIVE if is_lifecycle_active(facts) else PAYLOAD_LIFECYCLE_INACTIVE
+    return {
+        "sec_rank": effective_level_rank(facts), "acl": acl_values, "owner_id": owner,
+        "lifecycle": lifecycle,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +260,15 @@ def qdrant_access_filter(
     own = Filter(must=[FieldCondition(key="owner_id", match=MatchValue(value=ctx.user_id))])
     return Filter(
         must=[*must, Filter(should=[own, permitted])],
-        must_not=[FieldCondition(key="disabled", match=MatchValue(value=True))],
+        must_not=_INACTIVE_POINT_CONDITIONS,
     )
+
+
+# 끈 청크와 검색에서 빠진 문서(이전 버전, 보관, 만료)의 포인트. 소유자 조건보다 바깥에 둬 업로더도 거른다
+_INACTIVE_POINT_CONDITIONS = [
+    FieldCondition(key="disabled", match=MatchValue(value=True)),
+    FieldCondition(key="lifecycle", match=MatchValue(value=PAYLOAD_LIFECYCLE_INACTIVE)),
+]
 
 
 def qdrant_visibility_filter(ctx: AccessContext) -> Filter:
@@ -240,7 +293,7 @@ def qdrant_visibility_filter(ctx: AccessContext) -> Filter:
         )
     return Filter(
         must=[Filter(should=should)],
-        must_not=[FieldCondition(key="disabled", match=MatchValue(value=True))],
+        must_not=_INACTIVE_POINT_CONDITIONS,
     )
 
 
@@ -289,6 +342,8 @@ def document_facts_stmt(document_ids: Iterable[str]) -> Select:
             Document.collection_id,
             Document.security_level,
             Collection.default_security_level,
+            Document.lifecycle_state,
+            Document.expires_at,
         )
         .outerjoin(Collection, Collection.id == Document.collection_id)
         .where(Document.id.in_([str(d) for d in document_ids]))
@@ -306,8 +361,9 @@ def build_document_facts(fact_rows: Iterable, acl_rows: Iterable) -> dict[str, D
     for doc_id, ptype, pid in acl_rows:
         acl.setdefault(str(doc_id), set()).add(principal_key(ptype, str(pid)))
     facts: dict[str, DocumentAccessFacts] = {}
-    for doc_id, created_by, collection_id, level, col_default in fact_rows:
+    for doc_id, created_by, collection_id, level, col_default, *lifecycle in fact_rows:
         key = str(doc_id)
+        state, expires_at = (lifecycle + [LIFECYCLE_CURRENT, None])[:2]
         facts[key] = DocumentAccessFacts(
             document_id=key,
             created_by=str(created_by) if created_by is not None else None,
@@ -315,6 +371,8 @@ def build_document_facts(fact_rows: Iterable, acl_rows: Iterable) -> dict[str, D
             security_level=level,
             collection_default_level=col_default,
             acl_principals=frozenset(acl.get(key, set())),
+            lifecycle_state=state or LIFECYCLE_CURRENT,
+            expires_at=expires_at,
         )
     return facts
 
@@ -356,6 +414,15 @@ def document_visibility_clause(ctx: AccessContext) -> ColumnElement:
         else false()
     )
     return or_(Document.created_by == ctx.user_id, shared)
+
+
+def document_retrievable_clause(now: datetime | None = None) -> ColumnElement:
+    """검색 가능 문서의 수명주기 조건(SQL) — is_lifecycle_active와 같은 규칙. 열람 조건과 함께 쓴다."""
+    moment = (now or _utcnow()).astimezone(timezone.utc).replace(tzinfo=None)
+    return and_(
+        Document.lifecycle_state == LIFECYCLE_CURRENT,
+        or_(Document.expires_at.is_(None), Document.expires_at > moment),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +469,12 @@ def load_document_facts_sync(db, document_ids: Iterable[str]) -> dict[str, Docum
 
 def visible_document_ids(ctx: AccessContext, facts: dict[str, DocumentAccessFacts]) -> set[str]:
     return {doc_id for doc_id, f in facts.items() if can_view(ctx, f)}
+
+
+def retrievable_document_ids(ctx: AccessContext, facts: dict[str, DocumentAccessFacts]) -> set[str]:
+    """검색 결과와 답변 근거의 Postgres 재확인. 열람 가능하고 현재 버전인 문서만 남긴다."""
+    now = _utcnow()
+    return {doc_id for doc_id, f in facts.items() if can_retrieve(ctx, f, now)}
 
 
 async def collection_owner_id(db, collection_id) -> str | None:

@@ -31,7 +31,7 @@ async def _list(db, user=None, **overrides):
     """엔드포인트를 직접 호출할 때는 Query() 기본값이 적용되지 않으므로 모두 명시한다."""
     params = dict(
         page=1, limit=50, collection_id=None, project_id=None, status=None, filename=None,
-        quality=None, sort_by="created_at", order="desc",
+        quality=None, lifecycle=None, sort_by="created_at", order="desc",
     )
     params.update(overrides)
     return await ls.list_documents(db=db, current_user=user or owner_user(), **params)

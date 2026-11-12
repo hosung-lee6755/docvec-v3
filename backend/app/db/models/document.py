@@ -3,6 +3,10 @@ from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
+    Index,
+    UniqueConstraint,
+    event,
+    text,
     String,
     Integer,
     Boolean,
@@ -19,6 +23,12 @@ from app.db.base import Base
 
 class Document(Base):
     __tablename__ = "documents"
+    __table_args__ = (
+        # v3 마일스톤 7: 계보마다 현재 버전은 하나, 버전 번호는 겹치지 않는다
+        Index("uq_documents_lineage_current", "lineage_id", unique=True,
+              postgresql_where=text("lifecycle_state = 'current'")),
+        UniqueConstraint("lineage_id", "version_number", name="uq_documents_lineage_version"),
+    )
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid4
@@ -171,3 +181,21 @@ class Document(Base):
     # 별개다. docx/pdf는 extraction_blocks.py가 자동 채우고, hwp/hwpx는 자동
     # 불가해 PATCH /documents/{id}/metadata로 사용자가 직접 입력해야 한다.
     document_created_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # v3 마일스톤 7 문서 버전과 수명주기(services/document_lifecycle.py).
+    # lineage_id: 같은 문서의 모든 버전이 공유한다. 첫 버전은 자기 id다(아래 before_insert).
+    # lifecycle_state: pending(처리 중인 새 버전) → current → superseded(이전 버전) / archived(보관).
+    # 검색과 답변에는 current이면서 만료일이 지나지 않은 문서만 쓴다.
+    lineage_id: Mapped[str] = mapped_column(UUID(as_uuid=True), index=True)
+    version_number: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    lifecycle_state: Mapped[str] = mapped_column(String(20), default="current", server_default="current")
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+@event.listens_for(Document, "before_insert")
+def _default_lineage(_mapper, _connection, target: Document) -> None:
+    """첫 버전은 자기 id를 계보 id로 쓴다. 새 버전은 만드는 쪽이 이전 버전의 계보 id를 넣는다."""
+    if target.id is None:
+        target.id = uuid4()
+    if target.lineage_id is None:
+        target.lineage_id = target.id

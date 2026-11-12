@@ -48,8 +48,17 @@ export interface Document {
   // v3 마일스톤 6: 최근 처리의 품질 판정과 OCR 신뢰도가 기준보다 낮은 쪽 번호
   quality_status?: string | null
   low_ocr_pages?: number[]
+  // 문서 버전·수명주기(M7). lineage_id는 같은 문서의 모든 버전이 공유하는 id이고,
+  // pending은 새 버전이 아직 처리 중인 상태다. 검색에는 current 버전만 쓰인다.
+  lineage_id: string
+  version_number: number
+  lifecycle_state: DocumentLifecycleState
+  expires_at: string | null
+  archived_at: string | null
 }
 
+export type DocumentLifecycleState = 'pending' | 'current' | 'superseded' | 'archived'
+export type DocumentLifecycleFilter = 'current' | 'archived' | 'superseded' | 'all'
 export type DocumentQualityFilter = 'low_ocr' | 'warning' | 'failure'
 
 export interface DocumentListResponse {
@@ -70,6 +79,8 @@ export interface UseDocumentsOptions {
   status?: string
   filename?: string
   quality?: DocumentQualityFilter | ''
+  // 비우면 이전 버전(superseded)만 숨긴 기본 목록이다.
+  lifecycle?: DocumentLifecycleFilter | ''
   sortBy?: DocumentSortBy
   order?: SortOrder
 }
@@ -83,12 +94,13 @@ export function useDocuments(options: UseDocumentsOptions = {}) {
     status,
     filename,
     quality,
+    lifecycle,
     sortBy = 'created_at',
     order = 'desc',
   } = options
 
   return useQuery<DocumentListResponse>({
-    queryKey: ['documents', page, limit, collectionId, projectId, status, filename, quality, sortBy, order],
+    queryKey: ['documents', page, limit, collectionId, projectId, status, filename, quality, lifecycle, sortBy, order],
     queryFn: async () => {
       const { data } = await apiClient.get('/documents', {
         params: {
@@ -99,6 +111,7 @@ export function useDocuments(options: UseDocumentsOptions = {}) {
           status: status || undefined,
           filename: filename || undefined,
           quality: quality || undefined,
+          lifecycle: lifecycle || undefined,
           sort_by: sortBy,
           order,
         },
@@ -498,26 +511,36 @@ export function useDownloadDocument() {
   })
 }
 
+export interface UploadDocumentInput {
+  file: File
+  collection_id?: string
+  skip_review?: boolean
+  workflow_version_id?: string
+  // true면 같은 이름의 기존 문서에 새 버전으로 잇지 않고 별개 문서로 올린다.
+  new_document?: boolean
+}
+
+export interface UploadDocumentResult {
+  id: string
+  // 기존 문서의 몇 번째 버전인지. 1이면 새 문서다.
+  version_number?: number | null
+}
+
+function appendUploadOptions(form: FormData, input: Omit<UploadDocumentInput, 'file'>) {
+  if (input.collection_id) form.append('collection_id', input.collection_id)
+  if (input.skip_review) form.append('skip_review', 'true')
+  if (input.workflow_version_id) form.append('workflow_version_id', input.workflow_version_id)
+  if (input.new_document) form.append('new_document', 'true')
+}
+
 export function useUploadDocument() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({
-      file,
-      collection_id,
-      skip_review,
-      workflow_version_id,
-    }: {
-      file: File
-      collection_id?: string
-      skip_review?: boolean
-      workflow_version_id?: string
-    }) => {
+    mutationFn: async ({ file, ...options }: UploadDocumentInput) => {
       const form = new FormData()
       form.append('file', file)
-      if (collection_id) form.append('collection_id', collection_id)
-      if (skip_review) form.append('skip_review', 'true')
-      if (workflow_version_id) form.append('workflow_version_id', workflow_version_id)
-      const { data } = await apiClient.post('/documents/upload', form)
+      appendUploadOptions(form, options)
+      const { data } = await apiClient.post<UploadDocumentResult>('/documents/upload', form)
       return data
     },
     onSuccess: () => {
@@ -531,6 +554,7 @@ export interface BulkUploadItemResult {
   status: 'queued' | 'duplicate' | 'skipped' | 'failed'
   document_id: string | null
   detail: string | null
+  version_number?: number | null
 }
 
 export interface BulkUploadResponse {
@@ -542,22 +566,10 @@ export interface BulkUploadResponse {
 export function useUploadZip() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({
-      file,
-      collection_id,
-      skip_review,
-      workflow_version_id,
-    }: {
-      file: File
-      collection_id?: string
-      skip_review?: boolean
-      workflow_version_id?: string
-    }) => {
+    mutationFn: async ({ file, ...options }: UploadDocumentInput) => {
       const form = new FormData()
       form.append('file', file)
-      if (collection_id) form.append('collection_id', collection_id)
-      if (skip_review) form.append('skip_review', 'true')
-      if (workflow_version_id) form.append('workflow_version_id', workflow_version_id)
+      appendUploadOptions(form, options)
       const { data } = await apiClient.post<BulkUploadResponse>('/documents/upload-zip', form)
       return data
     },

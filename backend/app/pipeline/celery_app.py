@@ -35,6 +35,7 @@ celery_app.conf.include = [
     "app.pipeline.tasks.workflow",
     "app.pipeline.tasks.directory",
     "app.pipeline.tasks.connectors",
+    "app.pipeline.tasks.golden_eval",
 ]
 
 default_exchange = Exchange("celery", type="direct")
@@ -69,5 +70,10 @@ celery_app.conf.beat_schedule = {
     "dispatch-due-connectors": {
         "task": "tasks.dispatch_due_connectors",
         "schedule": 60.0,
+    },
+    # v3 마일스톤 7: 만료일이 지난 현재 버전을 보관한다(검색 제외는 Postgres 재확인이 바로 한다)
+    "expire-documents": {
+        "task": "tasks.expire_documents",
+        "schedule": 600.0,
     },
 }

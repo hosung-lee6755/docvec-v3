@@ -1,9 +1,10 @@
 ﻿import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Upload, Trash2, X, RefreshCw } from 'lucide-react'
-import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, type DocumentQualityFilter, type DocumentSortBy, type SortOrder } from '../hooks/useDocuments'
+import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, type DocumentLifecycleFilter, type DocumentQualityFilter, type DocumentSortBy, type SortOrder } from '../hooks/useDocuments'
 import { useCollections } from '../hooks/useCollections'
 import { STATUS_LABELS } from '../lib/documentStatus'
+import { LIFECYCLE_FILTER_LABELS } from '../lib/documentLifecycle'
 import { DocumentsTable } from '../components/documents/DocumentsTable'
 import { UploadModal } from '../components/documents/UploadModal'
 
@@ -23,6 +24,8 @@ export default function DocumentsPage() {
   const [filterCollectionId, setFilterCollectionId] = useState(() => searchParams.get('collection') ?? '')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterQuality, setFilterQuality] = useState<DocumentQualityFilter | ''>('')
+  const [filterLifecycle, setFilterLifecycle] = useState<DocumentLifecycleFilter | ''>('')
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null)
   const [filenameInput, setFilenameInput] = useState('')
   const [filenameFilter, setFilenameFilter] = useState('')
   const [sortBy, setSortBy] = useState<DocumentSortBy>('created_at')
@@ -66,6 +69,7 @@ export default function DocumentsPage() {
     status: filterStatus,
     filename: filenameFilter,
     quality: filterQuality,
+    lifecycle: filterLifecycle,
     sortBy,
     order,
   })
@@ -75,7 +79,7 @@ export default function DocumentsPage() {
   // 있어(예: 3페이지 보다가 필터링하면 결과가 1페이지뿐) 1페이지로 되돌린다.
   useEffect(() => {
     setPage(1)
-  }, [filterCollectionId, filterStatus, filterQuality, filenameFilter, sortBy, order, limit])
+  }, [filterCollectionId, filterStatus, filterQuality, filterLifecycle, filenameFilter, sortBy, order, limit])
   const deleteDoc = useDeleteDocument()
   const batchDelete = useBatchDeleteDocuments()
   const batchReprocess = useBatchReprocessDocuments()
@@ -94,11 +98,12 @@ export default function DocumentsPage() {
     }
   }
 
-  const hasActiveFilters = !!(filterCollectionId || filterStatus || filterQuality || filenameFilter)
+  const hasActiveFilters = !!(filterCollectionId || filterStatus || filterQuality || filterLifecycle || filenameFilter)
   const clearFilters = () => {
     setFilterCollectionId('')
     setFilterStatus('')
     setFilterQuality('')
+    setFilterLifecycle('')
     setFilenameInput('')
     setFilenameFilter('')
   }
@@ -168,6 +173,19 @@ export default function DocumentsPage() {
         >
           <option value="">전체 품질</option>
           {Object.entries(QUALITY_FILTER_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+
+        <select
+          value={filterLifecycle}
+          onChange={(e) => setFilterLifecycle(e.target.value as DocumentLifecycleFilter | '')}
+          className="krds-form-select small"
+          style={{ flex: '0 0 200px', width: 200 }}
+          aria-label="버전·보관 상태로 거르기"
+        >
+          <option value="">기본(이전 버전 숨김)</option>
+          {Object.entries(LIFECYCLE_FILTER_LABELS).map(([value, label]) => (
             <option key={value} value={value}>{label}</option>
           ))}
         </select>
@@ -271,6 +289,25 @@ export default function DocumentsPage() {
         </div>
       )}
 
+      {uploadNotice && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          marginBottom: 'var(--space-3)', padding: 'var(--space-2) var(--space-4)',
+          background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 'var(--radius-md)',
+          fontSize: 14,
+        }}>
+          <span>{uploadNotice}</span>
+          <button
+            onClick={() => setUploadNotice(null)}
+            className="krds-btn xsmall tertiary"
+            style={{ display: 'flex', alignItems: 'center' }}
+            aria-label="닫기"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {reprocessSummary && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -361,7 +398,13 @@ export default function DocumentsPage() {
         </div>
       )}
 
-      {showUploadModal && <UploadModal isOpen={showUploadModal} onClose={() => setShowUploadModal(false)} />}
+      {showUploadModal && (
+        <UploadModal
+          isOpen={showUploadModal}
+          onClose={() => setShowUploadModal(false)}
+          onUploaded={(message) => setUploadNotice(message)}
+        />
+      )}
     </div>
   )
 }

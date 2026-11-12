@@ -173,7 +173,7 @@ async def test_permission_only_change_updates_acl_without_reindexing(world, exte
     externals.access_sync.assert_awaited()
 
 
-async def test_content_change_replaces_the_document(world, externals):
+async def test_content_change_becomes_a_new_version_and_keeps_the_old_one_until_indexed(world, externals):
     await _sync(world)
     old_id = (await _items(world))["sales/plan.pdf"].document_id
     world.source.files["sales/plan.pdf"] = (b"plan v2", acl((0, world.s_sid)), 2.0)
@@ -182,8 +182,24 @@ async def test_content_change_replaces_the_document(world, externals):
 
     new_id = (await _items(world))["sales/plan.pdf"].document_id
     assert run.counts["content_changed"] == 1 and new_id != old_id
-    assert await world.db.get(Document, old_id) is None
+    old, new = await world.db.get(Document, old_id), await world.db.get(Document, new_id)
+    # v3 마일스톤 7: 이전 버전은 새 버전이 처리를 마칠 때까지 현재 버전으로 남는다
+    assert (old.lifecycle_state, new.lifecycle_state) == ("current", "pending")
+    assert (new.lineage_id, new.version_number) == (old.lineage_id, 2)
     assert await _acl(world.db, new_id) == {("group", str(world.sales.id))}
+
+
+async def test_file_removed_at_source_removes_every_version(world, externals):
+    await _sync(world)
+    old_id = (await _items(world))["sales/plan.pdf"].document_id
+    world.source.files["sales/plan.pdf"] = (b"plan v2", acl((0, world.s_sid)), 2.0)
+    await _sync(world)
+    new_id = (await _items(world))["sales/plan.pdf"].document_id
+    del world.source.files["sales/plan.pdf"]
+
+    await _sync(world)
+
+    assert await world.db.get(Document, old_id) is None and await world.db.get(Document, new_id) is None
 
 
 async def test_touched_file_with_same_bytes_is_not_reprocessed(world, externals):

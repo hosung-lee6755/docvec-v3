@@ -369,3 +369,54 @@ async def test_zip_commit_failure_releases_original_and_marks_entry_failed(db_se
 
     assert result["results"][0]["status"] == "failed"
     assert released == [storage.uploaded[0][1]]
+
+
+async def test_same_name_with_new_content_becomes_next_pending_version(db_session, storage, started):  # noqa: F811
+    """v3 마일스톤 7: 같은 컬렉션의 같은 파일명이면 새 버전으로 잇고, 처리 전까지는 pending이다."""
+    collection = await _collection(db_session)
+    first = await up.upload_document(_file("규정.pdf", b"%PDF v1"), str(collection.id), True, None,
+                                     db_session, owner_user())
+
+    second = await up.upload_document(_file("규정.pdf", b"%PDF v2"), str(collection.id), True, None,
+                                      db_session, owner_user())
+
+    v1, v2 = await db_session.get(Document, first["id"]), await db_session.get(Document, second["id"])
+    assert (first["version_number"], second["version_number"]) == (1, 2)
+    assert v2.lineage_id == v1.lineage_id == second["lineage_id"]
+    assert (v1.lifecycle_state, v2.lifecycle_state) == ("current", "pending")
+
+
+async def test_new_document_flag_keeps_same_name_as_a_separate_document(db_session, storage, started):  # noqa: F811
+    collection = await _collection(db_session)
+    first = await up.upload_document(_file("규정.pdf", b"%PDF v1"), str(collection.id), True, None,
+                                     db_session, owner_user())
+
+    second = await up.upload_document(_file("규정.pdf", b"%PDF other"), str(collection.id), True, None,
+                                      db_session, owner_user(), new_document=True)
+
+    assert second["version_number"] == 1 and second["lineage_id"] != first["lineage_id"]
+
+
+async def test_new_version_inherits_security_level_and_acl_of_previous_version(db_session, storage, started):  # noqa: F811
+    """새 버전이 이전 버전보다 넓게 열리면 승격되는 순간 권한이 풀린다(v3 마일스톤 7)."""
+    from app.db.models.document_acl import DocumentAclEntry
+
+    collection = await _collection(db_session)
+    first = await up.upload_document(_file("규정.pdf", b"%PDF v1"), str(collection.id), True, None,
+                                     db_session, owner_user())
+    v1 = await db_session.get(Document, first["id"])
+    v1.security_level = "Confidential"
+    principal = str(uuid4())
+    db_session.add(DocumentAclEntry(document_id=v1.id, principal_type="user", principal_id=principal,
+                                    created_by=OWNER_ID))
+    await db_session.flush()
+
+    second = await up.upload_document(_file("규정.pdf", b"%PDF v2"), str(collection.id), True, None,
+                                      db_session, owner_user())
+
+    v2 = await db_session.get(Document, second["id"])
+    inherited = (await db_session.scalars(
+        select(DocumentAclEntry.principal_id).where(DocumentAclEntry.document_id == v2.id)
+    )).all()
+    assert v2.security_level == "Confidential"
+    assert [str(p) for p in inherited] == [principal]

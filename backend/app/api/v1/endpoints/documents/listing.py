@@ -37,8 +37,9 @@ from app.services.access_policy import (
     document_visibility_clause,
     load_document_facts,
     qdrant_visibility_filter,
-    visible_document_ids,
+    retrievable_document_ids,
 )
+from app.services.access_policy import LIFECYCLE_SUPERSEDED
 from app.services.audit import log_audit
 from app.services.document_storage import release_original
 
@@ -62,6 +63,8 @@ async def list_documents(
     filename: str | None = None,
     # v3 마일스톤 6: low_ocr(OCR 신뢰도 기준 미달 쪽이 있음), warning(경고나 일부 실패), failure(품질 실패)
     quality: Literal["low_ocr", "warning", "failure"] | None = None,
+    # v3 마일스톤 7: 비우면 이전 버전(superseded)만 숨긴다. all이면 모든 버전을 보여 준다
+    lifecycle: Literal["current", "archived", "superseded", "all"] | None = None,
     sort_by: Literal["created_at", "filename", "file_size", "status"] = "created_at",
     order: Literal["asc", "desc"] = "desc",
     db: AsyncSession = Depends(get_db),
@@ -102,6 +105,10 @@ async def list_documents(
 
     if quality is not None:
         filters.append(_quality_filter(quality))
+    if lifecycle is None:
+        filters.append(Document.lifecycle_state != LIFECYCLE_SUPERSEDED)
+    elif lifecycle != "all":
+        filters.append(Document.lifecycle_state == lifecycle)
 
     count_query = select(func.count(Document.id)).where(*filters)
     total = await db.scalar(count_query) or 0
@@ -171,7 +178,8 @@ async def search_documents_by_summary(
         return {"items": []}
 
     facts = await load_document_facts(db, {h["payload"].get("document_id") for h in hits})
-    owned_or_shared_ids = visible_document_ids(ctx, facts)
+    # 요약 검색도 검색 경로다. 이전 버전과 보관·만료 문서는 빼고 현재 버전만 돌려준다(v3 마일스톤 7)
+    owned_or_shared_ids = retrievable_document_ids(ctx, facts)
 
     items = [
         {
@@ -204,6 +212,28 @@ async def get_document(
 
     await reconcile_stuck_run(db, doc)
     return doc
+
+
+async def _after_version_delete(db, removed: list[tuple]) -> None:
+    """지운 문서가 현재 버전이었으면 같은 계보의 가장 최근 이전 버전을 현재 버전으로 올리고,
+    검색 결과가 바뀌었으니 골든 재평가를 예약한다(v3 마일스톤 7). 실패해도 삭제는 유지된다."""
+    from app.services.access_policy import LIFECYCLE_CURRENT
+    from app.services.document_lifecycle import after_transition, promote_after_delete
+    from app.services.golden_eval import schedule_golden_eval
+
+    for lineage_id, state, collection_id in removed:
+        if state != LIFECYCLE_CURRENT:
+            continue
+        try:
+            promoted = await promote_after_delete(db, lineage_id, state)
+            await db.commit()
+            if promoted:
+                await after_transition(db, promoted, collection_id, "document_deleted")
+            elif collection_id is not None:
+                await schedule_golden_eval(db, str(collection_id), "document_deleted")
+        except Exception as exc:  # noqa: BLE001
+            await db.rollback()
+            logging.warning(f"Failed to promote previous version after delete: {exc}")
 
 
 @router.delete("/batch")
@@ -247,6 +277,7 @@ async def batch_delete_documents(
     # Commit the DB delete FIRST: external cleanup below is best-effort and
     # must never resurrect rows by failing mid-way.
     cleanup = [(str(doc.id), doc.minio_key, list(doc.images or [])) for doc in docs]
+    removed_versions = [(doc.lineage_id, doc.lifecycle_state, doc.collection_id) for doc in docs]
     for doc in docs:
         # 감사 항목은 세션에 쌓였다가 아래 commit과 함께 저장된다(커밋 뒤에 호출하면 유실).
         log_audit(
@@ -255,6 +286,7 @@ async def batch_delete_documents(
         )
         await db.delete(doc)
     await db.commit()
+    await _after_version_delete(db, removed_versions)
 
     for doc_id, minio_key, images in cleanup:
         # Defect E: Wrap blocking I/O in asyncio.to_thread
@@ -395,8 +427,10 @@ async def delete_document(
     # Commit the DB delete FIRST — external cleanup is best-effort and must
     # never leave a half-deleted zombie row behind.
     minio_key, images = doc.minio_key, list(doc.images or [])
+    removed_versions = [(doc.lineage_id, doc.lifecycle_state, doc.collection_id)]
     await db.delete(doc)
     await db.commit()
+    await _after_version_delete(db, removed_versions)
 
     # Defect E: Wrap blocking I/O in asyncio.to_thread
     # Defect B: Tolerate missing Qdrant collection

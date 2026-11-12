@@ -46,7 +46,7 @@ async def test_backfill_pushes_postgres_permissions_to_both_collections(db_sessi
     }
     main = settings.qdrant_collection_name
     assert pushed[(main, str(a.id))] == {
-        "sec_rank": 1, "acl": ["*"], "owner_id": str(owner.id), "collection_id": str(col.id),
+        "sec_rank": 1, "acl": ["*"], "owner_id": str(owner.id), "collection_id": str(col.id), "lifecycle": "active",
     }  # 문서 등급 없음 → 컬렉션 기본(Internal)
     assert pushed[(main, str(b.id))]["sec_rank"] == 2
 

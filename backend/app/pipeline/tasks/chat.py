@@ -220,8 +220,9 @@ def _cited_documents_still_visible(db, access_ctx, cached_payload: dict) -> bool
     """캐시 키의 권한 지문은 사용자 쪽(열람등급·그룹·컬렉션)만 담는다. 문서 쪽 권한(등급·ACL)이
     캐시 이후 바뀌면 같은 키로 낡은 답변·인용이 나가므로, 적중할 때마다 인용 문서를 Postgres로
     다시 판정한다. 심층 검색 답변이면 검색 과정에 적힌 문서(인용되지 않은 검색 결과 포함)도 함께
-    판정한다. 하나라도 지금 볼 수 없으면 캐시를 버리고 새로 만든다."""
-    from app.services.access_policy import load_document_facts_sync, visible_document_ids
+    판정한다. 하나라도 지금 볼 수 없거나 더는 현재 버전이 아니면(새 버전, 보관, 만료) 캐시를
+    버리고 새로 만든다."""
+    from app.services.access_policy import load_document_facts_sync, retrievable_document_ids
     from app.services.agentic.deep_search import step_document_ids
 
     doc_ids = {c.get("document_id") for c in cached_payload.get("citations") or []}
@@ -230,7 +231,7 @@ def _cited_documents_still_visible(db, access_ctx, cached_payload: dict) -> bool
     if not doc_ids:
         return True
     facts = load_document_facts_sync(db, doc_ids)
-    return doc_ids <= visible_document_ids(access_ctx, facts)
+    return doc_ids <= retrievable_document_ids(access_ctx, facts)
 
 
 def _scope_collection_ids(
@@ -250,9 +251,11 @@ def _retrieve_chunks(
     collection_id: str | None,
     project_id: str | None = None,
     limit: int | None = None,
+    record_stats: bool = True,
 ) -> list[dict]:
     """권한 범위 안에서 질문에 맞는 청크를 찾는다. 범위가 컬렉션 하나면 그 컬렉션의 검색 설정
-    (방식, 근거 수, MMR, 재순위, 벡터 비중)을 따른다(v3 마일스톤 6). limit을 넘기면 근거 수만 바꾼다."""
+    (방식, 근거 수, MMR, 재순위, 벡터 비중)을 따른다(v3 마일스톤 6). limit을 넘기면 근거 수만 바꾼다.
+    record_stats=False는 골든 평가처럼 사용자 질의가 아닌 검색에서 청크 조회 통계를 남기지 않는다."""
     from app.db.models.collection import Collection
     from app.services.bm25_service import bm25_rerank
     from app.services.dictionary_service import ensure_dictionary_cache_sync, expand_query
@@ -264,7 +267,7 @@ def _retrieve_chunks(
         build_access_context_sync,
         load_document_facts_sync,
         qdrant_access_filter,
-        visible_document_ids,
+        retrievable_document_ids,
     )
 
     scope = _scope_collection_ids(db, user_id, collection_id, project_id)
@@ -295,7 +298,7 @@ def _retrieve_chunks(
     )
     if hits:
         facts = load_document_facts_sync(db, {h["payload"].get("document_id") for h in hits})
-        allowed = visible_document_ids(ctx, facts)
+        allowed = retrievable_document_ids(ctx, facts)
         hits = [h for h in hits if h["payload"].get("document_id") in allowed]
 
     if hits:
@@ -325,7 +328,8 @@ def _retrieve_chunks(
             }
             for c in ranked
         ]
-        record_hits([h["id"] for h in hits])
+        if record_stats:
+            record_hits([h["id"] for h in hits])
         _attach_evidence(db, search_query, hits)
 
     hit_collection_ids = {h["payload"].get("collection_id") for h in hits}
@@ -396,7 +400,11 @@ def _accessible_documents(db, user_id: str, collection_id: str | None, project_i
     retrieval paths, which read structured fields on Document rather than
     embedded chunk text."""
     from app.db.models.document import Document
-    from app.services.access_policy import build_access_context_sync, document_visibility_clause
+    from app.services.access_policy import (
+        build_access_context_sync,
+        document_retrievable_clause,
+        document_visibility_clause,
+    )
 
     collection_ids = _scope_collection_ids(db, user_id, collection_id, project_id)
     if not collection_ids:
@@ -409,6 +417,8 @@ def _accessible_documents(db, user_id: str, collection_id: str | None, project_i
             Document.collection_id.in_(collection_ids),
             Document.status == "INDEXED",
             document_visibility_clause(ctx),
+            # 표와 요약도 현재 버전에서만 찾는다(v3 마일스톤 7)
+            document_retrievable_clause(),
         )
         .all()
     )

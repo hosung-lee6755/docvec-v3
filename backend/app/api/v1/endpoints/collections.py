@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -271,10 +272,11 @@ async def list_collections(
         return None
 
     # v3: 숨겨진(등급·ACL) 문서는 개수에도 넣지 않는다 — 존재 자체가 정보다.
+    # 이전 버전은 문서 목록처럼 세지 않는다(v3 마일스톤 7)
     count_ctx = await build_access_context(db, current_user)
     counts_result = await db.execute(
         select(Document.collection_id, func.count(Document.id))
-        .where(document_visibility_clause(count_ctx))
+        .where(document_visibility_clause(count_ctx), Document.lifecycle_state != "superseded")
         .group_by(Document.collection_id)
     )
     counts = dict(counts_result.all())
@@ -446,9 +448,11 @@ async def update_collection(
             str(collection.id), detail={"from": previous_level, "to": data.default_security_level},
         )
 
+    settings_changed = False
     if "search_settings" in data.model_fields_set:
         new_settings = data.search_settings.model_dump() if data.search_settings else None
         if new_settings != collection.search_settings:
+            settings_changed = True
             log_audit(
                 db, str(current_user.id), "collection.search_settings_update", "collection",
                 str(collection.id), detail={"from": collection.search_settings, "to": new_settings},
@@ -467,6 +471,15 @@ async def update_collection(
             )
         ).all()
         await sync_access_or_502(db, inheriting, "컬렉션 기본 보안등급")
+    if settings_changed:
+        # 검색 결과가 달라지므로 골든쿼리가 있으면 재평가를 예약한다(v3 마일스톤 7)
+        from app.services.golden_eval import schedule_golden_eval
+
+        try:
+            await schedule_golden_eval(db, str(collection.id), "search_settings")
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).warning("golden eval scheduling after search settings change failed", exc_info=True)
+        await db.refresh(collection)
     return collection
 
 

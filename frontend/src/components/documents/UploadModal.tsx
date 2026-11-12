@@ -7,11 +7,17 @@ import { useWorkflows, useWorkflowVersions } from '../../hooks/useWorkflows'
 interface UploadModalProps {
   isOpen: boolean
   onClose: () => void
+  // 여러 파일을 올리고 모달이 닫힐 때, 새 버전으로 묶인 파일이 있으면 그 안내를 부모가 보여준다.
+  onUploaded?: (message: string) => void
 }
+
+const versionNoticeFor = (version: number | null | undefined) =>
+  version && version > 1 ? `기존 문서의 ${version}번째 버전으로 올렸습니다.` : null
 
 export function UploadModal({
   isOpen,
   onClose,
+  onUploaded,
 }: UploadModalProps) {
   const fileRef = useRef<HTMLInputElement>(null)
   const zipFileRef = useRef<HTMLInputElement>(null)
@@ -25,6 +31,7 @@ export function UploadModal({
   const [uploadMode, setUploadMode] = useState<'files' | 'zip'>('files')
   const [zipFile, setZipFile] = useState<File | null>(null)
   const [zipResult, setZipResult] = useState<BulkUploadResponse | null>(null)
+  const [newDocument, setNewDocument] = useState(false)
 
   const upload = useUploadDocument()
   const uploadZip = useUploadZip()
@@ -56,6 +63,7 @@ export function UploadModal({
     setUploadMode('files')
     setZipFile(null)
     setZipResult(null)
+    setNewDocument(false)
     if (fileRef.current) fileRef.current.value = ''
     if (zipFileRef.current) zipFileRef.current.value = ''
   }
@@ -74,6 +82,7 @@ export function UploadModal({
         collection_id: uploadCollectionId,
         skip_review: true,
         workflow_version_id: resolvedUploadWorkflowVersionId,
+        new_document: newDocument,
       })
       setZipResult(result)
     } catch (err) {
@@ -98,14 +107,18 @@ export function UploadModal({
     setUploadProgress(selectedFiles.map((f) => ({ name: f.name, status: 'pending' as const })))
 
     let successCount = 0
+    const versionNotices: string[] = []
     for (let i = 0; i < selectedFiles.length; i++) {
       try {
-        await upload.mutateAsync({
+        const result = await upload.mutateAsync({
           file: selectedFiles[i],
           collection_id: uploadCollectionId,
           skip_review: effectiveSkipReview,
           workflow_version_id: resolvedUploadWorkflowVersionId,
+          new_document: newDocument,
         })
+        const notice = versionNoticeFor(result.version_number)
+        if (notice) versionNotices.push(`${selectedFiles[i].name}: ${notice}`)
         successCount++
         setUploadProgress((prev) => prev.map((p, idx) => (idx === i ? { ...p, status: 'success' } : p)))
       } catch (err) {
@@ -116,6 +129,7 @@ export function UploadModal({
     setIsBatchUploading(false)
 
     if (successCount === selectedFiles.length) {
+      if (versionNotices.length) onUploaded?.(versionNotices.join(' '))
       closeUploadModal()
     }
   }
@@ -285,6 +299,18 @@ export function UploadModal({
 
                     <div className="krds-form-check">
                       <input
+                        id="new_document_chk"
+                        type="checkbox" checked={newDocument}
+                        onChange={(e) => setNewDocument(e.target.checked)}
+                      />
+                      <label htmlFor="new_document_chk">
+                        이름이 같아도 새 문서로 올리기
+                        <span style={{ color: 'var(--color-text-muted)' }}> — 끄면 같은 이름의 문서는 새 버전으로 잇습니다</span>
+                      </label>
+                    </div>
+
+                    <div className="krds-form-check">
+                      <input
                         id="skip_review_chk"
                         type="checkbox" checked={effectiveSkipReview}
                         disabled={isMultiUpload}
@@ -404,6 +430,14 @@ export function UploadModal({
                           ZIP 안의 PDF/HWP/HWPX/DOCX 파일을 자동으로 추출해 개별 문서로 등록합니다.
                           지원하지 않는 형식이나 중복 파일은 건너뜁니다.
                         </p>
+                        <div className="krds-form-check" style={{ marginTop: 'var(--space-2)' }}>
+                          <input
+                            id="zip_new_document_chk"
+                            type="checkbox" checked={newDocument}
+                            onChange={(e) => setNewDocument(e.target.checked)}
+                          />
+                          <label htmlFor="zip_new_document_chk">이름이 같아도 새 문서로 올리기</label>
+                        </div>
                       </div>
                     </div>
 
@@ -435,6 +469,13 @@ export function UploadModal({
                             </div>
                           ))}
                         </div>
+                        {zipResult.results
+                          .filter((r) => versionNoticeFor(r.version_number))
+                          .map((r, i) => (
+                            <p key={`version-${r.filename}-${i}`} style={{ margin: 0, color: 'var(--color-accent)' }}>
+                              {r.filename}: {versionNoticeFor(r.version_number)}
+                            </p>
+                          ))}
                       </div>
                     )}
 

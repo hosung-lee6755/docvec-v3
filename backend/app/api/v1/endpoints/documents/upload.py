@@ -19,6 +19,8 @@ from app.db.session import get_db
 from app.schemas.document import (
     DocumentUploadResponse,
 )
+from app.services.access_policy import build_access_context
+from app.services.document_lifecycle import copy_access, new_version_fields
 from app.services.document_storage import release_original
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select, update
@@ -207,6 +209,25 @@ async def _read_bounded(file: UploadFile, limit: int, too_large_detail: str) -> 
     return content
 
 
+async def _version_fields(db, current_user, collection_id, filename: str, new_document: bool):
+    """같은 컬렉션의 같은 원본 파일명이면 그 문서의 새 버전으로 잇는다(v3 마일스톤 7).
+    new_document=True면 이름이 같아도 별개 문서로 올린다."""
+    # 함수를 직접 부르면 Form 기본값 객체가 그대로 들어오므로 True일 때만 별개 문서로 본다
+    if new_document is True or collection_id is None:
+        return {}, None
+    ctx = await build_access_context(db, current_user)
+    return await new_version_fields(db, ctx, collection_id, filename)
+
+
+async def _inherit_access(db, parent, document) -> None:
+    """새 버전은 이전 버전의 보안등급과 ACL을 같은 커밋에서 물려받는다. 그래야 승격 직후에도
+    이전 버전보다 넓게 열리는 순간이 없다."""
+    if parent is None:
+        return
+    await db.flush()
+    await copy_access(db, parent, [document])
+
+
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
@@ -215,6 +236,7 @@ async def upload_document(
     workflow_version_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    new_document: bool = Form(False),
 ):
     from pathlib import PurePath
 
@@ -269,6 +291,7 @@ async def upload_document(
     doc_id = uuid4()
     minio_key = f"{doc_id}/{safe_name}"
     content_type = _resolve_content_type(safe_name, file.content_type)
+    version, parent = await _version_fields(db, current_user, collection_id, safe_name, new_document)
 
     try:
         await asyncio.to_thread(
@@ -298,9 +321,11 @@ async def upload_document(
         status="QUEUED",
         created_by=str(current_user.id),
         collection_id=collection_id,
+        **version,
     )
     db.add(document)
     try:
+        await _inherit_access(db, parent, document)
         await db.commit()
     except Exception:
         # 객체는 이미 올라갔는데 행이 없으면 고아 원본이 남는다 — 되돌린다.
@@ -316,6 +341,8 @@ async def upload_document(
         "filename": document.filename,
         "status": document.status,
         "created_at": document.created_at,
+        "version_number": document.version_number,
+        "lineage_id": document.lineage_id,
     }
 
 
@@ -327,6 +354,7 @@ async def upload_documents_zip(
     workflow_version_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    new_document: bool = Form(False),
 ):
     """Extracts a .zip and registers each supported document inside it, one by
     one, so a batch that arrives pre-bundled (e.g. downloaded elsewhere) doesn't
@@ -424,6 +452,7 @@ async def upload_documents_zip(
             doc_id = uuid4()
             minio_key = f"{doc_id}/{entry_name}"
             content_type = _resolve_content_type(entry_name, None)
+            version, parent = await _version_fields(db, current_user, collection_id, entry_name, new_document)
             await asyncio.to_thread(
                 storage_service.upload_file,
                 settings.minio_bucket_originals, minio_key, content, content_type
@@ -440,9 +469,11 @@ async def upload_documents_zip(
                 status="QUEUED",
                 created_by=str(current_user.id),
                 collection_id=collection_id,
+                **version,
             )
             db.add(document)
             try:
+                await _inherit_access(db, parent, document)
                 await db.commit()
             except Exception:
                 await db.rollback()
@@ -451,7 +482,10 @@ async def upload_documents_zip(
             await db.refresh(document)
 
             await _start_workflow_or_mark_failed(db, document, workflow_version_id, skip_review)
-            results.append({"filename": entry_name, "status": "queued", "document_id": document.id})
+            results.append({
+                "filename": entry_name, "status": "queued", "document_id": document.id,
+                "version_number": document.version_number,
+            })
             queued += 1
         except Exception as exc:
             await db.rollback()

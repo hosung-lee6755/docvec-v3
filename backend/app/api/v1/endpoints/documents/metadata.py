@@ -27,6 +27,7 @@ from app.schemas.document import (
 )
 from app.services.access_policy import RELAX_FORBIDDEN_DETAIL, can_relax_document, is_relaxing_level
 from app.services.audit import log_audit
+from app.services.document_lifecycle import lineage_siblings
 from app.services.source_locks import ensure_not_connector_document
 
 router = APIRouter()
@@ -128,16 +129,20 @@ async def update_document_metadata(
     ) and not await can_relax_document(db, current_user, doc):
         # v3 마일스톤 2: 등급을 낮추는 일은 업로더·컬렉션 소유자만. 커밋 전이므로 변경은 버려진다.
         raise HTTPException(status_code=403, detail=RELAX_FORBIDDEN_DETAIL)
+    siblings = await lineage_siblings(db, doc) if level_changed else []
+    for sibling in siblings:
+        # 같은 계보의 다른 버전도 같은 등급으로 맞춘다. 되돌리기·승격 때 예전 등급이 되살아나지 않게 한다.
+        sibling.security_level = doc.security_level
     if level_changed:
         # v3: 보안등급은 열람 권한을 바꾸므로 감사 대상이다.
         log_audit(
             db, str(current_user.id), "document.security_level_update", "document", str(doc.id),
-            detail={"from": previous_level, "to": doc.security_level},
+            detail={"from": previous_level, "to": doc.security_level, "versions": len(siblings) + 1},
         )
     await db.commit()
     await db.refresh(doc)
     if level_changed:
-        await sync_access_or_502(db, [doc.id], "보안등급")
+        await sync_access_or_502(db, [doc.id, *(s.id for s in siblings)], "보안등급")
     return doc
 
 

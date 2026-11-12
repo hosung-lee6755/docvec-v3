@@ -28,6 +28,8 @@ class BulkUploadItemResult(BaseModel):
     status: Literal["queued", "duplicate", "skipped", "failed"]
     document_id: UUID | None = None
     detail: str | None = None
+    # v3 마일스톤 7: 같은 이름의 문서에 이어 붙은 새 버전이면 2 이상이다
+    version_number: int | None = None
 
 
 class BulkUploadResponse(BaseModel):

@@ -25,6 +25,7 @@ import DocumentSidebar from '../components/document-detail/DocumentSidebar'
 import { ViewModeToggle } from '../components/document-detail/documentDetailParts'
 import { toBlocksJson, type TabKey } from '../components/document-detail/documentDetailHelpers'
 import OcrConfidencePanel from '../components/document-detail/OcrConfidencePanel'
+import VersionHistoryPanel from '../components/document-detail/VersionHistoryPanel'
 
 // 문서 요약(doc.summary)·추천 태그는 분석 워크플로우 산출물이라 탭이 아니라
 // 왼쪽 메타데이터 패널로 이동했다 — 나머지는 전부 전처리 워크플로우 산출물이다.
@@ -314,6 +315,10 @@ export default function DocumentDetailPage() {
           onTagInputChange={setTagInput}
           onActiveTabChange={setActiveTab}
         />
+
+        <div style={{ marginTop: 'var(--space-6)', maxWidth: 640 }}>
+          <VersionHistoryPanel documentId={id} />
+        </div>
 
       {isProcessing && !!activeRunPanel?.steps.length && (
         <div style={{ marginTop: 'var(--space-6)', maxWidth: 640 }}>

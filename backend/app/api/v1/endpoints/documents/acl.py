@@ -30,6 +30,7 @@ from app.services.access_policy import (
     load_document_facts,
 )
 from app.services.audit import log_audit
+from app.services.document_lifecycle import copy_access, lineage_siblings
 from app.services.source_locks import ensure_not_connector_document, is_connector_document
 
 router = APIRouter()
@@ -149,15 +150,20 @@ async def replace_document_acl(
                     created_by=str(current_user.id),
                 )
             )
+        # 같은 계보의 다른 버전에도 똑같이 건다. 한 버전만 바꾸면 되돌리기·승격 때 예전 권한이 되살아난다.
+        siblings = await lineage_siblings(db, doc)
+        await db.flush()
+        await copy_access(db, doc, siblings)
         log_audit(
             db, str(current_user.id), "document.acl_update", "document", str(doc.id),
             detail={
                 "added": [f"{t}:{i}" for t, i in sorted(new_keys - old_keys)],
                 "removed": [f"{t}:{i}" for t, i in sorted(old_keys - new_keys)],
                 "restricted": bool(new_keys),
+                "versions": len(siblings) + 1,
             },
         )
         await db.commit()
-        await sync_access_or_502(db, [doc.id], "허용 목록")
+        await sync_access_or_502(db, [doc.id, *(s.id for s in siblings)], "허용 목록")
 
     return await _acl_response(db, doc, current_user)
