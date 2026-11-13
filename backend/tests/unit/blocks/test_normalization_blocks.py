@@ -304,6 +304,28 @@ def test_synonym_normalize_replaces_variant_with_standard_term():
     assert all(a.normalized_text == "인공지능" for a in _added(db))
 
 
+def test_synonym_replaces_variant_followed_by_korean_particle():
+    # 조사가 공백 없이 붙어도(에이아이는, AI가) 기록만 남고 치환이 빠지면 안 된다
+    entry = _entry("인공지능", variants=[_variant("AI"), _variant("에이아이")])
+    result, db = _run_dict(nb.SynonymBlock, _ctx("에이아이는 AI가 바꾼다"), [entry])
+    assert result.output["text"] == "인공지능는 인공지능가 바꾼다"
+    assert result.metrics["synonym_applications"] == 2
+
+
+def test_synonym_does_not_replace_inside_a_longer_word():
+    # 앞쪽 경계는 지킨다: "MAIL" 안의 "AI"는 바꾸지 않는다
+    entry = _entry("인공지능", variants=[_variant("AI")])
+    result, _ = _run_dict(nb.SynonymBlock, _ctx("MAIL 서버"), [entry])
+    assert result.output["text"] == "MAIL 서버"
+    assert result.metrics["synonym_applications"] == 0
+
+
+def test_user_dict_replaces_variant_followed_by_korean_particle():
+    entry = _entry("한국에너지공단", variants=[_variant("에너지공단")])
+    result, _ = _run_dict(nb.UserDictBlock, _ctx("에너지공단이 발표했다"), [entry])
+    assert result.output["text"] == "한국에너지공단이 발표했다"
+
+
 def test_synonym_tag_only_marks_without_replacing():
     entry = _entry("인공지능", variants=[_variant("AI")])
     result, db = _run_dict(nb.SynonymBlock, _ctx("AI 시대", {"processing_mode": "tag_only"}), [entry])

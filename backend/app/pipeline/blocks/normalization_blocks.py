@@ -92,6 +92,15 @@ def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
     return text
 
 
+def _replace_spans(text: str, spans: list[tuple[int, int]], replacement: str) -> str:
+    """_find_spans가 찾은 구간을 그대로 바꾼다. 적용 기록(찾은 구간)과 실제 치환이
+    같은 경계 규칙을 쓰게 하려는 것이다. 예전에는 치환만 `\\b…\\b`를 따로 써서
+    "에이아이는"처럼 조사가 붙은 변형은 기록만 남고 바뀌지 않았다."""
+    for start, end in sorted(spans, key=lambda s: s[0], reverse=True):
+        text = text[:start] + replacement + text[end:]
+    return text
+
+
 def _diff_sample(before: str, after: str, window: int = 100) -> tuple[str, str]:
     """변경 위치를 중심으로 한 자른 before/after 쌍을 반환한다. 문서 전체
     앞 200자만 보여주는 head-slice는 ocr_fix/unicode_nfc처럼 문서 전역을
@@ -404,11 +413,7 @@ class SynonymBlock(BaseBlock):
                                             entry.term if should_replace else None)
                         applied += 1
                     if should_replace and spans:
-                        pattern = re.compile(
-                            r"\b" + re.escape(variant.variant_term) + r"\b",
-                            0 if entry.case_sensitive else re.IGNORECASE,
-                        )
-                        text = pattern.sub(entry.term, text)
+                        text = _replace_spans(text, spans, entry.term)
             db.commit()
 
             return BlockResult(
@@ -481,11 +486,7 @@ class UserDictBlock(BaseBlock):
                                             entry.term if should_replace else None)
                         applied += 1
                     if should_replace and spans:
-                        pattern = re.compile(
-                            r"\b" + re.escape(variant.variant_term) + r"\b",
-                            0 if entry.case_sensitive else re.IGNORECASE,
-                        )
-                        text = pattern.sub(entry.term, text)
+                        text = _replace_spans(text, spans, entry.term)
                         protected_spans.extend(_find_spans(entry.term, "EXACT", entry.case_sensitive, text))
             db.commit()
 
