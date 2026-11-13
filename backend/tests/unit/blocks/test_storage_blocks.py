@@ -51,7 +51,16 @@ def _split(doc, config=None, upstream=None, nodes=None, run_row="default", setti
 
 
 def _added(db):
-    return [c.args[0] for c in db.add.call_args_list]
+    """청크만. 분석용 최종 텍스트 스냅샷(DocumentTextRevision)은 _revisions로 따로 본다."""
+    from app.db.models.document_chunk import DocumentChunk
+
+    return [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], DocumentChunk)]
+
+
+def _revisions(db):
+    from app.db.models.document_revision import DocumentTextRevision
+
+    return [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], DocumentTextRevision)]
 
 
 def test_chunk_split_requires_document_id():
@@ -157,6 +166,17 @@ def test_chunk_split_falls_back_to_parsed_text_and_handles_empty():
     assert result.output["chunk_count"] == 0
     assert result.output["chunk_ids"] == []
     db.commit.assert_called_once()
+
+
+def test_chunk_split_keeps_the_text_it_split_as_the_normalized_snapshot():
+    """정제·사전·개인정보 처리를 거쳐 청크로 나뉜 텍스트를 분석 블록도 읽을 수 있게 남긴다."""
+    normalized = "정보통신기술 기반 사고예방플랫폼 제안서입니다. " * 6
+    _, db = _split(_doc(), {"strategy": "fixed"}, upstream={"text": normalized})
+    revisions = _revisions(db)
+    assert len(revisions) == 1
+    assert revisions[0].source == "NORMALIZED"
+    assert revisions[0].parsed_text == normalized
+    assert str(revisions[0].document_id) == "doc-1"
 
 
 def test_chunk_split_clears_previous_chunks_before_insert():

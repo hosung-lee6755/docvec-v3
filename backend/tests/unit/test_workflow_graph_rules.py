@@ -111,6 +111,35 @@ async def test_valid_preprocess_pipeline_has_no_errors():
 
 
 @pytest.mark.asyncio
+async def test_block_config_that_the_block_cannot_use_is_reported():
+    """API로 저장한 "bullet"처럼 블록이 모르는 설정값은 조용히 기본값으로 처리됐다(2026-11-12).
+    게시·실행 전에 어느 블록의 어느 설정이 틀렸는지 알려야 한다."""
+    source = _block("input")
+    summary = _block("summarize", label="요약", config={"format": "bullet"})
+    keywords = _block("extract_keywords", config={"max_keywords": "다섯"})
+    sink = _block("output")
+    blocks = [source, summary, keywords, sink]
+
+    errors = await ws.validate_graph(_db(blocks, _chain(*blocks), kind="ANALYSIS"), "v1")
+
+    flagged = {e["block_id"]: e["message"] for e in errors}
+    assert "'요약' 블록 설정 'format'" in flagged[str(summary.id)]
+    assert "max_keywords" in flagged[str(keywords.id)]
+
+
+@pytest.mark.asyncio
+async def test_valid_block_config_and_editor_only_keys_pass():
+    source = _block("input")
+    summary = _block("summarize", config={"format": "bullets", "timeoutSeconds": 60})
+    sink = _block("output")
+    blocks = [source, summary, sink]
+
+    errors = await ws.validate_graph(_db(blocks, _chain(*blocks), kind="ANALYSIS"), "v1")
+
+    assert errors == []
+
+
+@pytest.mark.asyncio
 async def test_preprocess_requires_exactly_one_entry_file_validate_and_one_rag_store():
     a, b = _block("format_detect"), _block("text_extract")
     errors = await ws.validate_graph(_db([a, b], _chain(a, b)), "v1")

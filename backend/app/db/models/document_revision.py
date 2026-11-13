@@ -8,6 +8,12 @@ from app.db.types import UTCDateTime
 
 from app.db.base import Base
 
+# 청크 분할이 남기는 분석용 최종 텍스트(정제·사전 적용·개인정보 마스킹 반영). 분석 입력 블록이 읽고,
+# 마스킹된 텍스트라 버전 이력 목록과 복원 대상에서는 뺀다.
+NORMALIZED_REVISION_SOURCE = "NORMALIZED"
+# 사람이 고르거나 복원할 수 있는 원문 계열 스냅샷만 버전 이력에 보인다.
+INTERNAL_REVISION_SOURCES = (NORMALIZED_REVISION_SOURCE,)
+
 
 class DocumentTextRevision(Base):
     """Snapshot of a document's parsed_text taken every time the RAG source
@@ -23,7 +29,7 @@ class DocumentTextRevision(Base):
         ForeignKey("documents.id", ondelete="CASCADE"),
         index=True,
     )
-    # PARSE | REVIEW_EDIT | RAG_EDIT | RESTORE
+    # PARSE | CLEAN | NORMALIZED | REVIEW_EDIT | RAG_EDIT | RESTORE
     source: Mapped[str] = mapped_column(String(20))
     parsed_text: Mapped[str] = mapped_column(Text)
     # Null for system-generated snapshots (PARSE).

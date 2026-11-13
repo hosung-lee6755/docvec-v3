@@ -2,6 +2,7 @@
 required to pass before publish/run (저장 전 워크플로우 유효성 검사를 수행한다)."""
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from pydantic import ValidationError
 
 from app.db.models.workflow import WorkflowBlockInstance, WorkflowDefinition, WorkflowEdge, WorkflowVersion
 from app.pipeline.blocks.registry import BLOCK_REGISTRY, BLOCK_TYPE_LABELS
@@ -42,6 +43,24 @@ def _display_names(blocks: list[WorkflowBlockInstance]) -> dict[str, str]:
         else:
             names[str(b.id)] = base
     return names
+
+
+def _config_error(block) -> str | None:
+    """블록 설정이 그 블록의 설정 스키마에 맞지 않으면 첫 번째 문제를 사람이 읽을 문장으로 돌려준다.
+    스키마에 없는 키(에디터의 timeoutSeconds 등)는 블록이 무시하므로 문제 삼지 않는다."""
+    block_cls = BLOCK_REGISTRY.get(block.block_type)
+    schema = block_cls().config_schema if block_cls else None
+    if schema is None:
+        return None
+    try:
+        schema.model_validate(block.config or {})
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        field = ".".join(str(part) for part in first.get("loc", ())) or "(전체)"
+        allowed = (first.get("ctx") or {}).get("expected")
+        hint = f" 쓸 수 있는 값: {allowed.replace(' or ', ', ')}." if allowed else ""
+        return f"'{field}' 값({first.get('input')!r})을 쓸 수 없습니다.{hint}"
+    return None
 
 
 async def validate_graph(db: AsyncSession, version_id: str) -> list[dict]:
@@ -94,6 +113,9 @@ async def validate_graph(db: AsyncSession, version_id: str) -> list[dict]:
             _add(f"'{name}' 블록에 연결된 입력이 없습니다", block_id)
         if block.block_type != terminal_type and not outgoing.get(block_id):
             _add(f"'{name}' 블록에 연결된 출력이 없습니다", block_id)
+        config_error = _config_error(block)
+        if config_error:
+            _add(f"'{name}' 블록 설정 {config_error}", block_id)
 
     cycle_error = _find_cycle(block_by_id, outgoing)
     if cycle_error:

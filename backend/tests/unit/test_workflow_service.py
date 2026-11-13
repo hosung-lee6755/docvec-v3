@@ -13,6 +13,7 @@ def _block(block_id, block_type, label=None):
     b.id = block_id
     b.block_type = block_type
     b.label = label
+    b.config = {}  # 실제 블록 설정은 dict다. MagicMock이면 설정 검사가 엉뚱한 값을 본다
     return b
 
 

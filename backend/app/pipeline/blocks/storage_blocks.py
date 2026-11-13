@@ -82,6 +82,7 @@ class ChunkSplitBlock(BaseBlock):
         from app.db.models.document import Document
         from app.db.models.document_chunk import DocumentChunk
         from app.db.models.document_node import DocumentNode
+        from app.db.models.document_revision import NORMALIZED_REVISION_SOURCE, DocumentTextRevision
         from app.db.models.workflow import WorkflowVersion
         from app.db.models.workflow_run import WorkflowRun
         from app.db.session import get_sync_db
@@ -297,6 +298,12 @@ class ChunkSplitBlock(BaseBlock):
                 chunk.prev_chunk_id = created_chunks[i - 1].id if i > 0 else None
                 chunk.next_chunk_id = created_chunks[i + 1].id if i + 1 < len(created_chunks) else None
 
+            # 정제·사전 적용·개인정보 마스킹을 거쳐 청크로 나눈 텍스트를 남긴다. 분석 워크플로우의
+            # 입력 블록이 원문 대신 이 텍스트를 읽어, 분석 결과에도 사전과 규칙이 반영된다.
+            # 마스킹된 텍스트라 버전 이력(복원 대상)에는 보이지 않는다(documents/chunks.py).
+            db.add(DocumentTextRevision(
+                document_id=doc.id, source=NORMALIZED_REVISION_SOURCE, parsed_text=full_text, created_by=None,
+            ))
             db.commit()
 
             return BlockResult(

@@ -77,6 +77,26 @@ async def _points_at_other_live_run(db: AsyncSession, doc: Document, run: Workfl
     return other is not None and other.status in _LIVE_RUN_STATUSES
 
 
+async def _idle_documents(db: AsyncSession, document_ids: list) -> list[Document]:
+    """처리 중인 run이 없는 문서만 순서대로 돌려준다. 같은 문서에 run 두 개가 동시에 돌면
+    서로의 청크를 지우고 상태를 덮어쓰므로, 진행 중인 문서는 이번 실행에서 뺀다."""
+    docs = (await db.scalars(select(Document).where(Document.id.in_(document_ids)))).all()
+    by_id = {str(d.id): d for d in docs}
+    active_ids = [d.active_run_id for d in docs if d.active_run_id is not None]
+    live = set()
+    if active_ids:
+        live = {
+            str(run_id) for run_id in (await db.scalars(
+                select(WorkflowRun.id).where(
+                    WorkflowRun.id.in_(active_ids), WorkflowRun.status.in_(_LIVE_RUN_STATUSES))
+            )).all()
+        }
+    return [
+        by_id[str(i)] for i in document_ids
+        if str(i) in by_id and str(by_id[str(i)].active_run_id) not in live
+    ]
+
+
 async def _restrict_to_accessible_runs(db: AsyncSession, query, user: User):
     """문서 목록과 같은 기준(v3): 문서 실행은 그 문서를 볼 수 있을 때(업로더·등급·ACL),
     문서 없는 컬렉션 단위 실행은 그 컬렉션에 접근할 수 있을 때만 보인다 — 실행 기록에는
@@ -137,21 +157,36 @@ async def run_workflow(
                 detail="컬렉션에 파싱 완료된 문서가 없습니다",
             )
 
+    documents = await _idle_documents(db, target_document_ids)
+    skipped_in_progress = len(target_document_ids) - len(documents)
+    if not documents:
+        raise HTTPException(
+            status_code=409,
+            detail="대상 문서가 아직 처리 중입니다. 지금 진행 중인 처리가 끝난 뒤 다시 실행하세요.",
+        )
+
     from app.services.dictionary_service import current_dictionary_version
 
     dictionary_version = await current_dictionary_version(db)
 
     runs = []
-    for document_id in target_document_ids:
+    for doc in documents:
         run = WorkflowRun(
             version_id=data.version_id,
-            document_id=document_id,
+            document_id=doc.id,
             collection_id=data.collection_id,
             status="QUEUED",
             dictionary_version=dictionary_version,
         )
         db.add(run)
         runs.append(run)
+    # documents.active_run_id ↔ workflow_runs.document_id 외래키가 순환이라 run을 먼저 내보낸다
+    # (reprocess_service, 분석 자동 실행과 같은 순서).
+    await db.flush()
+    for doc, run in zip(documents, runs):
+        # 업로드·재처리·분석 자동 실행처럼 문서는 늘 최신 run을 가리킨다. 옮기지 않으면 품질 보고서,
+        # 검토/실패 대기열, 부분 재처리가 이 run의 rag_store가 청크를 지운 옛 run을 기준으로 삼는다.
+        doc.active_run_id = run.id
     await db.commit()
     for run in runs:
         await db.refresh(run)
@@ -180,6 +215,7 @@ async def run_workflow(
     return {
         "items": [RunResponse.model_validate(r) for r in runs],
         "count": len(runs),
+        "skipped_in_progress": skipped_in_progress,
     }
 
 

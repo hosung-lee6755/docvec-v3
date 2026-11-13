@@ -97,8 +97,36 @@ def test_input_block_returns_stripped_text():
     db = _db_with_doc(doc)
     with patch("app.db.session.get_sync_db", return_value=db):
         result = cb.InputBlock().run(BlockContext(run_id="r", block_instance_id="b", document_id="d1"))
-    assert result.output == {"document_id": "d1", "filename": "a.pdf", "text": "내용"}
+    assert result.output == {"document_id": "d1", "filename": "a.pdf", "text": "내용", "text_source": "original"}
     db.close.assert_called_once()
+
+
+def _db_with_revision(doc, source, text):
+    db = _db_with_doc(doc)
+    latest = SimpleNamespace(source=source, parsed_text=text) if source else None
+    db.query.return_value.filter.return_value.order_by.return_value.first.return_value = latest
+    return db
+
+
+def test_input_block_reads_the_normalized_text_of_the_latest_preprocessing():
+    """사전 치환, 정제 규칙, 개인정보 마스킹이 반영된 텍스트로 분석해야 결과에도 반영된다."""
+    doc = SimpleNamespace(id="d1", original_filename="a.pdf", parsed_text="ICT 원문 010-1234-5678")
+    db = _db_with_revision(doc, "NORMALIZED", " 정보통신기술 원문 *** ")
+    with patch("app.db.session.get_sync_db", return_value=db):
+        result = cb.InputBlock().run(BlockContext(run_id="r", block_instance_id="b", document_id="d1"))
+    assert result.output["text"] == "정보통신기술 원문 ***"
+    assert result.output["text_source"] == "normalized"
+
+
+@pytest.mark.parametrize("source", ["RAG_EDIT", "REVIEW_EDIT", "RESTORE", None])
+def test_input_block_uses_parsed_text_when_it_changed_after_preprocessing(source):
+    """전처리 뒤 사람이 고친 텍스트가 있거나 스냅샷이 없으면(이전에 처리한 문서) 문서 본문을 쓴다."""
+    doc = SimpleNamespace(id="d1", original_filename="a.pdf", parsed_text="고친 본문")
+    db = _db_with_revision(doc, source, "고친 본문")
+    with patch("app.db.session.get_sync_db", return_value=db):
+        result = cb.InputBlock().run(BlockContext(run_id="r", block_instance_id="b", document_id="d1"))
+    assert result.output["text"] == "고친 본문"
+    assert result.output["text_source"] == "original"
 
 
 def test_input_block_missing_document():

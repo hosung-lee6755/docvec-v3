@@ -10,7 +10,7 @@ from app.api.v1.permissions import (
 )
 from app.core.config import settings
 from app.db.models.document import Document
-from app.db.models.document_revision import DocumentTextRevision
+from app.db.models.document_revision import INTERNAL_REVISION_SOURCES, DocumentTextRevision
 from app.db.models.user import User
 from app.db.session import get_db
 from app.schemas.document import (
@@ -321,6 +321,7 @@ async def list_document_revisions(
     result = await db.execute(
         select(DocumentTextRevision)
         .where(DocumentTextRevision.document_id == document_id)
+        .where(DocumentTextRevision.source.not_in(INTERNAL_REVISION_SOURCES))
         .order_by(DocumentTextRevision.created_at.desc())
         .limit(50)
     )
@@ -360,6 +361,7 @@ async def restore_document_revision(
         select(DocumentTextRevision).where(
             DocumentTextRevision.id == revision_id,
             DocumentTextRevision.document_id == document_id,
+            DocumentTextRevision.source.not_in(INTERNAL_REVISION_SOURCES),
         )
     )
     if not revision:

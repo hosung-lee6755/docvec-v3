@@ -91,6 +91,64 @@ async def test_run_workflow_for_document_creates_queued_run_and_dispatches_entry
 
 
 @pytest.mark.asyncio
+async def test_run_workflow_points_the_document_at_the_new_run(world, dispatched):
+    """수동 실행도 업로드·재처리처럼 문서의 active_run_id를 새 run으로 옮겨야 한다. 그대로 두면
+    품질 보고서, 검토/실패 대기열, 부분 재처리가 이미 청크가 지워진 옛 run을 기준으로 삼는다."""
+    db = world["db"]
+    doc = await make_document(db, world["owner"], world["collection"])
+    old = await _make_run(db, world["version"], status="COMPLETED", document_id=str(doc.id))
+    doc.active_run_id = old.id
+    await db.flush()
+
+    result = await runs_api.run_workflow(
+        U(world["workflow"].id), RunCreate(version_id=U(world["version"].id), document_id=U(doc.id)),
+        db, world["owner"])
+
+    await db.refresh(doc)
+    assert str(doc.active_run_id) == str(result["items"][0].id)
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_rejects_a_document_that_is_still_processing(world, dispatched):
+    db = world["db"]
+    doc = await make_document(db, world["owner"], world["collection"])
+    live = await _make_run(db, world["version"], status="RUNNING", document_id=str(doc.id))
+    doc.active_run_id = live.id
+    await db.flush()
+
+    with pytest.raises(HTTPException) as exc:
+        await runs_api.run_workflow(
+            U(world["workflow"].id), RunCreate(version_id=U(world["version"].id), document_id=U(doc.id)),
+            db, world["owner"])
+
+    assert exc.value.status_code == 409
+    assert "처리 중" in exc.value.detail
+    dispatched.apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_for_collection_skips_documents_that_are_still_processing(world, dispatched):
+    db = world["db"]
+    idle = await make_document(db, world["owner"], world["collection"], parsed_text="a")
+    busy = await make_document(db, world["owner"], world["collection"], parsed_text="b")
+    live = await _make_run(db, world["version"], status="WAITING_REVIEW", document_id=str(busy.id))
+    busy.active_run_id = live.id
+    await db.flush()
+
+    result = await runs_api.run_workflow(
+        U(world["workflow"].id),
+        RunCreate(version_id=U(world["version"].id), collection_id=U(world["collection"].id)),
+        db, world["owner"])
+
+    assert result["count"] == 1
+    assert result["skipped_in_progress"] == 1
+    await db.refresh(busy)
+    assert str(busy.active_run_id) == str(live.id)
+    await db.refresh(idle)
+    assert str(idle.active_run_id) == str(result["items"][0].id)
+
+
+@pytest.mark.asyncio
 async def test_run_workflow_uses_block_timeout_config(world, dispatched):
     db = world["db"]
     world["source"].config = {"timeoutSeconds": 42}

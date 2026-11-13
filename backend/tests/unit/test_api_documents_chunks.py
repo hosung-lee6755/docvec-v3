@@ -280,6 +280,23 @@ async def test_revisions_list_has_preview_and_length(db_session):  # noqa: F811
     assert item["source"] == "RAG_EDIT"
 
 
+async def test_revisions_hide_the_masked_text_kept_for_analysis(db_session):  # noqa: F811
+    """청크 분할이 남기는 분석용 최종 텍스트는 개인정보가 가려진 텍스트라 버전 이력에 보이거나
+    복원되면 원문이 마스킹된 텍스트로 바뀐다."""
+    doc = await add_doc(db_session, "r-normalized", status="INDEXED")
+    normalized = _revision(doc.id, "전화 ***-****-****", source="NORMALIZED")
+    db_session.add_all([_revision(doc.id, "원문", source="PARSE"), normalized])
+    await db_session.flush()
+
+    result = await chunks_api.list_document_revisions(doc.id, db_session, owner_user())
+
+    assert [r["source"] for r in result["revisions"]] == ["PARSE"]
+    with patch("app.pipeline.tasks.process.continue_processing") as task:
+        await assert_http_error(
+            chunks_api.restore_document_revision(doc.id, normalized.id, db_session, owner_user()), 404)
+    task.delay.assert_not_called()
+
+
 async def test_revisions_list_404_and_403(db_session):  # noqa: F811
     doc = await add_doc(db_session, "r-list-403")
     await assert_http_error(chunks_api.list_document_revisions(uuid4(), db_session, owner_user()), 404)

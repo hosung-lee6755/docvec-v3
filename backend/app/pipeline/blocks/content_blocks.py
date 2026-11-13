@@ -7,6 +7,7 @@ Every block passes `text` through its output so downstream blocks keep
 working regardless of what else a block adds.
 """
 import re
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -46,7 +47,8 @@ class ExtractKeywordsConfig(BaseModel):
 
 
 class SummarizeConfig(BaseModel):
-    format: str = "paragraph"
+    # 에디터 선택지와 같은 두 값만 받는다. 다른 문자열은 예전엔 조용히 문단형으로 처리됐다.
+    format: Literal["paragraph", "bullets"] = "paragraph"
     prompt: str | None = None
 
 
@@ -139,6 +141,27 @@ def _parse_lines(raw: str, max_items: int) -> list[str]:
     return items
 
 
+def _analysis_text(db, doc) -> tuple[str, str]:
+    """분석할 텍스트와 그 출처("normalized" | "original").
+
+    가장 최근 스냅샷이 청크 분할이 남긴 최종 텍스트(NORMALIZED)면 그것을 쓴다. 정제 규칙, 사전 치환,
+    개인정보 마스킹이 반영돼 있어 분석 결과도 검색 청크와 같은 텍스트를 본다. 그 뒤에 사람이 본문을
+    고쳤거나(REVIEW_EDIT, RAG_EDIT, RESTORE) 이 기능 전에 처리돼 스냅샷이 없으면 문서 본문을 쓴다."""
+    from app.db.models.document_revision import NORMALIZED_REVISION_SOURCE, DocumentTextRevision
+
+    latest = (
+        db.query(DocumentTextRevision)
+        .filter(DocumentTextRevision.document_id == doc.id)
+        .order_by(DocumentTextRevision.created_at.desc())
+        .first()
+    )
+    if latest is not None and latest.source == NORMALIZED_REVISION_SOURCE:
+        normalized = (latest.parsed_text or "").strip()
+        if normalized:
+            return normalized, "normalized"
+    return (doc.parsed_text or "").strip(), "original"
+
+
 class InputBlock(BaseBlock):
     @property
     def block_type(self) -> str:
@@ -162,13 +185,14 @@ class InputBlock(BaseBlock):
             doc = db.get(Document, context.document_id)
             if doc is None:
                 raise ValueError("지정된 문서를 찾을 수 없습니다.")
-            text = (doc.parsed_text or "").strip()
+            text, text_source = _analysis_text(db, doc)
             if not text:
                 raise ValueError("문서에 추출된 텍스트가 없습니다. 파싱이 완료된 문서인지 확인하세요.")
             return BlockResult(output={
                 "document_id": str(doc.id),
                 "filename": doc.original_filename,
                 "text": text,
+                "text_source": text_source,
             })
         finally:
             db.close()
