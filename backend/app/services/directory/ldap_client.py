@@ -31,7 +31,12 @@ _PAGE_SIZE = 500
 # 중첩 그룹을 한 번에 펼치는 AD 전용 매칭 규칙(LDAP_MATCHING_RULE_IN_CHAIN)
 _IN_CHAIN = "1.2.840.113556.1.4.1941"
 _MAX_LOGIN_LEN = 255
-_USER_ATTRS = ["objectSid", "sAMAccountName", "userPrincipalName", "mail", "displayName", "userAccountControl"]
+_USER_ATTRS = [
+    "objectSid", "sAMAccountName", "userPrincipalName", "mail", "displayName", "userAccountControl",
+    "isCriticalSystemObject",
+]
+# 도메인 기본 제공 계정의 RID: Administrator, Guest, krbtgt
+_BUILTIN_RIDS = {"500", "501", "502"}
 _GROUP_ATTRS = ["objectSid", "cn", "description"]
 # 기본 그룹(primary group)은 member/memberOf에 나타나지 않아 따로 찾는다
 _PRIMARY_ATTRS = ["objectSid", "primaryGroupID"]
@@ -49,6 +54,8 @@ class DirectoryUser:
     email: str
     display_name: str
     disabled: bool
+    # 기본 제공 계정, AD가 시스템 계정으로 표시한 계정, 서비스(bind) 계정. 사람 계정이 아니라 미리 만들지 않는다
+    system_account: bool = False
 
 
 @dataclass(frozen=True)
@@ -160,14 +167,25 @@ class LdapDirectoryClient:
         username = _first(entry, "sAMAccountName") or ""
         upn = _first(entry, "userPrincipalName") or ""
         uac = int(_first(entry, "userAccountControl") or 0)
+        sid = _entry_sid(entry)
         return DirectoryUser(
             dn=entry["dn"],
-            sid=_entry_sid(entry),
+            sid=sid,
             username=username,
             email=(_first(entry, "mail") or upn or "").lower(),
             display_name=_first(entry, "displayName") or username,
             disabled=bool(uac & _UAC_DISABLED),
+            system_account=self._is_system_account(entry, sid, username, upn),
         )
+
+    def _is_system_account(self, entry: dict, sid: str, username: str, upn: str) -> bool:
+        critical = str(_first(entry, "isCriticalSystemObject") or "").upper() == "TRUE"
+        builtin = sid.rsplit("-", 1)[-1] in _BUILTIN_RIDS
+        # bind 계정은 DN, UPN(user@domain), DOMAIN\user 어느 형태로든 적힐 수 있다
+        bind = self._config.bind_dn.lower()
+        names = {entry["dn"].lower(), username.lower(), upn.lower()} - {""}
+        is_bind = bool(bind) and (bind in names or bind.split("\\")[-1] in names)
+        return critical or builtin or is_bind
 
     @staticmethod
     def _to_group(entry: dict) -> DirectoryGroup:

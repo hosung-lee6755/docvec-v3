@@ -21,6 +21,16 @@ export interface Group {
   created_at: string
   // local=화면에서 관리, ldap=AD에서 동기화(이름·구성원 수정 불가)
   source?: "local" | "ldap"
+  // AD에서 다시 생긴 그룹이라 예전 그룹의 문서 권한을 이어받을지 정해야 한다
+  has_previous_permissions?: boolean
+}
+
+/** 다시 생긴 AD 그룹이 이어받을 수 있는 예전 그룹의 문서 권한 */
+export interface PreviousPermissions {
+  previous_group_id: string | null
+  document_count: number
+  connector_document_count: number
+  documents: { id: string; title: string }[]
 }
 
 export interface GroupMember {
@@ -91,6 +101,33 @@ export function useUpdateGroup() {
   return useMutation({
     mutationFn: async ({ id, ...input }: { id: string; name?: string; description?: string | null }) =>
       (await apiClient.patch(`/groups/${id}`, input)).data as Group,
+    onSuccess: invalidate,
+  })
+}
+
+export function usePreviousPermissions(groupId: string, enabled: boolean) {
+  return useQuery<PreviousPermissions>({
+    queryKey: [...GROUPS_KEY, groupId, "previous-permissions"],
+    queryFn: async () => (await apiClient.get(`/groups/${groupId}/previous-permissions`)).data,
+    enabled,
+  })
+}
+
+export function useInheritPreviousPermissions() {
+  const invalidate = useInvalidateGroups()
+  return useMutation({
+    mutationFn: async (groupId: string) =>
+      (await apiClient.post(`/groups/${groupId}/inherit-previous-permissions`)).data as { moved: number; already_granted: number; sync_failed: number },
+    onSuccess: invalidate,
+  })
+}
+
+export function useDismissPreviousPermissions() {
+  const invalidate = useInvalidateGroups()
+  return useMutation({
+    mutationFn: async (groupId: string) => {
+      await apiClient.post(`/groups/${groupId}/dismiss-previous-permissions`)
+    },
     onSuccess: invalidate,
   })
 }

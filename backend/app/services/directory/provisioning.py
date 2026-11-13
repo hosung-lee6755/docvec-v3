@@ -202,7 +202,26 @@ def _refuse_mass_deactivation(db_users: list[User], by_sid: dict) -> None:
         )
 
 
-def sync_directory(db: Session, client: DirectoryClient, admin_group_dn: str, *, preprovision: bool = True) -> dict:
+def _preprovision_candidates(ad_users: list[DirectoryUser], known_sids: set[str],
+                             exclude: frozenset[str]) -> tuple[list[DirectoryUser], int]:
+    """미리 만들 AD 사용자와, 시스템 계정이거나 제외 목록에 있어 건너뛴 수를 돌려준다."""
+    newcomers, skipped = [], 0
+    for duser in ad_users:
+        if duser.disabled or duser.sid in known_sids:
+            continue
+        if duser.system_account or {duser.username.lower(), duser.email.lower()} & exclude:
+            skipped += 1
+            continue
+        newcomers.append(duser)
+    return newcomers, skipped
+
+
+def parse_exclude_list(raw: str) -> frozenset[str]:
+    return frozenset(part.strip().lower() for part in (raw or "").split(",") if part.strip())
+
+
+def sync_directory(db: Session, client: DirectoryClient, admin_group_dn: str, *, preprovision: bool = True,
+                   exclude: frozenset[str] = frozenset()) -> dict:
     """AD 상태에 맞춰 그룹과 사용자를 정리한다. AD에서 먼저 모두 읽고 나서 쓴다.
 
     AD에 연결하지 못하면 아무것도 바꾸지 않고 DirectoryUnavailable을 그대로 던진다.
@@ -218,7 +237,9 @@ def sync_directory(db: Session, client: DirectoryClient, admin_group_dn: str, *,
 
     by_sid = {u.sid: u for u in ad_users}
     known_sids = {u.external_id for u in db_users}
-    newcomers = [u for u in ad_users if not u.disabled and u.sid not in known_sids] if preprovision else []
+    newcomers, skipped_system = (
+        _preprovision_candidates(ad_users, known_sids, exclude) if preprovision else ([], 0)
+    )
     memberships: dict[str, list[DirectoryGroup]] = {}
     for user in db_users:
         duser = by_sid.get(user.external_id)
@@ -229,17 +250,22 @@ def sync_directory(db: Session, client: DirectoryClient, admin_group_dn: str, *,
 
     _refuse_mass_deactivation(db_users, by_sid)
     counts = {"users_checked": len(db_users), "deactivated": 0, "updated": 0, "groups_removed": 0,
-              "created": 0, "conflicts": [], "recreated_groups": []}
+              "created": 0, "conflicts": [], "recreated_groups": [], "skipped_system": skipped_system}
     known = list(ad_groups) + [g for gs in memberships.values() for g in gs]
     live_dns = {normalize_dn(g.dn) for g in known}
     rows = _upsert_groups(db, known)
 
     live_sids = {g.sid for g in known}
+    new_by_dn = {normalize_dn(row.external_dn): row for row in rows.values() if row.external_dn}
     for group in list(db.scalars(select(UserGroup).where(UserGroup.source == GROUP_SOURCE_LDAP))):
         if group.external_id not in live_sids:
             # 문서 ACL 항목은 남는다(fail-closed). 아무에게도 매칭되지 않는다.
             if group.external_dn and normalize_dn(group.external_dn) in live_dns:
                 counts["recreated_groups"].append(group.name)
+                successor = new_by_dn.get(normalize_dn(group.external_dn))
+                # 권한을 자동으로 옮기지는 않는다. 같은 이름이어도 구성원이 다를 수 있어 관리자가 정한다
+                if successor is not None and successor.previous_group_id is None:
+                    successor.previous_group_id = group.id
             db.delete(group)
             counts["groups_removed"] += 1
     db.flush()

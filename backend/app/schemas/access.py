@@ -33,6 +33,8 @@ class GroupResponse(BaseModel):
     created_at: datetime
     # v3 마일스톤 3: local=화면에서 관리, ldap=AD에서 동기화(수정 불가)
     source: str = "local"
+    # AD에서 다시 생긴 그룹이라 예전 그룹의 문서 권한을 이어받을지 정해야 한다
+    has_previous_permissions: bool = False
 
 
 class GroupMemberAdd(BaseModel):

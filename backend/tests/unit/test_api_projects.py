@@ -261,7 +261,8 @@ async def test_api_key_lifecycle_never_exposes_secret(world, externals):
 
     await api.set_project_api_key(pid, "openai", api.ProjectApiKeyUpdate(api_key="  sk-test  "),
                                   db, world["owner"])
-    stored = await db.scalar(select(ProjectApiKey).where(ProjectApiKey.provider == "openai"))
+    stored = await db.scalar(select(ProjectApiKey).where(
+        ProjectApiKey.project_id == world["project"].id, ProjectApiKey.provider == "openai"))
     assert stored.encrypted_key != "sk-test" and decrypt_secret(stored.encrypted_key) == "sk-test"
 
     after = await api.list_project_api_keys(pid, db, world["owner"])
@@ -278,7 +279,7 @@ async def test_set_api_key_overwrites_existing_key(world, externals):
     pid, db = U(world["project"].id), world["db"]
     await api.set_project_api_key(pid, "anthropic", api.ProjectApiKeyUpdate(api_key="old"), db, world["owner"])
     await api.set_project_api_key(pid, "anthropic", api.ProjectApiKeyUpdate(api_key="new"), db, world["owner"])
-    rows = (await db.scalars(select(ProjectApiKey))).all()
+    rows = (await db.scalars(select(ProjectApiKey).where(ProjectApiKey.project_id == world["project"].id))).all()
     assert len(rows) == 1 and decrypt_secret(rows[0].encrypted_key) == "new"
 
 

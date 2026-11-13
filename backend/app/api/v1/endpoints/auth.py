@@ -52,13 +52,19 @@ def session_tokens(user) -> tuple[str, str]:
     return access, refresh
 
 
+async def _active_admin_exists(db: AsyncSession) -> bool:
+    row = await db.execute(select(User.id).where(User.role == "admin", User.is_active.is_(True)).limit(1))
+    return row.scalar_one_or_none() is not None
+
+
 @router.get("/options")
-async def auth_options() -> dict:
+async def auth_options(db: AsyncSession = Depends(get_db)) -> dict:
     """로그인 화면이 회원가입 링크를 보일지 정하는 데 쓴다. 인증 없이 읽는다."""
     directory = bool(settings.ldap_enabled)
+    admin_code = bool(settings.admin_signup_code) and not directory and not await _active_admin_exists(db)
     return {
         "self_signup_enabled": bool(settings.self_signup_enabled) and not directory,
-        "admin_code_signup": bool(settings.admin_signup_code) and not directory,
+        "admin_code_signup": admin_code,
         "directory_login": directory,
     }
 
@@ -86,7 +92,9 @@ async def register(
     # Use constant-time comparison for admin_code to prevent timing attacks.
     # Also rate-limit attempts that supply an admin_code more strictly.
     granted_admin = False
-    if bool(settings.admin_signup_code) and request.admin_code is not None:
+    # 관리자 코드는 첫 관리자를 만들 때만 쓴다. 활성 관리자가 있으면 코드가 맞아도 관리자로 가입시키지 않는다
+    # (코드가 새어 나가도 관리자 계정을 더 만들 수 없게). 이후 관리자는 사용자 화면에서 역할을 준다.
+    if bool(settings.admin_signup_code) and request.admin_code is not None and not await _active_admin_exists(db):
         # Stricter rate limit on admin code attempts (prevent brute-force)
         enforce_rate_limit(http_request, "register:admin_code", limit=3, window_seconds=300, email=request.email)
         granted_admin = hmac.compare_digest(

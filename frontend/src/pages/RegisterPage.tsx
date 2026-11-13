@@ -41,7 +41,7 @@ export default function RegisterPage() {
         <div className="user-auth__brand">
           <span className="user-auth__logo" aria-hidden="true">DV</span>
           <h1 className="user-auth__name">DocVec</h1>
-          <p className="user-auth__subtitle">{isAdminCodeOnly ? '관리자 계정 만들기' : '새 계정 만들기'}</p>
+          <p className="user-auth__subtitle">{isClosed ? '회원가입 안내' : isAdminCodeOnly ? '관리자 계정 만들기' : '새 계정 만들기'}</p>
         </div>
         {isClosed ? (
           <Alert tone="info">

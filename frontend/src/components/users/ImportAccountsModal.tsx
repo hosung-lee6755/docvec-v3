@@ -100,7 +100,7 @@ export default function ImportAccountsModal({ isOpen, onClose }: ImportAccountsM
         <div className="user-account-import">
           <ol className="user-account-import__steps">
             <li>
-              양식을 받아 한 줄에 한 명씩 채웁니다. 이메일만 꼭 넣으면 되고, 역할을 비우면 열람자가 됩니다.
+              양식을 받아 한 줄에 한 명씩 채웁니다. 이메일만 꼭 넣으면 되고, 역할을 비우면 조회자가 됩니다.
               그룹은 세미콜론(;)으로 여러 개를 적을 수 있으며, 그룹 화면에서 먼저 만든 그룹만 쓸 수 있습니다.
               <div className="user-account-import__template">
                 <Button

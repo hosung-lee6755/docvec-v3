@@ -409,3 +409,10 @@ button.ds-stat:focus-visible, a.ds-stat:focus-visible { outline: none; box-shado
 .connector-acl-mode__option { display: flex; align-items: flex-start; gap: var(--space-2); font-size: var(--text-sm); cursor: pointer; }
 .connector-acl-mode__option input { margin-top: 3px; }
 .connector-acl-mode__option .ds-cell-sub { display: block; }
+
+/* 다시 생긴 AD 그룹의 예전 문서 권한 이어받기 */
+.group-carryover { display: flex; flex-direction: column; gap: var(--space-2); }
+.group-carryover__list { margin: 0; padding-left: var(--space-4); font-size: var(--text-sm); display: grid; gap: var(--space-1); }
+.group-carryover__actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.group-carryover__list a { color: var(--color-primary); text-decoration: underline; text-underline-offset: 2px; }
+.group-carryover__list a:hover { text-decoration-thickness: 2px; }

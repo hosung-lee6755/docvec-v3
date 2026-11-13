@@ -67,18 +67,43 @@ async def test_open_signup_still_creates_viewers(monkeypatch):
     assert result.user.role == "viewer"
 
 
+def _db_with_admin():
+    """첫 조회(이메일 중복)는 비어 있고, 다음 조회(활성 관리자)는 찾는다."""
+    db = _register_db()
+    db.execute.side_effect = [
+        MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
+        MagicMock(scalar_one_or_none=MagicMock(return_value="admin-id")),
+    ]
+    return db
+
+
 async def test_login_screen_options_follow_the_settings(monkeypatch):
     monkeypatch.setattr(settings, "self_signup_enabled", False)
     monkeypatch.setattr(settings, "admin_signup_code", ADMIN_CODE)
-    assert await auth_module.auth_options() == {
+    assert await auth_module.auth_options(_register_db()) == {
         "self_signup_enabled": False, "admin_code_signup": True, "directory_login": False,
     }
 
     monkeypatch.setattr(settings, "self_signup_enabled", True)
     monkeypatch.setattr(settings, "ldap_enabled", True)
-    assert await auth_module.auth_options() == {
+    assert await auth_module.auth_options(_register_db()) == {
         "self_signup_enabled": False, "admin_code_signup": False, "directory_login": True,
     }
+
+
+async def test_admin_code_signup_closes_once_an_admin_exists(monkeypatch):
+    monkeypatch.setattr(settings, "self_signup_enabled", False)
+    monkeypatch.setattr(settings, "admin_signup_code", ADMIN_CODE)
+    options_db = _register_db()
+    options_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value="admin-id"))
+    assert (await auth_module.auth_options(options_db))["admin_code_signup"] is False
+
+    with _no_rate_limit, pytest.raises(HTTPException) as exc:
+        await auth_module.register(
+            UserCreate(email="late@example.com", username="늦은관리자", password="password123", admin_code=ADMIN_CODE),
+            MagicMock(), _http_request(), _db_with_admin(),
+        )
+    assert exc.value.status_code == 403
 
 
 # ------------------------------------------------------------ 세션 버전과 임시 비밀번호

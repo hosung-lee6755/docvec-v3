@@ -31,6 +31,9 @@ class UserGroup(Base):
     )
     external_id: Mapped[str | None] = mapped_column(String(184), unique=True, nullable=True)
     external_dn: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # AD에서 같은 DN의 그룹이 지워졌다 다시 생기면(새 SID) 예전 그룹 id를 남긴다. 예전 그룹 행은 지워지지만
+    # 문서 ACL 항목은 남아 있어, 관리자가 그 권한을 새 그룹으로 옮길지 정할 수 있다. 정하면 비운다.
+    previous_group_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_by: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

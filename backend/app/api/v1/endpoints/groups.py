@@ -27,6 +27,7 @@ from app.schemas.access import (
     GroupResponse,
     GroupUpdate,
 )
+from app.services import group_carryover
 from app.services.audit import log_audit
 from app.services.source_locks import ensure_local_group
 
@@ -68,6 +69,7 @@ def _group_response(group: UserGroup, member_count: int) -> GroupResponse:
     return GroupResponse(
         id=group.id, name=group.name, description=group.description,
         member_count=member_count, created_at=group.created_at, source=group.source or "local",
+        has_previous_permissions=group.previous_group_id is not None,
     )
 
 
@@ -180,6 +182,47 @@ async def delete_group(
     # 멤버 행은 FK ON DELETE CASCADE로 함께 지워진다. 문서 ACL의 그룹 항목은 남긴다.
     await db.delete(group)
     await db.commit()
+    return Response(status_code=204)
+
+
+async def _group_with_previous(db: AsyncSession, group_id: UUID) -> UserGroup:
+    group = await _get_group(db, group_id)
+    if group.previous_group_id is None:
+        raise HTTPException(status_code=409, detail="이어받을 예전 그룹 권한이 없습니다")
+    return group
+
+
+@router.get("/{group_id}/previous-permissions")
+async def get_previous_permissions(
+    group_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """AD에서 다시 생긴 그룹이 이어받을 수 있는 예전 그룹의 문서 권한(관리자 전용)."""
+    require_admin(current_user)
+    return await group_carryover.previous_permissions(db, await _get_group(db, group_id))
+
+
+@router.post("/{group_id}/inherit-previous-permissions")
+async def inherit_previous_permissions(
+    group_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_admin(current_user)
+    group = await _group_with_previous(db, group_id)
+    return await group_carryover.inherit_previous_permissions(db, group, current_user)
+
+
+@router.post("/{group_id}/dismiss-previous-permissions", status_code=204)
+async def dismiss_previous_permissions(
+    group_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_admin(current_user)
+    group = await _group_with_previous(db, group_id)
+    await group_carryover.dismiss_previous_permissions(db, group, current_user)
     return Response(status_code=204)
 
 

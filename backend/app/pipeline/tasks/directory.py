@@ -16,11 +16,12 @@ def run_directory_sync(db, client) -> dict:
     """한 번 동기화하고 감사 로그를 남긴다. 커밋과 롤백은 이 함수가 맡는다."""
     from app.services.audit import log_audit
     from app.services.directory.ldap_client import DirectoryUnavailable
-    from app.services.directory.provisioning import sync_directory
+    from app.services.directory.provisioning import parse_exclude_list, sync_directory
 
     try:
         result = sync_directory(
             db, client, settings.ldap_admin_group_dn, preprovision=settings.ldap_preprovision_users,
+            exclude=parse_exclude_list(settings.ldap_preprovision_exclude),
         )
     except DirectoryUnavailable as exc:
         db.rollback()

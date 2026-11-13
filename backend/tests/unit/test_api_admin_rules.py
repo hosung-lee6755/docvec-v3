@@ -23,7 +23,11 @@ from tests.unit.api_pg_helpers import (  # noqa: F401
     make_user,
 )
 
-T0 = datetime(2026, 5, 1, 12, 0, 0)
+# 다른 테스트가 커밋한 감사 로그·사용량은 지금 시각에 쌓인다. 이 파일의 행은 겹치지 않는 과거에 두고,
+# 전체를 세는 조회는 그 기간(WINDOW)으로 한정해 다른 테스트의 행을 세지 않게 한다.
+T0 = datetime(2001, 5, 1, 12, 0, 0)
+WINDOW_START = T0 - timedelta(days=1)
+WINDOW_END = T0 + timedelta(days=30)
 
 
 async def _expect(status: int, coro):
@@ -57,7 +61,7 @@ async def test_list_audit_logs_filters_and_orders_newest_first(world):
     await db.flush()
 
     async def call(**kw):
-        params = dict(user_id=None, action=None, resource_type=None, from_date=None, to_date=None,
+        params = dict(user_id=None, action=None, resource_type=None, from_date=WINDOW_START, to_date=WINDOW_END,
                       limit=50, offset=0, db=db, current_user=admin)
         params.update(kw)
         return await admin_api.list_audit_logs(**params)
@@ -82,7 +86,7 @@ async def test_list_audit_logs_paginates_with_limit_and_offset(world):
     db.add_all([_audit(admin, f"act.{i}", "x", T0 + timedelta(minutes=i)) for i in range(5)])
     await db.flush()
 
-    page = await admin_api.list_audit_logs(None, None, None, None, None, 2, 2, db, admin)
+    page = await admin_api.list_audit_logs(None, None, None, WINDOW_START, WINDOW_END, 2, 2, db, admin)
 
     assert page["total"] == 5
     assert [i["action"] for i in page["items"]] == ["act.2", "act.1"]
@@ -107,7 +111,7 @@ async def test_usage_summary_aggregates_by_model_and_user_ordered_by_cost(world)
     ])
     await db.flush()
 
-    result = await admin_api.get_usage_summary(None, None, None, db, admin)
+    result = await admin_api.get_usage_summary(None, WINDOW_START, WINDOW_END, db, admin)
 
     assert result["summary"] == {"total_requests": 3, "total_input_tokens": 310,
                                  "total_output_tokens": 155, "total_cost_usd": pytest.approx(0.61)}
@@ -130,7 +134,7 @@ async def test_usage_summary_applies_project_and_date_filters(world):
 
     by_project = await admin_api.get_usage_summary(project.id, None, None, db, admin)
     in_range = await admin_api.get_usage_summary(None, T0 + timedelta(days=5), T0 + timedelta(days=20), db, admin)
-    empty = await admin_api.get_usage_summary(uuid4(), None, None, db, admin)
+    empty = await admin_api.get_usage_summary(uuid4(), WINDOW_START, WINDOW_END, db, admin)
 
     assert by_project["summary"]["total_requests"] == 1
     assert in_range["summary"]["total_cost_usd"] == pytest.approx(0.2)

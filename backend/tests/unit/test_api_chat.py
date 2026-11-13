@@ -155,6 +155,8 @@ async def test_create_conversation_persists_pending_message_and_dispatches(db_se
 
 async def test_create_conversation_rejects_bad_model_project_and_collection(db_session):  # noqa: F811
     project = await _project(db_session)
+    # 다른 테스트가 커밋한 대화가 남아 있을 수 있어 전체가 비었는지 대신 건수가 늘지 않았는지 본다
+    before = len((await db_session.scalars(select(ChatConversation.id))).all())
     with patch(GENERATE) as task:
         await assert_http_error(
             chat_api.create_conversation(chat_api.CreateConversationRequest(query="q", model_key="nope"), db_session, owner_user()), 422
@@ -170,7 +172,7 @@ async def test_create_conversation_rejects_bad_model_project_and_collection(db_s
             ), 404,
         )
     task.delay.assert_not_called()
-    assert (await db_session.scalars(select(ChatConversation.id))).all() == []
+    assert len((await db_session.scalars(select(ChatConversation.id))).all()) == before
 
 
 async def test_create_conversation_with_accessible_collection(db_session):  # noqa: F811

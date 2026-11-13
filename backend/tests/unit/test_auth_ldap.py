@@ -227,3 +227,31 @@ def test_user_groups_include_the_primary_group_that_member_of_does_not_list():
 
     assert [g.name for g in groups] == ["sales", "field"]
     assert any("(objectSid=S-1-5-21-1-2-3-1150)" in f for f in calls)
+
+
+@pytest.mark.parametrize("dn, sid, attrs, expected", [
+    ("CN=amy,DC=t", "S-1-5-21-1-2-3-2001", {"sAMAccountName": "amy"}, False),
+    ("CN=Administrator,DC=t", "S-1-5-21-1-2-3-500", {"sAMAccountName": "Administrator"}, True),
+    ("CN=krbtgt,DC=t", "S-1-5-21-1-2-3-502", {"sAMAccountName": "krbtgt"}, True),
+    ("CN=ops,DC=t", "S-1-5-21-1-2-3-2002", {"sAMAccountName": "ops", "isCriticalSystemObject": "TRUE"}, True),
+    ("CN=svc,DC=t", "S-1-5-21-1-2-3-2003", {"sAMAccountName": "svc-docvec", "userPrincipalName": "svc-docvec@corp"}, True),
+])
+def test_system_and_service_accounts_are_flagged(dn, sid, attrs, expected):
+    from app.services.directory import ldap_client
+
+    client = ldap_client.LdapDirectoryClient(ldap_client.LdapConfig(
+        url="ldaps://dc:636", bind_dn="svc-docvec@corp", bind_password="pw", base_dn="DC=t",
+    ))
+    user = client._to_user({"dn": dn, "attributes": {"objectSid": sid, **attrs}})
+    assert user.system_account is expected
+
+
+def test_bind_account_written_as_domain_backslash_name_is_flagged():
+    from app.services.directory import ldap_client
+
+    client = ldap_client.LdapDirectoryClient(ldap_client.LdapConfig(
+        url="ldaps://dc:636", bind_dn="CORP\svc-docvec", bind_password="pw", base_dn="DC=t",
+    ))
+    user = client._to_user({"dn": "CN=svc,DC=t", "attributes": {
+        "objectSid": "S-1-5-21-1-2-3-2003", "sAMAccountName": "svc-docvec"}})
+    assert user.system_account is True

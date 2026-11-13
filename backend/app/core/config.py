@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     # unset — set a dedicated value in production so rotating secret_key doesn't
     # also invalidate every stored API key. REQUIRED in production (not a fallback).
     encryption_key: str = ""
+    # 키를 바꿀 때만 쓴다. 예전 ENCRYPTION_KEY 값들(쉼표로 구분)로 기존 암호문을 계속 읽고, 새로 쓰는 값은
+    # 항상 ENCRYPTION_KEY로 암호화한다. scripts/rotate_encryption_key.py로 모두 다시 암호화한 뒤 비운다.
+    encryption_keys_previous: str = ""
 
     # Invite code required at /auth/register to grant role="admin" instead of
     # the default "viewer". Empty (default) disables admin self-registration
@@ -97,6 +100,9 @@ class Settings(BaseSettings):
     connector_local_root: str = "/data/sources"
     # 주기 동기화 때 아직 로그인하지 않은 AD 사용자 계정을 미리 만든다(컬렉션 공유와 파일 권한 매핑에 필요)
     ldap_preprovision_users: bool = True
+    # 미리 만들지 않을 AD 계정(쉼표로 구분한 sAMAccountName 또는 이메일). 기본 제공 계정, 시스템 계정,
+    # bind 계정은 이 값과 관계없이 미리 만들지 않는다. 로그인하면 그때는 계정이 생긴다.
+    ldap_preprovision_exclude: str = ""
     # 평문 LDAP 허용. 개발용이며 운영(production)에서는 켤 수 없다.
     ldap_allow_insecure: bool = False
 

@@ -13,6 +13,7 @@ from app.db.models.user_group import UserGroup, UserGroupMember
 from app.services.directory.ldap_client import DirectoryGroup, DirectoryUnavailable, DirectoryUser
 from app.services.directory.provisioning import (
     DirectoryConflict,
+    parse_exclude_list,
     provision_login,
     sync_directory,
 )
@@ -294,3 +295,32 @@ async def test_sync_reports_a_group_that_was_deleted_and_recreated_in_ad(db_sess
     # 새 그룹은 다른 주체다. 옛 그룹의 권한을 넘기지 않고(fail-closed) 관리자가 다시 주도록 알린다.
     assert result["recreated_groups"] == [old.name]
     assert await db_session.scalar(select(UserGroup).where(UserGroup.external_id == old.sid)) is None
+    # 관리자가 예전 그룹의 문서 권한을 이어받을지 정할 수 있게 새 그룹에 예전 그룹 id를 남긴다
+    successor = await db_session.scalar(select(UserGroup).where(UserGroup.external_id == recreated.sid))
+    assert successor.previous_group_id is not None
+
+
+async def test_sync_does_not_preprovision_system_or_excluded_accounts(db_session):  # noqa: F811
+    person = _user("olga", 2701)
+    builtin = DirectoryUser(dn="CN=Administrator,CN=Users,DC=t", sid=f"{DOMAIN}-500", username="Administrator",
+                            email="administrator@corp.test", display_name="Administrator", disabled=False,
+                            system_account=True)
+    excluded = _user("printer", 2702)
+    directory = FakeDirectory([person, builtin, excluded], [], {})
+
+    result = await db_session.run_sync(lambda s: sync_directory(
+        s, directory, ADMIN_DN, exclude=parse_exclude_list(" Printer@corp.test , nobody "),
+    ))
+    await db_session.commit()
+
+    assert result["created"] == 1 and result["skipped_system"] == 2
+    assert await db_session.scalar(select(User).where(User.external_id == person.sid)) is not None
+    for skipped in (builtin, excluded):
+        assert await db_session.scalar(select(User).where(User.external_id == skipped.sid)) is None
+
+
+async def test_a_skipped_system_account_can_still_log_in(db_session):  # noqa: F811
+    service = DirectoryUser(dn="CN=svc,CN=Users,DC=t", sid=f"{DOMAIN}-2703", username="svc",
+                            email="svc@corp.test", display_name="svc", disabled=False, system_account=True)
+    user = await _login(db_session, service, [])
+    assert user.external_id == service.sid

@@ -6,6 +6,7 @@ import {
 } from '../hooks/useAccess'
 import type { Group } from '../hooks/useAccess'
 import { useUsers } from '../hooks/useUsers'
+import PreviousPermissionsNotice from '../components/groups/PreviousPermissionsNotice'
 import { useAuthStore } from '../store/authStore'
 import { Alert, Badge, Button, EmptyState, ErrorAlert, Field, IconButton, Input, Page, PageBody, PageHeader, Select, SidePanel, Spinner, Split, Stat, StatStrip, Toolbar } from '../components/ui'
 
@@ -141,6 +142,7 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
       {isDirectory && (
         <Alert tone="info">사내 AD에서 동기화되는 그룹입니다. 이름과 구성원은 AD에서 바꾸면 다음 동기화 때 반영됩니다.</Alert>
       )}
+      {group.has_previous_permissions && <PreviousPermissionsNotice groupId={group.id} />}
       {confirmDelete && (
         <Alert tone="warning">그룹을 삭제해도 이 그룹을 허용 목록에 넣은 문서의 제한은 유지됩니다. 해당 문서는 문서 편집자가 허용 목록을 다시 정리해야 합니다.</Alert>
       )}
@@ -247,6 +249,7 @@ function GroupTable({ groups, selectedId, onSelect }: {
                     {g.name}
                   </button>
                   {g.source === 'ldap' && <> <Badge tone="info" isPlain>AD</Badge></>}
+                  {g.has_previous_permissions && <> <Badge tone="warning" isPlain>권한 이어받기 대기</Badge></>}
                   {isEmpty && <span className="ds-cell-sub">구성원 없음</span>}
                 </td>
                 <td className="ds-cell-num">{g.member_count}명</td>
