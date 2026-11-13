@@ -23,6 +23,10 @@ MAX_EVIDENCE = 10
 # 재순위를 끈 컬렉션은 코사인이나 융합 점수만 있어 같은 기준을 쓸 수 없으므로 결과 수로만 판단한다.
 MIN_HITS = 2
 MIN_TOP_SCORE = 0.5
+# 하위 질문마다 가장 관련 높은 근거의 이 비율보다 낮은 근거는 버린다. 재순위 점수는 문서에 따라
+# 절대값 차이가 커서(관련 문서도 0.004~0.04, 무관한 문서는 0.0001 이하로 실측) 고정 하한 대신
+# 최고점 대비 비율을 쓴다. 무관한 문서가 "근거"로 붙어 답이 엉뚱해지던 문제를 막는다.
+RELATIVE_FLOOR = 0.1
 
 RetrieveFn = Callable[[str, int], list[dict]]
 ProgressFn = Callable[[dict], None]
@@ -57,6 +61,24 @@ def _relevance(hit: dict) -> float | None:
     if isinstance(evidence, dict):
         return (evidence.get("scores") or {}).get("rerank")
     return hit.get("score")
+
+
+def prune_unrelated(hits: list[dict]) -> list[dict]:
+    """재순위 점수가 최고점의 RELATIVE_FLOOR배보다 낮거나 0인 근거를 뺀다.
+    재순위 점수가 없는 결과(재순위를 끈 컬렉션)는 판단 근거가 없으므로 그대로 둔다.
+    코사인이나 BM25 같은 다른 점수는 척도가 달라 비율로 비교하지 않는다."""
+    scores = [
+        ((h.get("evidence") or {}).get("scores") or {}).get("rerank") if isinstance(h.get("evidence"), dict) else None
+        for h in hits
+    ]
+    numeric = [s for s in scores if isinstance(s, (int, float))]
+    if not numeric:
+        return hits
+    floor = max(numeric) * RELATIVE_FLOOR
+    return [
+        h for h, s in zip(hits, scores)
+        if not isinstance(s, (int, float)) or (s > 0 and s >= floor)
+    ]
 
 
 def _chunk_key(chunk: dict) -> str:
@@ -102,10 +124,12 @@ def search_subquestions(query: str, subquestions: list[str], retrieve: RetrieveF
             known = {_chunk_key(h) for h in hits}
             hits = hits + [h for h in extra or [] if _chunk_key(h) not in known]
             supplemented = True
-        per_question.append(hits)
+        related = prune_unrelated(hits)
+        per_question.append(related)
         records.append({
             "question": question, "searches": 2 if supplemented else 1, "supplemented": supplemented,
-            "failed_searches": failed, "hit_count": len(hits), "documents": _documents(hits),
+            "failed_searches": failed, "hit_count": len(related), "dropped_unrelated": len(hits) - len(related),
+            "documents": _documents(related),
         })
 
     merged: list[dict] = []
@@ -134,7 +158,7 @@ def run_deep_search(provider, query: str, retrieve: RetrieveFn, progress: Progre
         # 하위 질문으로 아무것도 못 찾았으면 원 질문으로 한 번 더 찾는다
         found = _try_retrieve(retrieve, query, PER_QUESTION_LIMIT)
         searches, failures = searches + 1, failures + int(found is None)
-        chunks = [{**c, "subquestion_index": None} for c in found or []]
+        chunks = [{**c, "subquestion_index": None} for c in prune_unrelated(found or [])]
         fallback = True
     if failures and failures == searches:
         # 검색이 모두 실패했는데 "근거 없음"으로 답하면 장애가 가려지므로 작업을 실패로 끝낸다
@@ -180,15 +204,29 @@ def mask_step_documents(steps: dict | None, visible: set[str]) -> dict | None:
     return {**steps, "subquestions": masked}
 
 
-def synthesis_message(query: str, subquestions: list[str], context: str) -> str:
-    """종합 단계의 사용자 메시지. 시스템 프롬프트(인용 규칙)는 일반 답변과 같은 것을 쓴다."""
+def unanswered_indexes(steps: dict | None) -> set[int]:
+    """관련 근거를 하나도 찾지 못한 하위 질문의 번호(0부터)."""
+    records = (steps or {}).get("subquestions") or []
+    return {i for i, record in enumerate(records) if not record.get("hit_count")}
+
+
+def synthesis_message(query: str, subquestions: list[str], context: str,
+                      unanswered: set[int] | frozenset[int] = frozenset()) -> str:
+    """종합 단계의 사용자 메시지. 시스템 프롬프트(인용 규칙)는 일반 답변과 같은 것을 쓴다.
+    unanswered에 든 하위 질문은 관련 근거가 없다고 미리 알려, 다른 하위 질문의 발췌문을
+    끌어다 억지로 답을 만들지 않게 한다."""
     if len(subquestions) < 2:
         return f"질문: {query}\n\n발췌문:\n{context}"
-    listed = "\n".join(f"{i}. {q}" for i, q in enumerate(subquestions, 1))
+    listed = "\n".join(
+        f"{i}. {q}" + (" (관련 발췌문 없음)" if i - 1 in unanswered else "")
+        for i, q in enumerate(subquestions, 1)
+    )
     return (
         f"질문: {query}\n\n"
         f"이 질문을 다음 하위 질문으로 나눠 사내 문서를 찾았습니다.\n{listed}\n\n"
         f"발췌문:\n{context}\n\n"
         "하위 질문마다 발췌문에서 확인한 내용을 근거 번호와 함께 정리한 뒤, 원래 질문에 대한 답을 종합하세요. "
-        "발췌문에서 찾지 못한 하위 질문은 찾지 못했다고 밝히고 추측하지 마세요."
+        "발췌문이 그 하위 질문과 직접 관련이 없으면 쓰지 마세요. "
+        "\"관련 발췌문 없음\"으로 표시한 하위 질문과 발췌문에서 찾지 못한 하위 질문은 "
+        "찾지 못했다고 한 문장으로만 밝히고 추측하지 마세요."
     )

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 # (query, scope, model) hits reuse a cached answer. Bounds staleness after a
 # document is reprocessed without needing explicit cache invalidation.
 _ANSWER_CACHE_TTL_SECONDS = 3600
+_ANSWER_CACHE_VERSION = 2
 
 
 def _answer_cache_key(
@@ -30,8 +31,11 @@ def _answer_cache_key(
     나간다(v3 권한 모델의 누출 경로). 같은 권한 조합끼리만 캐시를 공유한다."""
     normalized = query.strip().lower()
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    # 심층 검색은 같은 질문이라도 근거와 답이 달라 캐시를 따로 둔다. 일반 답변의 키는 그대로다
+    # 심층 검색은 같은 질문이라도 근거와 답이 달라 캐시를 따로 둔다
     prefix = "rag_answer" if mode == "standard" else f"rag_answer_{mode}"
+    # 근거 고르기나 질문 나누기 규칙을 바꾸면 버전을 올려, 바뀌기 전 답이 캐시로 다시 나가지 않게 한다
+    # (v2, 2026-11-12: 무관한 근거를 빼고, 심층 검색은 단순 질문을 나누지 않는다)
+    prefix = f"{prefix}:v{_ANSWER_CACHE_VERSION}"
     key = (
         f"{prefix}:{model_key}:{collection_id or 'all'}:{project_id or 'none'}:"
         f"{access_fingerprint}:{digest}"
@@ -688,6 +692,11 @@ def generate_answer(self, chat_message_id: str) -> dict:
                 chunks = retrieval_fn(
                     db, str(conversation.user_id), msg.query, collection_id_str, project_id=project_id_str
                 )
+            # 상위 몇 건을 무조건 근거로 넣으면 질문과 무관한 문서가 섞여 답에 엉뚱한 내용이 붙는다
+            # (2026-11-12 "연차 정보 알려줘"에 영업 실적이 붙던 문제). 심층 검색과 같은 기준으로 뺀다
+            from app.services.agentic.deep_search import prune_unrelated
+
+            chunks = prune_unrelated(chunks)
         msg.expanded_terms = _expanded_terms(db, msg.query)
         answer_started = time.monotonic()
         context = _build_context(chunks)
@@ -726,9 +735,9 @@ def generate_answer(self, chat_message_id: str) -> dict:
 
         def _user_content(ctx: str) -> str:
             if is_deep:
-                from app.services.agentic.deep_search import synthesis_message
+                from app.services.agentic.deep_search import synthesis_message, unanswered_indexes
 
-                return synthesis_message(msg.query, subquestions, ctx)
+                return synthesis_message(msg.query, subquestions, ctx, unanswered_indexes(agent_steps))
             return f"질문: {msg.query}\n\n발췌문:\n{ctx}"
 
         def _generate(ctx: str) -> str:
@@ -781,6 +790,9 @@ def generate_answer(self, chat_message_id: str) -> dict:
                     db, str(conversation.user_id), msg.query, collection_id_str,
                     project_id=project_id_str, limit=_BROADEN_LIMIT,
                 )
+                from app.services.agentic.deep_search import prune_unrelated
+
+                broadened_chunks = prune_unrelated(broadened_chunks)
                 if broadened_chunks:
                     chunks = broadened_chunks
                     context = _build_context(chunks)

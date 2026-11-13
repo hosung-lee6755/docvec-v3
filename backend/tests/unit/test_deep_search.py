@@ -196,3 +196,83 @@ def test_weakness_uses_only_the_rerank_score_from_evidence():
     cosine_only = [{"score": 0.3, "evidence": {"scores": {"vector": 0.3}}}] * 2
     assert _is_weak(cosine_only) is False
     assert _is_weak(cosine_only[:1]) is True
+
+
+# -- 엉뚱한 하위 질문과 근거 막기(2026-11-12 "연차 정보 알려줘" 회귀) ------------------
+
+class CountingPlanner(Planner):
+    def __init__(self, output):
+        super().__init__(output)
+        self.calls = 0
+
+    def generate(self, *args):
+        self.calls += 1
+        return super().generate(*args)
+
+
+def test_simple_question_is_not_decomposed_and_the_model_is_not_called():
+    invented = CountingPlanner('["당신의 전체 연차 정보는?", "최근 5년 간의 연차 정보는?", "연차 획득 상세 내역은?"]')
+
+    assert planner.decompose(invented, "연차 정보 알려줘") == ["연차 정보 알려줘"]
+    assert invented.calls == 0
+
+
+@pytest.mark.parametrize("query, expected", [
+    ("연차 정보 알려줘", False),
+    ("출장 일비는 얼마야?", False),
+    ("연차와 병가 규정을 알려줘", True),
+    ("2026년 실적, 2027년 목표", True),
+    ("A안 vs B안", True),
+])
+def test_only_compound_questions_look_compound(query, expected):
+    assert planner.looks_compound(query) is expected
+
+
+def test_subquestions_that_invent_years_or_address_the_reader_are_dropped():
+    original = "연차와 병가 규정을 알려줘"
+    output = '["연차 규정은?", "최근 5년 간의 병가 규정은?", "당신의 병가 일수는?", "병가 규정은?"]'
+
+    assert planner.parse_subquestions(output, original) == ["연차 규정은?", "병가 규정은?"]
+
+
+def _reranked(doc, n, rerank):
+    return {**_hit(doc, n), "evidence": {"scores": {"rerank": rerank}}}
+
+
+def test_unrelated_evidence_far_below_the_best_is_dropped():
+    from app.services.agentic.deep_search import prune_unrelated
+
+    hits = [_reranked("hr", 1, 0.0372), _reranked("sales", 1, 0.0001), _reranked("sales2026", 1, 0.0)]
+    assert [h["document_id"] for h in prune_unrelated(hits)] == ["hr"]
+    # 재순위 점수가 없으면 판단하지 않는다
+    plain = [_hit("a", 1, 0.3), _hit("b", 1, 0.01)]
+    assert prune_unrelated([{**h, "evidence": {"scores": {"vector": 0.3}}} for h in plain]) == [
+        {**h, "evidence": {"scores": {"vector": 0.3}}} for h in plain
+    ]
+
+
+def test_subquestion_with_only_unrelated_hits_is_reported_as_unanswered():
+    from app.services.agentic.deep_search import unanswered_indexes
+
+    query = "연차와 출장비 규정"
+    retrieve = Retriever({
+        "연차 규정은?": [_reranked("hr", 1, 0.9), _reranked("sales", 1, 0.0001)],
+        "출장비 규정은?": [_reranked("sales", 2, 0.0)],
+        f"{query} 출장비 규정은?": [_reranked("sales", 3, 0.0)],
+    })
+    result = run_deep_search(Planner('["연차 규정은?", "출장비 규정은?"]'), query, retrieve, lambda _: None)
+
+    assert [c["chunk_ref"] for c in result.chunks] == ["hr-1"]
+    assert result.steps["subquestions"][0]["dropped_unrelated"] == 1
+    assert unanswered_indexes(result.steps) == {1}
+    text = synthesis_message(query, result.subquestions, "[1] hr.pdf: 본문", unanswered_indexes(result.steps))
+    assert "2. 출장비 규정은? (관련 발췌문 없음)" in text and "1. 연차 규정은?\n" in text
+
+
+def test_standard_answer_drops_unrelated_evidence_too():
+    """일반 답변도 같은 거르기를 쓴다(채팅 작업이 prune_unrelated를 부른다). 표 검색처럼 재순위가
+    없는 근거는 그대로 남는다."""
+    from app.services.agentic.deep_search import prune_unrelated
+
+    mixed = [_reranked("hr", 1, 0.0372), _reranked("sales", 1, 0.0001), _hit("table", 1, 5.0)]
+    assert [h["document_id"] for h in prune_unrelated(mixed)] == ["hr", "table"]

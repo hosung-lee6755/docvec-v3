@@ -41,13 +41,13 @@ def test_answer_cache_key_normalizes_case_and_whitespace():
     b = chat._answer_cache_key("hello world", "c1", "p1", "m", "fp")
 
     assert a == b
-    assert a.startswith("rag_answer:m:c1:p1:fp:")
+    assert a.startswith("rag_answer:v2:m:c1:p1:fp:")
 
 
 def test_answer_cache_key_scopes_by_collection_project_model_and_access():
     base = chat._answer_cache_key("q", None, None, "m", "fp")
 
-    assert "rag_answer:m:all:none:" in base
+    assert "rag_answer:v2:m:all:none:" in base
     assert chat._answer_cache_key("q", "c", None, "m", "fp") != base
     assert chat._answer_cache_key("q", None, "p", "m", "fp") != base
     assert chat._answer_cache_key("q", None, None, "other", "fp") != base
@@ -600,7 +600,7 @@ def test_generate_answer_happy_path_persists_answer_citations_and_cache(chat_env
         "filename": "a.pdf", "page_number": 2, "text": "본문 발췌", "evidence": None,
     }]
     cache_args = chat_env.redis.setex.call_args_list[-1].args
-    assert cache_args[0].startswith("rag_answer:qwen2.5-3b:")
+    assert cache_args[0].startswith("rag_answer:v2:qwen2.5-3b:")
     assert cache_args[1] == chat._ANSWER_CACHE_TTL_SECONDS
     assert json.loads(cache_args[2])["answer"] == "정답입니다[1]"
     chat_env.redis.delete.assert_called_once_with(f"chat_partial:{msg.id}", f"chat_progress:{msg.id}")
@@ -848,6 +848,8 @@ def test_generate_answer_survives_redis_write_failures(chat_env):
 # -- 심층 검색(v3 마일스톤 5) ----------------------------------------------------
 
 DEEP_PLAN = '["2027년 영업 목표는?", "2026년 영업 실적은?"]'
+# 심층 검색은 복합 질문만 나눈다(planner.looks_compound). 단순 질문으로는 나누는 길을 시험할 수 없다
+DEEP_QUERY = '2027년 목표와 2026년 실적을 비교해 줘'
 
 
 def test_deep_mode_splits_the_question_and_searches_each_part(chat_env):
@@ -875,14 +877,14 @@ def test_deep_mode_splits_the_question_and_searches_each_part(chat_env):
     assert len(stored.citations) == 4
     keys = [c.args[0] for c in chat_env.redis.setex.call_args_list]
     assert f"chat_progress:{msg.id}" in keys
-    assert any(k.startswith("rag_answer_deep:qwen2.5-3b:") for k in keys)
+    assert any(k.startswith("rag_answer_deep:v2:qwen2.5-3b:") for k in keys)
     trace = db.scalar(select(AnswerTrace).where(AnswerTrace.chat_message_id == msg.id))
     assert trace.mode == "deep" and trace.intent == "deep" and trace.agent_steps["decomposed"] is True
     db.close()
 
 
 def test_deep_mode_does_not_broaden_again_when_grounding_fails(chat_env):
-    _conv, msg = chat_env.build(mode="deep")
+    _conv, msg = chat_env.build(mode="deep", query=DEEP_QUERY)
     provider = ScriptedProvider(plan=DEEP_PLAN, grounded=("INSUFFICIENT",))
     retrieval = MagicMock(return_value=[{**CHUNK, "chunk_ref": "c1", "score": 2.0},
                                         {**CHUNK, "chunk_ref": "c2", "score": 2.0}])
@@ -895,7 +897,7 @@ def test_deep_mode_does_not_broaden_again_when_grounding_fails(chat_env):
 
 
 def test_deep_mode_cache_hit_restores_the_search_steps(chat_env):
-    _conv, msg = chat_env.build(mode="deep")
+    _conv, msg = chat_env.build(mode="deep", query=DEEP_QUERY)
     redis_hit = MagicMock()
     redis_hit.get.return_value = json.dumps({"answer": "캐시 답", "citations": [], "agent_steps": {"subquestions": []}})
 
@@ -909,7 +911,7 @@ def test_deep_mode_cache_hit_restores_the_search_steps(chat_env):
 
 def test_deep_mode_cache_is_dropped_when_a_searched_document_is_no_longer_visible(chat_env):
     # 인용은 없지만 검색 과정에 지금 볼 수 없는 문서가 남은 캐시는 쓰지 않고 새로 만든다
-    _conv, msg = chat_env.build(mode="deep")
+    _conv, msg = chat_env.build(mode="deep", query=DEEP_QUERY)
     redis_hit = MagicMock()
     stale_steps = {"subquestions": [{"question": "q", "documents": [{"document_id": str(uuid4()), "filename": "기밀.pdf"}]}]}
     redis_hit.get.return_value = json.dumps({"answer": "캐시 답", "citations": [], "agent_steps": stale_steps})
@@ -925,7 +927,7 @@ def test_deep_mode_cache_is_dropped_when_a_searched_document_is_no_longer_visibl
 
 
 def test_deep_mode_failure_keeps_the_search_steps_and_clears_progress(chat_env):
-    _conv, msg = chat_env.build(mode="deep")
+    _conv, msg = chat_env.build(mode="deep", query=DEEP_QUERY)
     provider = ScriptedProvider(plan=DEEP_PLAN)
     provider.generate_stream = MagicMock(side_effect=RuntimeError("cuda oom"))
     retrieval = MagicMock(return_value=[{**CHUNK, "chunk_ref": "c1", "score": 2.0},
