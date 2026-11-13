@@ -1,8 +1,11 @@
 import { AlertTriangle, X } from 'lucide-react'
+import { errorCause } from '../../lib/apiError'
 
 export interface MutationFailure {
   /** 사용자에게 보이는 작업 이름(예: "태그 저장"). */
   label: string
+  /** 실패한 요청의 오류. 원인 문장을 만드는 데 쓴다 */
+  error?: unknown
   onDismiss: () => void
 }
 
@@ -26,7 +29,7 @@ export default function MutationErrorBanner({ failures }: { failures: MutationFa
         <div key={failure.label} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
           <AlertTriangle size={16} style={{ color: 'var(--color-danger)', flexShrink: 0 }} aria-hidden="true" />
           <span style={{ flex: 1, fontSize: 13, color: 'var(--color-danger)' }}>
-            {failure.label}에 실패했습니다. 잠시 후 다시 시도하세요.
+            {failure.label}에 실패했습니다. {errorCause(failure.error)}
           </span>
           <button
             type="button"

@@ -3,10 +3,8 @@ import {
   TOKEN_STATUS_BADGE, TOKEN_STATUS_LABELS, useAllAccessTokens, useRevokeAnyAccessToken,
 } from '../hooks/useAccessTokens'
 import { useAuthStore } from '../store/authStore'
-import { errorMessage, formatDateTime } from '../components/connectors/connectorLabels'
-import {
-  Alert, Badge, Button, EmptyState, Page, PageBody, PageHeader, Stat, StatStrip, toneFromKrdsClass,
-} from '../components/ui'
+import { formatDateTime } from '../components/connectors/connectorLabels'
+import { Alert, Badge, Button, EmptyState, ErrorAlert, Page, PageBody, PageHeader, Stat, StatStrip, toneFromKrdsClass } from '../components/ui'
 import '../styles/screens/user.css'
 
 // v3 마일스톤 4 — 관리자가 전 직원의 외부 에이전트 토큰을 보고 회수한다.
@@ -15,7 +13,7 @@ import '../styles/screens/user.css'
 export default function AccessTokensPage() {
   const currentUser = useAuthStore((s) => s.user)
   const isAdmin = currentUser?.role === 'admin'
-  const { data, isLoading, isError } = useAllAccessTokens(isAdmin)
+  const { data, isLoading, isError, error, refetch } = useAllAccessTokens(isAdmin)
   const revoke = useRevokeAnyAccessToken()
 
   if (!isAdmin) {
@@ -56,8 +54,8 @@ export default function AccessTokensPage() {
         )}
 
         {isLoading && <div className="user-spinner" role="status"><span className="sr-only">로딩 중</span></div>}
-        {isError && <Alert tone="danger">토큰 목록을 불러오지 못했습니다.</Alert>}
-        {revoke.isError && <Alert tone="danger">{errorMessage(revoke.error, '토큰을 회수하지 못했습니다.')}</Alert>}
+        {isError && <ErrorAlert error={error} message="토큰 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
+        {revoke.isError && <ErrorAlert error={revoke.error} message="토큰을 회수하지 못했습니다." />}
 
         {data && items.length === 0 && <EmptyState title="발급된 토큰이 없습니다." />}
         {data && items.length > 0 && (

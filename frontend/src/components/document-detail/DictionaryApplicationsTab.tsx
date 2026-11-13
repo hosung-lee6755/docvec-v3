@@ -1,4 +1,5 @@
 import { AlertTriangle, Loader2 } from 'lucide-react'
+import { ErrorText } from '../ui'
 import {
   useDictionaryApplications,
   useDictionaryExclusions,
@@ -123,9 +124,10 @@ export default function DictionaryApplicationsTab({
               )
             })}
           </ul>
+          {revert.isError && <ErrorText error={revert.error} message="적용을 취소하지 못했습니다." />}
           {toggle.isError && (
-            <p role="alert" style={{ fontSize: 12, color: 'var(--color-danger)', margin: 'var(--space-1) 0 0' }}>
-              바꾸지 못했습니다. 이 문서를 편집할 권한이 있는지 확인하세요.
+            <p style={{ margin: 'var(--space-1) 0 0' }}>
+              <ErrorText error={toggle.error} message="사전 적용 여부를 바꾸지 못했습니다." />
             </p>
           )}
         </section>

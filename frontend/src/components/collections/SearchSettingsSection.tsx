@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { DEFAULT_SEARCH_SETTINGS, useUpdateCollection, type Collection, type SearchSettings } from '../../hooks/useCollections'
-import { Alert, Button, Select } from '../ui'
+import { Button, ErrorAlert, Select } from '../ui'
 
 // v3 마일스톤 6 — 컬렉션 검색 설정. 이 컬렉션의 검색 화면과 채팅이 함께 따른다.
 // 컬렉션 수정 창의 <form> 안에 들어가므로 버튼은 모두 type="button"이고, 저장은 따로 한다.
@@ -96,7 +96,7 @@ export function SearchSettingsSection({ collection }: { collection: Collection }
         </span>
       </div>
 
-      {update.isError && <Alert tone="danger">저장하지 못했습니다. 권한을 확인하세요.</Alert>}
+      {update.isError && <ErrorAlert error={update.error} message="검색 설정을 저장하지 못했습니다." />}
       {update.isSuccess && !isDirty && (
         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>저장했습니다.</span>
       )}

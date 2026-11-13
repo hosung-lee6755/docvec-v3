@@ -18,9 +18,8 @@ import WorkflowCanvas from '../components/workflow/WorkflowCanvas'
 import BlockPropertyPanel from '../components/workflow/BlockPropertyPanel'
 import RunWorkflowModal from '../components/workflow/RunWorkflowModal'
 import { getBlockMeta } from '../lib/workflowBlocks'
-import {
-  Alert, Badge, Button, IconButton, Page, PageHeader, Select, SidePanel, Toolbar,
-} from '../components/ui'
+import { Alert, Badge, Button, ErrorAlert, IconButton, Page, PageHeader, Select, SidePanel, Toolbar } from '../components/ui'
+import { describeError } from '../lib/apiError'
 import '../styles/screens/pipeline.css'
 
 export default function WorkflowEditorPage() {
@@ -40,7 +39,7 @@ export default function WorkflowEditorPage() {
     versionsData?.items[0]
   const versionId = editableVersion?.id ?? null
 
-  const { data: graph, isLoading: graphLoading, error: graphError } = useWorkflowGraph(workflowId ?? null, versionId)
+  const { data: graph, isLoading: graphLoading, error: graphError, refetch: refetchGraph } = useWorkflowGraph(workflowId ?? null, versionId)
   const saveGraph = useSaveWorkflowGraph()
   const createDraftVersion = useCreateDraftVersion()
   const deleteVersion = useDeleteVersion()
@@ -170,7 +169,7 @@ export default function WorkflowEditorPage() {
       }
       return result
     } catch (err) {
-      const message = err instanceof Error ? err.message : '저장에 실패했습니다'
+      const message = describeError(err, '워크플로우를 저장하지 못했습니다.')
       setErrorMessage(message)
       throw err
     }
@@ -184,7 +183,7 @@ export default function WorkflowEditorPage() {
       setSelectedVersionId(created.id)
       setIsDirty(false)
     } catch (err) {
-      const message = err instanceof Error ? err.message : '버전 생성에 실패했습니다'
+      const message = describeError(err, '새 버전을 만들지 못했습니다.')
       setErrorMessage(message)
     }
   }
@@ -198,7 +197,7 @@ export default function WorkflowEditorPage() {
       setSelectedVersionId(null)
       setConfirmDeleteVersion(false)
     } catch (err) {
-      const message = err instanceof Error ? err.message : '버전 삭제에 실패했습니다'
+      const message = describeError(err, '버전을 삭제하지 못했습니다.')
       setErrorMessage(message)
     }
   }
@@ -210,13 +209,13 @@ export default function WorkflowEditorPage() {
       const saveResult = await handleSave()
       // Do not publish if there are validation errors
       if (saveResult && saveResult.validation_errors.length > 0) {
-        setErrorMessage('검증 오류가 있어 게시할 수 없습니다')
+        setErrorMessage('아래 검증 오류를 먼저 고쳐야 게시할 수 있습니다.')
         return
       }
       await publishVersion.mutateAsync({ workflowId, versionId })
       setIsDirty(false)
     } catch (err) {
-      const message = err instanceof Error ? err.message : '게시에 실패했습니다'
+      const message = describeError(err, '버전을 게시하지 못했습니다.')
       setErrorMessage(message)
     }
   }
@@ -357,7 +356,7 @@ export default function WorkflowEditorPage() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', padding: 'var(--space-3) var(--space-5) 0' }}>
         {graphError && (
-          <Alert tone="danger">워크플로우를 로드할 수 없습니다. 다시 시도해주세요.</Alert>
+          <ErrorAlert error={graphError} message="워크플로우 구성을 불러오지 못했습니다." onRetry={() => refetchGraph()} />
         )}
 
         {isReadOnly && (

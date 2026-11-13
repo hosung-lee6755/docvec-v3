@@ -5,8 +5,8 @@ import {
   useCreateAccessToken, useMyAccessTokens, useRevokeMyAccessToken,
 } from '../../hooks/useAccessTokens'
 import type { IssuedToken } from '../../hooks/useAccessTokens'
-import { errorMessage, formatDateTime } from '../connectors/connectorLabels'
-import { Alert, Badge, Button, Card, Field, Input, toneFromKrdsClass } from '../ui'
+import { formatDateTime } from '../connectors/connectorLabels'
+import { Alert, Badge, Button, Card, ErrorAlert, Field, Input, toneFromKrdsClass } from '../ui'
 import '../../styles/screens/user.css'
 
 // v3 마일스톤 4 — 내 개인 접근 토큰. 이 토큰을 넣은 에이전트는 나와 같은 문서만 볼 수 있다.
@@ -55,7 +55,7 @@ function IssuedTokenNotice({ issued, path, onClose }: { issued: IssuedToken; pat
 }
 
 export default function AccessTokenSection() {
-  const { data, isLoading, isError } = useMyAccessTokens()
+  const { data, isLoading, isError, error, refetch } = useMyAccessTokens()
   const create = useCreateAccessToken()
   const revoke = useRevokeMyAccessToken()
   const [name, setName] = useState('')
@@ -90,7 +90,7 @@ export default function AccessTokenSection() {
       </p>
 
       {isLoading && <div className="user-spinner" role="status"><span className="sr-only">로딩 중</span></div>}
-      {isError && <Alert tone="danger">토큰 목록을 불러오지 못했습니다.</Alert>}
+      {isError && <ErrorAlert error={error} message="토큰 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
       {data && !data.mcp_enabled && (
         <p className="user-token__notice-box">
           관리자가 외부 에이전트 연결을 켜지 않아 지금은 새 토큰을 만들 수 없습니다.
@@ -120,7 +120,7 @@ export default function AccessTokenSection() {
           <Button type="submit" variant="primary" size="sm" disabled={!canCreate}>토큰 만들기</Button>
         </form>
       )}
-      {create.isError && <Alert tone="danger">{errorMessage(create.error, '토큰을 만들지 못했습니다.')}</Alert>}
+      {create.isError && <ErrorAlert error={create.error} message="토큰을 만들지 못했습니다." />}
 
       {data && data.items.length > 0 && (
         <ul aria-label="내 토큰 목록" className="user-token__list">
@@ -146,7 +146,7 @@ export default function AccessTokenSection() {
           ))}
         </ul>
       )}
-      {revoke.isError && <Alert tone="danger">{errorMessage(revoke.error, '토큰을 회수하지 못했습니다.')}</Alert>}
+      {revoke.isError && <ErrorAlert error={revoke.error} message="토큰을 회수하지 못했습니다." />}
       </div>
     </Card>
   )

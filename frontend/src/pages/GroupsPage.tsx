@@ -7,18 +7,10 @@ import {
 import type { Group } from '../hooks/useAccess'
 import { useUsers } from '../hooks/useUsers'
 import { useAuthStore } from '../store/authStore'
-import {
-  Alert, Badge, Button, EmptyState, Field, IconButton, Input, Page, PageBody, PageHeader, Select,
-  SidePanel, Spinner, Split, Stat, StatStrip, Toolbar,
-} from '../components/ui'
+import { Alert, Badge, Button, EmptyState, ErrorAlert, Field, IconButton, Input, Page, PageBody, PageHeader, Select, SidePanel, Spinner, Split, Stat, StatStrip, Toolbar } from '../components/ui'
 
 // v3 권한 모델 — 문서 접근 허용 목록(ACL)에 넣을 사용자 그룹을 관리한다(관리자 전용).
 // 그룹을 지워도 문서 허용 목록의 해당 항목은 남는다(제한이 풀리지 않도록, fail-closed).
-
-function errorMessage(error: unknown, fallback: string): string {
-  const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
-  return typeof detail === 'string' ? detail : fallback
-}
 
 function CreateGroupForm() {
   const createGroup = useCreateGroup()
@@ -57,7 +49,7 @@ function CreateGroupForm() {
       </Button>
       {createGroup.isError && (
         <div style={{ flexBasis: '100%' }}>
-          <Alert tone="danger">{errorMessage(createGroup.error, '그룹을 만들지 못했습니다.')}</Alert>
+          <ErrorAlert error={createGroup.error} message="그룹을 만들지 못했습니다." />
         </div>
       )}
     </form>
@@ -65,7 +57,7 @@ function CreateGroupForm() {
 }
 
 function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: () => void }) {
-  const { data: group, isLoading, isError } = useGroup(groupId)
+  const { data: group, isLoading, isError, error } = useGroup(groupId)
   const { data: users } = useUsers()
   const updateGroup = useUpdateGroup()
   const deleteGroup = useDeleteGroup()
@@ -85,7 +77,7 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
   if (isError || !group) {
     return (
       <SidePanel title="그룹 상세" label="그룹 상세">
-        <Alert tone="danger">그룹 정보를 불러오지 못했습니다.</Alert>
+        <ErrorAlert error={error} message="그룹 정보를 불러오지 못했습니다." />
       </SidePanel>
     )
   }
@@ -131,7 +123,7 @@ function GroupDetailPanel({ groupId, onDeleted }: { groupId: string; onDeleted: 
         </div>
       )}
     >
-      {mutationError && <Alert tone="danger">{errorMessage(mutationError.error, '요청을 처리하지 못했습니다.')}</Alert>}
+      {mutationError && <ErrorAlert error={mutationError.error} message="그룹 변경을 처리하지 못했습니다." />}
 
       {draft ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
@@ -269,7 +261,7 @@ function GroupTable({ groups, selectedId, onSelect }: {
 
 export default function GroupsPage() {
   const currentUser = useAuthStore((s) => s.user)
-  const { data, isLoading, isError } = useGroups()
+  const { data, isLoading, isError, error, refetch } = useGroups()
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   if (currentUser?.role !== 'admin') {
@@ -303,7 +295,7 @@ export default function GroupsPage() {
           <PageBody>
             <CreateGroupForm />
             {isLoading && <Spinner />}
-            {isError && <Alert tone="danger">그룹 목록을 불러오지 못했습니다.</Alert>}
+            {isError && <ErrorAlert error={error} message="그룹 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
             {!isLoading && !isError && (
               <>
                 <Toolbar label="그룹 목록 도구" meta={`${groups.length}개`}>

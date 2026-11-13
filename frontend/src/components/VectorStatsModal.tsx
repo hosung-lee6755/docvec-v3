@@ -1,6 +1,6 @@
 import { Layers } from 'lucide-react'
 import { useCollectionVectorStats } from '../hooks/useCollectionVectorStats'
-import { Alert, Button, DescriptionList, Modal, Spinner } from './ui'
+import { Button, DescriptionList, ErrorAlert, Modal, Spinner } from './ui'
 import type { DescriptionItem } from './ui'
 import '../styles/screens/documents.css'
 
@@ -18,7 +18,7 @@ const REEMBED_LABELS: Record<string, string> = {
 }
 
 export default function VectorStatsModal({ collectionId, collectionName, onClose }: VectorStatsModalProps) {
-  const { data, isLoading, isError } = useCollectionVectorStats(collectionId)
+  const { data, isLoading, isError, error } = useCollectionVectorStats(collectionId)
 
   const footer = <Button variant="secondary" onClick={onClose}>닫기</Button>
 
@@ -29,7 +29,7 @@ export default function VectorStatsModal({ collectionId, collectionName, onClose
       )}
 
       {isError && (
-        <Alert tone="danger">현황을 불러오지 못했습니다.</Alert>
+        <ErrorAlert error={error} message="벡터 현황을 불러오지 못했습니다." />
       )}
 
       {data && <DescriptionList items={buildItems(data)} />}

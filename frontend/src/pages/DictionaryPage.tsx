@@ -25,9 +25,8 @@ import {
 import { useAuthStore } from '../store/authStore'
 import { ImpactModal } from '../components/dictionary/ImpactModal'
 import { RevisionView } from '../components/dictionary/RevisionView'
-import {
-  Alert, Button, Card, EmptyState, Field, IconButton, Input, Page, PageHeader, Select, SearchInput, Tabs, Toolbar,
-} from '../components/ui'
+import { Alert, Button, Card, EmptyState, ErrorAlert, ErrorText, Field, IconButton, Input, Page, PageHeader, SearchInput, Select, Tabs, Toolbar } from '../components/ui'
+import { describeError } from '../lib/apiError'
 import '../styles/screens/pipeline.css'
 
 const TABS: { type: DictionaryEntryType; label: string; hint: string; icon: typeof Ban }[] = [
@@ -178,7 +177,7 @@ export default function DictionaryPage() {
   const [reprocessDone, setReprocessDone] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const { data, isLoading, isError } = useDictionaryEntries(tab)
+  const { data, isLoading, isError, error, refetch } = useDictionaryEntries(tab)
   const createEntry = useCreateDictionaryEntry(tab)
   const updateEntry = useUpdateDictionaryEntry(tab)
   const deleteEntry = useDeleteDictionaryEntry(tab)
@@ -301,9 +300,7 @@ export default function DictionaryPage() {
     importEntries.mutate(file, {
       onSuccess: (result) => setImportFeedback({ ok: true, result }),
       onError: (err: unknown) => {
-        const message =
-          (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-          ?? '엑셀 파일을 가져오지 못했습니다.'
+        const message = describeError(err, '엑셀 파일을 가져오지 못했습니다.')
         setImportFeedback({ ok: false, message })
       },
     })
@@ -540,6 +537,8 @@ export default function DictionaryPage() {
                     </label>
                   </div>
 
+                  {createEntry.isError && <ErrorText error={createEntry.error} message="사전 항목을 추가하지 못했습니다." />}
+                  {updateEntry.isError && <ErrorText error={updateEntry.error} message="사전 항목을 수정하지 못했습니다." />}
                   <Button
                     type="submit"
                     variant="primary"
@@ -565,9 +564,7 @@ export default function DictionaryPage() {
                       다운로드
                     </Button>
                     {exportEntries.isError && (
-                      <span className="ds-cell-muted" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)', alignSelf: 'center' }}>
-                        다운로드 실패
-                      </span>
+                      <span style={{ alignSelf: 'center' }}><ErrorText error={exportEntries.error} message="엑셀로 내려받지 못했습니다." /></span>
                     )}
                     <Button
                       variant="secondary"
@@ -636,9 +633,16 @@ export default function DictionaryPage() {
                   </div>
                 )}
 
+                {(deleteEntry.isError || entryImpact.isError) && (
+                  <div style={{ padding: 'var(--space-4) var(--space-4) 0' }}>
+                    {deleteEntry.isError && <ErrorAlert error={deleteEntry.error} message="사전 항목을 삭제하지 못했습니다." />}
+                    {entryImpact.isError && <ErrorAlert error={entryImpact.error} message="수정은 저장했지만 영향받는 문서를 확인하지 못했습니다." />}
+                  </div>
+                )}
+
                 {isError && (
                   <div style={{ padding: 'var(--space-4)' }}>
-                    <Alert tone="danger">사전 항목을 불러오지 못했습니다.</Alert>
+                    <ErrorAlert error={error} message="사전 항목을 불러오지 못했습니다." onRetry={() => refetch()} />
                   </div>
                 )}
 

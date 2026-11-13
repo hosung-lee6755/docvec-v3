@@ -1,5 +1,5 @@
-import { createContext, useContext } from 'react'
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { createContext, useContext, useLayoutEffect, useRef } from 'react'
+import type { ButtonHTMLAttributes, ReactNode, RefObject } from 'react'
 import { AlertTriangle, CheckCircle2, Info, XCircle } from 'lucide-react'
 
 // 화면 안에 화면이 들어가는 경우(프로젝트 > 워크스페이스 > 컬렉션 등) 안쪽 머리는 h2로 낮춘다.
@@ -45,11 +45,39 @@ interface BoxProps {
   className?: string
 }
 
+// 스크롤해도 화면 머리와 요약 띠가 위에 남도록, 그 높이와 본문 틀 높이를 CSS 변수로 알린다.
+// --ds-sticky-header: 머리 높이(요약 띠가 붙을 위치)
+// --ds-sticky-top: 머리와 요약 띠를 합한 높이(오른쪽 상세 패널이 붙을 위치)
+// --ds-frame-h: 본문 틀의 보이는 높이(상세 패널이 넘지 않을 높이)
+function useStickyOffsets(ref: RefObject<HTMLDivElement | null>, isEnabled: boolean) {
+  useLayoutEffect(() => {
+    const page = ref.current
+    if (!isEnabled || !page || typeof ResizeObserver === 'undefined') return
+    const frame = page.closest<HTMLElement>('.ds-main__frame')
+    const update = () => {
+      const header = page.querySelector<HTMLElement>(':scope > .ds-page-header')
+      const strip = page.querySelector<HTMLElement>(':scope > .ds-stat-strip')
+      const headerHeight = header?.offsetHeight ?? 0
+      page.style.setProperty('--ds-sticky-header', `${headerHeight}px`)
+      page.style.setProperty('--ds-sticky-top', `${headerHeight + (strip?.offsetHeight ?? 0)}px`)
+      if (frame) page.style.setProperty('--ds-frame-h', `${frame.clientHeight}px`)
+    }
+    const observer = new ResizeObserver(update)
+    observer.observe(page)
+    if (frame) observer.observe(frame)
+    page.querySelectorAll(':scope > .ds-page-header, :scope > .ds-stat-strip').forEach((el) => observer.observe(el))
+    update()
+    return () => observer.disconnect()
+  }, [ref, isEnabled])
+}
+
 export function Page({ children, className }: BoxProps) {
   const depth = useContext(PageDepthContext)
+  const ref = useRef<HTMLDivElement>(null)
+  useStickyOffsets(ref, depth === 0)
   return (
     <PageDepthContext.Provider value={depth + 1}>
-      <div className={cx('ds-page', depth > 0 && 'ds-page--nested', className)}>{children}</div>
+      <div ref={ref} className={cx('ds-page', depth > 0 && 'ds-page--nested', className)}>{children}</div>
     </PageDepthContext.Provider>
   )
 }

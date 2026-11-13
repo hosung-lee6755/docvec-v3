@@ -4,6 +4,7 @@ import { useMutation } from '@tanstack/react-query'
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
 import { Alert, Button, Field, Input } from '../components/ui'
+import { describeError } from '../lib/apiError'
 import '../styles/screens/user.css'
 
 export default function RegisterPage() {
@@ -89,7 +90,7 @@ export default function RegisterPage() {
             <Alert tone="danger">
               {axios.isAxiosError(registerMutation.error) && registerMutation.error.response?.status === 409
                 ? '이미 사용 중인 이메일입니다.'
-                : '회원가입 실패. 다시 시도해주세요.'}
+                : describeError(registerMutation.error, '회원가입하지 못했습니다.')}
             </Alert>
           )}
           <Button type="submit" variant="primary" isBlock disabled={registerMutation.isPending}>

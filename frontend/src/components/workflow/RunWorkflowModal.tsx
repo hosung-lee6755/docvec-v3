@@ -11,8 +11,9 @@ import {
   type WorkflowBlock,
 } from '../../hooks/useWorkflows'
 import { getBlockMeta } from '../../lib/workflowBlocks'
-import { Alert, Badge, Button, Field, Modal, Select } from '../ui'
+import { Alert, Badge, Button, ErrorAlert, Field, Modal, Select } from '../ui'
 import type { BadgeTone } from '../ui/classes'
+import { explainFailure } from '../../lib/apiError'
 import '../../styles/screens/pipeline.css'
 
 const RUN_STATUS_BADGE: Record<string, { label: string; tone: BadgeTone }> = {
@@ -55,6 +56,7 @@ export default function RunWorkflowModal({
   const [collectionId, setCollectionId] = useState('')
   const [runVersionId, setRunVersionId] = useState(versionId)
   const [startedCount, setStartedCount] = useState<number | null>(null)
+  const [skippedCount, setSkippedCount] = useState(0)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const { data: runDetail } = useWorkflowRun(activeRunId)
 
@@ -72,13 +74,19 @@ export default function RunWorkflowModal({
 
   const handleStart = async () => {
     if (!canStart) return
-    const result = await runWorkflow.mutateAsync({
-      workflowId,
-      versionId: runVersionId,
-      documentId: targetType === 'document' ? documentId : undefined,
-      collectionId: targetType === 'collection' ? collectionId : undefined,
-    })
+    let result
+    try {
+      result = await runWorkflow.mutateAsync({
+        workflowId,
+        versionId: runVersionId,
+        documentId: targetType === 'document' ? documentId : undefined,
+        collectionId: targetType === 'collection' ? collectionId : undefined,
+      })
+    } catch {
+      return // 실패 원인은 실행 단추 아래 알림이 보여 준다
+    }
     setStartedCount(result.count)
+    setSkippedCount(result.skipped_in_progress ?? 0)
     setActiveRunId(result.items[0]?.id ?? null)
   }
 
@@ -172,12 +180,18 @@ export default function RunWorkflowModal({
             </div>
           )}
         </Field>
+        {runWorkflow.isError && <ErrorAlert error={runWorkflow.error} message="워크플로우를 실행하지 못했습니다." />}
         {targetType === 'collection' && (
           <p className="wf-muted">컬렉션 내 파싱 완료된 문서마다 개별 실행이 만들어집니다 (최대 50건).</p>
         )}
         {startedCount !== null && startedCount > 1 && (
           <p className="wf-muted" style={{ color: 'var(--color-primary)' }}>
             {startedCount}건의 실행이 시작되었습니다. 아래 실행 이력에서 각각 확인하세요.
+          </p>
+        )}
+        {skippedCount > 0 && (
+          <p className="wf-muted">
+            아직 처리 중인 문서 {skippedCount}건은 이번 실행에서 뺐습니다. 처리가 끝난 뒤 다시 실행하세요.
           </p>
         )}
 
@@ -206,7 +220,7 @@ export default function RunWorkflowModal({
                 </span>
               )}
             </div>
-            {activeRun.error_message && <Alert tone="danger">{activeRun.error_message}</Alert>}
+            {activeRun.error_message && <Alert tone="danger">실행이 중간에 멈췄습니다. {explainFailure(activeRun.error_message)}</Alert>}
             {steps.map((step) => {
               const output = step.output
                 ? Object.fromEntries(Object.entries(step.output).filter(([k]) => k !== 'text'))
@@ -221,7 +235,7 @@ export default function RunWorkflowModal({
                     </span>
                   </div>
                   {step.error_message && (
-                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>{step.error_message}</div>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>{explainFailure(step.error_message)}</div>
                   )}
                   {output && Object.keys(output).length > 0 && (
                     <pre style={{

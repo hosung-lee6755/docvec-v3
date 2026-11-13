@@ -2,13 +2,14 @@ import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useApprovePii, usePiiDetections, useRejectPii, useRevealPii } from '../../hooks/useDocumentStructure'
 import { useAuthStore } from '../../store/authStore'
+import { ErrorText } from '../ui'
 
 const PII_ACTION_LABELS: Record<string, string> = {
   MARK: '표시', MASK: '마스킹', TOKENIZE: '토큰화', REMOVE: '제거', EXCLUDE_EMBEDDING: '임베딩 제외',
 }
 
 export default function PiiDetectionsTab({ documentId }: { documentId: string }) {
-  const { data, isLoading } = usePiiDetections(documentId)
+  const { data, isLoading, isError, error } = usePiiDetections(documentId)
   const approve = useApprovePii()
   const reject = useRejectPii()
   const reveal = useRevealPii()
@@ -29,6 +30,8 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
     })
   }
 
+  if (isError) return <ErrorText error={error} message="민감정보 탐지 결과를 불러오지 못했습니다." />
+
   if (isLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6)' }}>
@@ -45,6 +48,9 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>탐지 {detections.length}건</p>
+      {approve.isError && <ErrorText error={approve.error} message="승인하지 못했습니다." />}
+      {reject.isError && <ErrorText error={reject.error} message="반려하지 못했습니다." />}
+      {reveal.isError && <ErrorText error={reveal.error} message="원문을 보지 못했습니다." />}
       <div style={{ overflowX: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>

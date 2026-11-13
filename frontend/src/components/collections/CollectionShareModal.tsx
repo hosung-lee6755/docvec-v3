@@ -7,7 +7,8 @@ import {
   useRemoveMember,
   useUpdateCollection,
 } from '../../hooks/useCollections'
-import { Alert, Badge, Button, Field, IconButton, Input, Modal, Select, Spinner } from '../ui'
+import { Alert, Badge, Button, ErrorAlert, Field, IconButton, Input, Modal, Select, Spinner } from '../ui'
+import { describeError } from '../../lib/apiError'
 
 type InviteRole = 'viewer' | 'editor'
 
@@ -39,6 +40,7 @@ function MemberRows({ collectionId }: { collectionId: string }) {
   }
   return (
     <div className="ds-table-wrap">
+      {removeMember.isError && <ErrorAlert error={removeMember.error} message="멤버를 제거하지 못했습니다." />}
       <table className="ds-table ds-table--compact" aria-label="컬렉션 멤버">
         <thead>
           <tr>
@@ -61,8 +63,12 @@ function MemberRows({ collectionId }: { collectionId: string }) {
                     <span style={{ display: 'inline-flex', gap: 'var(--space-2)', alignItems: 'center', whiteSpace: 'nowrap' }}>
                       <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>제거할까요?</span>
                       <Button size="sm" variant="danger" disabled={removeMember.isPending} onClick={async () => {
-                        await removeMember.mutateAsync({ collectionId, userId: m.user_id })
-                        setConfirmRemoveUserId(null)
+                        try {
+                          await removeMember.mutateAsync({ collectionId, userId: m.user_id })
+                          setConfirmRemoveUserId(null)
+                        } catch {
+                          // 실패 원인은 표 위 알림이 보여 준다
+                        }
                       }}>
                         확인
                       </Button>
@@ -95,8 +101,12 @@ export function CollectionShareModal({ collection, onClose }: CollectionShareMod
 
   const handleToggleRestrict = async () => {
     const next = !shareRestrict
-    await updateCollection.mutateAsync({ id: collection.id, name: collection.name, restrict_to_members: next })
-    setShareRestrict(next)
+    try {
+      await updateCollection.mutateAsync({ id: collection.id, name: collection.name, restrict_to_members: next })
+      setShareRestrict(next)
+    } catch {
+      // 실패 원인은 체크 상자 아래 알림이 보여 준다
+    }
   }
 
   const handleInvite = async (e: React.FormEvent) => {
@@ -111,8 +121,8 @@ export function CollectionShareModal({ collection, onClose }: CollectionShareMod
       setInviteEmail('')
       setInviteRole('viewer')
       setInviteSuccess(`${invitedEmail}님을 ${invitedRoleLabel}로 초대했습니다.`)
-    } catch {
-      setInviteError('초대에 실패했습니다. 가입된 사용자의 이메일인지 확인하세요.')
+    } catch (err) {
+      setInviteError(describeError(err, '초대하지 못했습니다.'))
     }
   }
 
@@ -152,6 +162,8 @@ export function CollectionShareModal({ collection, onClose }: CollectionShareMod
             </span>
           </label>
         )}
+
+        {updateCollection.isError && <ErrorAlert error={updateCollection.error} message="공유 범위를 바꾸지 못했습니다." />}
 
         <form onSubmit={handleInvite} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
           <Field label="이메일로 초대">

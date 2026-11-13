@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { usePdfBlobUrl } from '../../hooks/usePdfBlobUrl'
 import { ViewModeToggle } from './documentDetailParts'
 import { toBlocksJson } from './documentDetailHelpers'
+import { ErrorText } from '../ui'
 
 interface Page {
   page_number: number
@@ -19,6 +20,7 @@ interface PreviewResult {
 interface OriginalTabProps {
   isContentLoading: boolean
   isPreviewError: boolean
+  previewError?: unknown
   content: { full_text: string; chunk_count: number } | undefined
   pagesTextResult: { pages: Page[] } | undefined
   previewResult: PreviewResult | undefined
@@ -32,6 +34,7 @@ interface OriginalTabProps {
 export default function OriginalTab({
   isContentLoading,
   isPreviewError,
+  previewError,
   content,
   pagesTextResult,
   previewResult,
@@ -101,7 +104,7 @@ export default function OriginalTab({
             {isPdfPreview ? '원본 PDF' : '원본 (변환 미리보기)'}
           </p>
           {isPreviewError && (
-            <p style={{ color: 'var(--color-danger)', fontSize: 13 }}>원문 미리보기를 생성하지 못했습니다.</p>
+            <p><ErrorText error={previewError} message="원문 미리보기를 만들지 못했습니다." /></p>
           )}
           {!isPreviewError && iframeSrc ? (
             <iframe

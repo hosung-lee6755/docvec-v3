@@ -2,9 +2,7 @@ import { useState } from 'react'
 import { FileDown, ShieldOff } from 'lucide-react'
 import { useDownloadGovernanceReport } from '../hooks/useAnswerTraces'
 import { useAuthStore } from '../store/authStore'
-import {
-  Alert, Button, Card, DescriptionList, EmptyState, Field, Input, Page, PageBody, PageHeader, Stat, StatStrip,
-} from '../components/ui'
+import { Alert, Button, Card, DescriptionList, EmptyState, ErrorAlert, Field, Input, Page, PageBody, PageHeader, Stat, StatStrip } from '../components/ui'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_DAYS = 30
@@ -83,7 +81,7 @@ export default function GovernanceReportPage() {
               </Button>
             </div>
             {!isRangeValid && <div style={{ marginTop: 'var(--space-3)' }}><Alert tone="danger">시작일은 종료일보다 늦을 수 없습니다.</Alert></div>}
-            {download.isError && <div style={{ marginTop: 'var(--space-3)' }}><Alert tone="danger">근거 자료를 만들지 못했습니다. 기간은 최대 {MAX_RANGE_DAYS}일입니다.</Alert></div>}
+            {download.isError && <div style={{ marginTop: 'var(--space-3)' }}><ErrorAlert error={download.error} message="근거 자료를 만들지 못했습니다." /></div>}
           </Card>
 
           <Card title="문서에 담기는 항목">

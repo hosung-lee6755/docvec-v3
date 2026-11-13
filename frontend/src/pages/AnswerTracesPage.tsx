@@ -14,10 +14,7 @@ import { SECURITY_LEVEL_LABELS } from '../hooks/useAccess'
 import type { SecurityLevel } from '../hooks/useDocumentMetadata'
 import { DeepSearchSteps } from '../components/chat/DeepSearch'
 import { CitationEvidence, LowOcrBadge } from '../components/chat/CitationEvidence'
-import {
-  Alert, Badge, Button, DescriptionList, EmptyState, IconButton, Page, PageBody, PageHeader,
-  SearchInput, Select, Spinner, Stat, StatStrip, Toolbar, Split,
-} from '../components/ui'
+import { Badge, Button, DescriptionList, EmptyState, ErrorAlert, IconButton, Page, PageBody, PageHeader, SearchInput, Select, Spinner, Split, Stat, StatStrip, Toolbar } from '../components/ui'
 import type { DescriptionItem } from '../components/ui'
 import { roleLabel } from '../lib/roleLabels'
 
@@ -115,9 +112,9 @@ function buildFacts(data: NonNullable<ReturnType<typeof useAnswerTrace>['data']>
 }
 
 function TraceDetail({ traceId, onClose }: { traceId: string; onClose: () => void }) {
-  const { data, isLoading, isError } = useAnswerTrace(traceId)
+  const { data, isLoading, isError, error } = useAnswerTrace(traceId)
   if (isLoading) return <div style={{ padding: 'var(--space-4)' }}><Spinner /></div>
-  if (isError || !data) return <Alert tone="danger">추적 기록을 불러오지 못했습니다.</Alert>
+  if (isError || !data) return <ErrorAlert error={error} message="추적 기록을 불러오지 못했습니다." />
 
   return (
     <section aria-label="답변 추적 상세" className="ds-side-panel">
@@ -166,7 +163,7 @@ export default function AnswerTracesPage() {
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
 
-  const { data, isLoading, isError } = useAnswerTraces({
+  const { data, isLoading, isError, error, refetch } = useAnswerTraces({
     grounding: grounding || undefined,
     document_id: documentId.trim() || undefined,
     limit: PAGE_SIZE,
@@ -190,7 +187,7 @@ export default function AnswerTracesPage() {
   const main = (
     <PageBody>
       {isLoading && <Spinner />}
-      {isError && <Alert tone="danger">답변 추적 기록을 불러오지 못했습니다.</Alert>}
+      {isError && <ErrorAlert error={error} message="답변 추적 기록을 불러오지 못했습니다." onRetry={() => refetch()} />}
       {!isLoading && !isError && items.length === 0 && (
         <EmptyState icon={<Route size={48} aria-hidden="true" />} title="조건에 맞는 답변 기록이 없습니다." />
       )}

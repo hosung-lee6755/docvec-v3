@@ -5,6 +5,7 @@ import type { Document, useReprocessDocument, useRestoreRevision } from '../../h
 import { ViewModeToggle } from './documentDetailParts'
 import { REVISION_SOURCE_LABELS, toBlocksJson, type TabKey } from './documentDetailHelpers'
 import type { DocumentNodesResult } from '../../hooks/useDocumentStructure'
+import { ErrorText } from '../ui'
 
 interface EditTabProps {
   documentId: string
@@ -12,6 +13,7 @@ interface EditTabProps {
   isLoading: boolean
   content: { full_text: string; chunk_count: number } | undefined
   isContentError: boolean
+  contentError?: unknown
   revisionsResult: { revisions: Array<{ id: string; source: string; created_at: string; text_length: number; preview: string }> } | undefined
   editNodesResult: DocumentNodesResult | undefined
   editedContent: string
@@ -29,6 +31,7 @@ export default function EditTab({
   isLoading,
   content,
   isContentError,
+  contentError,
   revisionsResult,
   editNodesResult,
   editedContent,
@@ -50,9 +53,7 @@ export default function EditTab({
 
   if (isContentError) {
     return (
-      <p style={{ color: 'var(--color-danger)', fontSize: 13, margin: 0 }}>
-        본문을 불러오는 중 오류가 발생했습니다.
-      </p>
+      <ErrorText error={contentError} message="본문을 불러오지 못했습니다." />
     )
   }
 
@@ -185,8 +186,8 @@ export default function EditTab({
         </div>
       )}
       {reprocess.isError && (
-        <p style={{ color: 'var(--color-danger)', fontSize: 13, marginTop: 'var(--space-3)', flexShrink: 0 }}>
-          재처리를 시작하지 못했습니다.
+        <p style={{ marginTop: 'var(--space-3)', flexShrink: 0 }}>
+          <ErrorText error={reprocess.error} message="재처리를 시작하지 못했습니다." />
         </p>
       )}
     </div>

@@ -5,6 +5,7 @@ import { useCollections } from '../../hooks/useCollections'
 import { useWorkflows, useWorkflowVersions } from '../../hooks/useWorkflows'
 import { Alert, Badge, Button, Field, IconButton, Modal, Select, Spinner, Tabs } from '../ui'
 import type { BadgeTone } from '../ui'
+import { describeError } from '../../lib/apiError'
 import '../../styles/screens/documents.css'
 
 interface UploadModalProps {
@@ -114,7 +115,7 @@ export function UploadModal({
           filename: zipFile.name,
           status: 'failed',
           document_id: null,
-          detail: err instanceof Error ? err.message : 'ZIP 업로드 실패',
+          detail: describeError(err, 'ZIP 파일을 올리지 못했습니다.'),
         }],
       })
     }
@@ -143,7 +144,7 @@ export function UploadModal({
         successCount++
         setUploadProgress((prev) => prev.map((p, idx) => (idx === i ? { ...p, status: 'success' } : p)))
       } catch (err) {
-        const message = err instanceof Error ? err.message : '업로드 실패'
+        const message = describeError(err, '올리지 못했습니다.')
         setUploadProgress((prev) => prev.map((p, idx) => (idx === i ? { ...p, status: 'error', error: message } : p)))
       }
     }
@@ -261,7 +262,7 @@ export function UploadModal({
                       {selectedFiles.map((f, i) => {
                         const progress = uploadProgress[i]
                         return (
-                          <div key={`${f.name}-${i}`} className="documents-file-row">
+                          <div key={`${f.name}-${i}`} className="documents-file-row" style={progress?.error ? { flexWrap: 'wrap' } : undefined}>
                             <span className="documents-ellipsis" title={progress?.error}>{f.name}</span>
                             {progress?.status === 'success' && <span className="documents-text-success" aria-label="성공">✓</span>}
                             {progress?.status === 'error' && <span className="documents-text-danger" title={progress.error} aria-label="실패">✕</span>}
@@ -270,6 +271,9 @@ export function UploadModal({
                               <IconButton label={`${f.name} 목록에서 빼기`} onClick={() => removeSelectedFile(i)}>
                                 <X size={12} />
                               </IconButton>
+                            )}
+                            {progress?.status === 'error' && progress.error && (
+                              <span className="documents-text-danger" style={{ flexBasis: '100%', fontSize: 'var(--text-xs)' }}>{progress.error}</span>
                             )}
                           </div>
                         )
@@ -380,9 +384,12 @@ export function UploadModal({
                 <strong>총 {zipResult.total_entries}개 중 {zipResult.queued}개 등록됨</strong>
                 <div className="documents-zip-list">
                   {zipResult.results.map((r, i) => (
-                    <div key={`${r.filename}-${i}`} className="documents-file-row" title={r.detail ?? undefined}>
+                    <div key={`${r.filename}-${i}`} className="documents-file-row" title={r.detail ?? undefined} style={r.detail && r.status !== 'queued' ? { flexWrap: 'wrap' } : undefined}>
                       <span className="documents-ellipsis">{r.filename}</span>
                       <Badge tone={ZIP_STATUS_TONE[r.status] ?? 'neutral'}>{ZIP_STATUS_LABEL[r.status]}</Badge>
+                      {r.detail && r.status !== 'queued' && (
+                        <span className={r.status === 'failed' ? 'documents-text-danger' : 'wf-muted'} style={{ flexBasis: '100%', fontSize: 'var(--text-xs)' }}>{r.detail}</span>
+                      )}
                     </div>
                   ))}
                 </div>

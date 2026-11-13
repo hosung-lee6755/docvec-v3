@@ -16,7 +16,9 @@ import {
 } from '../hooks/useChat'
 import { DeepSearchProgress, DeepSearchSteps, DeepSearchToggle } from '../components/chat/DeepSearch'
 import { CitationEvidence, LowOcrBadge } from '../components/chat/CitationEvidence'
-import { Alert, Badge, Button, IconButton, Input, Page, PageTitle, Select, buttonClass } from '../components/ui'
+import { Alert, Badge, Button, ErrorAlert, ErrorText, IconButton, Input, Page, PageTitle, Select, buttonClass } from '../components/ui'
+import { explainFailure } from '../lib/apiError'
+import { useStickToBottom } from '../hooks/useStickToBottom'
 import '../styles/screens/user.css'
 
 export default function ChatPage() {
@@ -46,7 +48,7 @@ export default function ChatPage() {
 function ConversationSidebar({
   projectId, activeId, onSelect, onNew,
 }: { projectId?: string; activeId: string | null; onSelect: (id: string) => void; onNew: () => void }) {
-  const { data: conversations } = useConversations(projectId)
+  const { data: conversations, isError: isListError, error: listError, refetch: refetchList } = useConversations(projectId)
   const renameConv = useRenameConversation()
   const deleteConv = useDeleteConversation()
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -72,6 +74,10 @@ function ConversationSidebar({
       <Button variant="primary" size="sm" isBlock onClick={onNew} icon={<Plus size={16} />}>
         새 채팅
       </Button>
+
+      {renameConv.isError && <ErrorText error={renameConv.error} message="채팅 이름을 바꾸지 못했습니다." />}
+      {deleteConv.isError && <ErrorText error={deleteConv.error} message="채팅을 삭제하지 못했습니다." />}
+      {isListError && <ErrorAlert error={listError} message="채팅 목록을 불러오지 못했습니다." onRetry={() => refetchList()} />}
 
       <div className="user-chat__list-items">
         {conversations?.map((c) => (
@@ -122,7 +128,7 @@ function ConversationSidebar({
             )}
           </div>
         ))}
-        {!conversations?.length && (
+        {!isListError && conversations && !conversations.length && (
           <p className="user-chat__empty">아직 채팅이 없습니다.</p>
         )}
       </div>
@@ -217,6 +223,9 @@ function NewConversationForm({ projectId, onCreated }: { projectId?: string; onC
             질문
           </Button>
         </div>
+        {createConversation.isError && (
+          <ErrorAlert error={createConversation.error} message="채팅을 시작하지 못했습니다. 입력한 질문은 그대로 남아 있습니다." />
+        )}
         {selectedModel?.backend === 'local' && (
           <p className="user-chat__hint">
             로컬 모델은 첫 요청 시 모델 로딩으로 응답이 오래 걸릴 수 있습니다.
@@ -228,7 +237,7 @@ function NewConversationForm({ projectId, onCreated }: { projectId?: string; onC
 }
 
 function ConversationView({ conversationId }: { conversationId: string }) {
-  const { data: conversation } = useConversation(conversationId)
+  const { data: conversation, isError: isConvError, error: convError, refetch: refetchConv } = useConversation(conversationId)
   const sendMessage = useSendMessage(conversationId)
   const [query, setQuery] = useState('')
   const [isDeep, setIsDeep] = useState(false)
@@ -239,20 +248,38 @@ function ConversationView({ conversationId }: { conversationId: string }) {
     ? lastMessage.status === 'PENDING' || lastMessage.status === 'GENERATING'
     : sendMessage.isPending
 
+  // 새 질문, 답변 진행 단계, 이어 써지는 답변이 바뀔 때마다 맨 아래를 따라간다
+  const contentKey = [
+    messages.length,
+    lastMessage?.status,
+    (lastMessage?.partial_answer ?? lastMessage?.answer ?? '').length,
+    JSON.stringify(lastMessage?.progress ?? null).length,
+  ].join(':')
+  const thread = useStickToBottom<HTMLDivElement>(contentKey, conversationId)
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const trimmed = query.trim()
     if (!trimmed || isBusy) return
-    sendMessage.mutate({ query: trimmed, mode: isDeep ? 'deep' : 'standard' })
+    thread.stickNow()
+    sendMessage.mutate(
+      { query: trimmed, mode: isDeep ? 'deep' : 'standard' },
+      // 보내지 못하면 입력한 질문을 되돌려 다시 쓰지 않아도 되게 한다
+      { onError: () => setQuery(trimmed) },
+    )
     setQuery('')
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0 }}>
-      <div className="user-chat__thread">
+      <div className="user-chat__thread" ref={thread.ref} onScroll={thread.handleScroll}>
+        {isConvError && <ErrorAlert error={convError} message="대화 내용을 불러오지 못했습니다." onRetry={() => refetchConv()} />}
         {messages.map((m) => <ChatMessageBubble key={m.id} message={m} />)}
       </div>
 
+      {sendMessage.isError && (
+        <ErrorAlert error={sendMessage.error} message="질문을 보내지 못했습니다. 입력한 질문은 그대로 남아 있습니다." />
+      )}
       <form onSubmit={handleSubmit} className="user-chat__composer">
         <DeepSearchToggle checked={isDeep} onChange={setIsDeep} disabled={isBusy} />
         <Input
@@ -348,7 +375,7 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
 
       {chat.status === 'FAILED' && (
         <Alert tone="danger">
-          답변 생성에 실패했습니다{chat.error_message ? `: ${chat.error_message}` : ''}
+          답변을 만들지 못했습니다. {explainFailure(chat.error_message)}
         </Alert>
       )}
 

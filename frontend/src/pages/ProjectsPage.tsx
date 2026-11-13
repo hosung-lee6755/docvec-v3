@@ -9,7 +9,7 @@ import {
   type Project,
 } from '../hooks/useProjects'
 import { useAuthStore } from '../store/authStore'
-import { Button, Field, IconButton, Input, Page, PageBody, PageHeader, Textarea } from '../components/ui'
+import { Button, ErrorAlert, Field, IconButton, Input, Page, PageBody, PageHeader, Textarea } from '../components/ui'
 
 export default function ProjectsPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -51,7 +51,7 @@ function ProjectRowActions({
 function ProjectSidebar({
   activeId, onSelect, onNew,
 }: { activeId: string | null; onSelect: (id: string) => void; onNew: () => void }) {
-  const { data } = useProjects()
+  const { data, isError, error, refetch } = useProjects()
   const updateProject = useUpdateProject()
   const deleteProject = useDeleteProject()
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
@@ -86,6 +86,10 @@ function ProjectSidebar({
         style={{ marginBottom: 'var(--space-4)', alignSelf: 'stretch' }}>
         새 프로젝트
       </Button>
+
+      {isError && <ErrorAlert error={error} message="프로젝트 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
+      {updateProject.isError && <ErrorAlert error={updateProject.error} message="프로젝트 이름을 바꾸지 못했습니다." />}
+      {deleteProject.isError && <ErrorAlert error={deleteProject.error} message="프로젝트를 삭제하지 못했습니다." />}
 
       <div style={{ flex: '1 1 auto', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
         {data?.items.map((p) => {
@@ -162,7 +166,7 @@ function ProjectSidebar({
             </div>
           )
         })}
-        {!data?.items.length && (
+        {!isError && data && !data.items.length && (
           <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', padding: 'var(--space-3)' }}>
             아직 프로젝트가 없습니다.
           </p>
@@ -177,14 +181,13 @@ function NewProjectForm({ onCreated }: { onCreated: (id: string) => void }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
-    const project = await createProject.mutateAsync({
-      name: name.trim(),
-      description: description.trim() || undefined,
-    })
-    onCreated(project.id)
+    createProject.mutate(
+      { name: name.trim(), description: description.trim() || undefined },
+      { onSuccess: (project) => onCreated(project.id) },
+    )
   }
 
   return (
@@ -211,6 +214,7 @@ function NewProjectForm({ onCreated }: { onCreated: (id: string) => void }) {
               />
             )}
           </Field>
+          {createProject.isError && <ErrorAlert error={createProject.error} message="프로젝트를 만들지 못했습니다." />}
           <div>
             <Button
               type="submit"

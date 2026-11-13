@@ -3,14 +3,11 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import { Upload, Trash2, X, RefreshCw } from 'lucide-react'
 import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, type DocumentLifecycleFilter, type DocumentQualityFilter, type DocumentSortBy, type SortOrder } from '../hooks/useDocuments'
 import { useCollections } from '../hooks/useCollections'
-import { STATUS_LABELS, PROCESSING_STATUSES } from '../lib/documentStatus'
+import { PROCESSING_STATUSES, STATUS_FILTER_OPTIONS, statusFilterValue } from '../lib/documentStatus'
 import { LIFECYCLE_FILTER_LABELS } from '../lib/documentLifecycle'
 import { DocumentsTable } from '../components/documents/DocumentsTable'
 import { UploadModal } from '../components/documents/UploadModal'
-import {
-  Alert, BulkActionBar, Button, Card, EmptyState, IconButton, Page, PageHeader,
-  SearchInput, Select, Spinner, Stat, StatStrip, Toolbar,
-} from '../components/ui'
+import { Alert, BulkActionBar, Button, Card, EmptyState, ErrorAlert, IconButton, Page, PageHeader, SearchInput, Select, Spinner, Stat, StatStrip, Toolbar } from '../components/ui'
 import '../styles/screens/documents.css'
 
 // v3 마일스톤 6: 최근 처리 결과의 품질로 문서를 거른다
@@ -21,7 +18,7 @@ const QUALITY_FILTER_LABELS: Record<DocumentQualityFilter, string> = {
 }
 
 // 요약 띠의 '검토 대기', '실패' 칸은 사이드바 링크와 같은 상태 값으로 거른다.
-const REVIEW_WAITING_STATUS = 'WAITING_REVIEW'
+const REVIEW_WAITING_STATUS = statusFilterValue('WAITING_REVIEW')
 const FAILED_STATUS = 'FAILED'
 
 export default function DocumentsPage() {
@@ -60,7 +57,7 @@ export default function DocumentsPage() {
   // Deep-link support: ?status=<status> (e.g. the "검토 대기" nav link) — same
   // always-sync rationale as the collection filter above.
   useEffect(() => {
-    setFilterStatus(searchParams.get('status') ?? '')
+    setFilterStatus(statusFilterValue(searchParams.get('status') ?? ''))
   }, [searchParams])
 
   useEffect(() => {
@@ -70,7 +67,7 @@ export default function DocumentsPage() {
     }
   }, [location, navigate])
 
-  const { data, isLoading, isError, refetch } = useDocuments({
+  const { data, isLoading, isError, error, refetch } = useDocuments({
     page,
     limit,
     collectionId: filterCollectionId,
@@ -101,7 +98,7 @@ export default function DocumentsPage() {
   const items = data?.items ?? []
   // 요약 띠는 지금 받은 목록(이 페이지)으로만 센다. 새 API를 부르지 않는다.
   const processingCount = items.filter((d) => PROCESSING_STATUSES.includes(d.status)).length
-  const waitingCount = items.filter((d) => d.status === REVIEW_WAITING_STATUS).length
+  const waitingCount = items.filter((d) => REVIEW_WAITING_STATUS.split(',').includes(d.status)).length
   const failedCount = items.filter((d) => d.status === FAILED_STATUS).length
 
   const toggleSort = (column: DocumentSortBy) => {
@@ -243,7 +240,7 @@ export default function DocumentsPage() {
           style={{ width: 140 }}
         >
           <option value="">전체 상태</option>
-          {Object.entries(STATUS_LABELS).map(([value, label]) => (
+          {STATUS_FILTER_OPTIONS.map(({ value, label }) => (
             <option key={value} value={value}>{label}</option>
           ))}
         </Select>
@@ -323,6 +320,10 @@ export default function DocumentsPage() {
         </Alert>
       )}
 
+      {batchReprocess.isError && <ErrorAlert error={batchReprocess.error} message="선택한 문서를 재처리하지 못했습니다." />}
+      {batchDelete.isError && <ErrorAlert error={batchDelete.error} message="선택한 문서를 삭제하지 못했습니다." />}
+      {deleteDoc.isError && <ErrorAlert error={deleteDoc.error} message="문서를 삭제하지 못했습니다." />}
+
       {reprocessSummary && (
         <Alert tone="success">
           <div className="documents-notice">
@@ -335,14 +336,7 @@ export default function DocumentsPage() {
       )}
 
       {isError && (
-        <Alert tone="danger">
-          <div className="documents-notice">
-            <span>문서 목록을 불러올 수 없습니다.</span>
-            <Button size="sm" variant="secondary" icon={<RefreshCw size={14} />} onClick={() => refetch()}>
-              다시 시도
-            </Button>
-          </div>
-        </Alert>
+        <ErrorAlert error={error} message="문서 목록을 불러오지 못했습니다." onRetry={() => refetch()} />
       )}
 
       {isLoading ? (

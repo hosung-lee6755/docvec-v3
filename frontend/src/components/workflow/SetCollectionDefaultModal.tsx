@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useCollections, useUpdateCollection } from '../../hooks/useCollections'
 import { useWorkflowVersions } from '../../hooks/useWorkflows'
-import { Button, Modal, Select } from '../ui'
+import { Button, ErrorAlert, Modal, Select } from '../ui'
 import '../../styles/screens/pipeline.css'
 
 interface SetCollectionDefaultModalProps {
@@ -75,6 +75,7 @@ export default function SetCollectionDefaultModal({
       )}
     >
       <div className="pipeline-modal-stack">
+        {updateCollection.isError && <ErrorAlert error={updateCollection.error} message="컬렉션 기본 워크플로우로 지정하지 못했습니다." />}
         <p className="wf-muted" style={{ fontSize: 'var(--text-sm)' }}>
           {kind === 'ANALYSIS'
             ? <>&quot;{workflowName}&quot;을(를) 기본 분석 워크플로우로 지정할 컬렉션을 선택하세요. 지정하면 전처리가 끝난 직후 이 워크플로우가 문서마다 자동으로 실행됩니다.</>

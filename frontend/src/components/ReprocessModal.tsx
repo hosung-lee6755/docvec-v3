@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { useDocumentRuns, useReprocessImpact, useStartPartialReprocess } from '../hooks/useDocumentRuns'
 import { useWorkflowRun } from '../hooks/useWorkflows'
-import { Alert, Button, Card, Field, Input, Modal, Select, Spinner, Textarea } from './ui'
+import { Alert, Button, Card, ErrorAlert, ErrorText, Field, Input, Modal, Select, Spinner, Textarea } from './ui'
+import { explainFailure } from '../lib/apiError'
 import '../styles/screens/documents.css'
 
 const ENTRY_BLOCK_TYPE = 'file_validate'
@@ -56,7 +57,7 @@ export default function ReprocessModal({
   const startBlockType = mode === 'full' ? ENTRY_BLOCK_TYPE : null
   const startBlockInstanceId = mode === 'specific' ? selectedInstanceId : null
 
-  const { data: impact, isLoading: impactLoading, isError: impactError } = useReprocessImpact(
+  const { data: impact, isLoading: impactLoading, isError: impactError, error: impactErrorObj } = useReprocessImpact(
     documentId, startBlockType, startBlockInstanceId,
   )
 
@@ -163,7 +164,7 @@ export default function ReprocessModal({
 
           {mode === 'specific' && selectedStep?.status === 'FAILED' && (
             <Alert tone="danger">
-              <AlertTriangle size={13} aria-hidden="true" /> {selectedStep.error_message ?? '실패 사유 정보 없음'}
+              <AlertTriangle size={13} aria-hidden="true" /> {explainFailure(selectedStep.error_message)}
             </Alert>
           )}
 
@@ -196,7 +197,7 @@ export default function ReprocessModal({
                 <Spinner size={14} /> 계산 중...
               </div>
             )}
-            {impactError && <span className="documents-text-danger">영향 범위를 불러오지 못했습니다.</span>}
+            {impactError && <ErrorText error={impactErrorObj} message="영향 범위를 불러오지 못했습니다." />}
             {impact && !impactLoading && (
               <>
                 <div><strong>재실행 블록:</strong> {impact.affectedBlocks.length > 0 ? impact.affectedBlocks.join(' → ') : '없음'}</div>
@@ -230,7 +231,7 @@ export default function ReprocessModal({
         </Field>
 
         {startReprocess.isError && (
-          <Alert tone="danger">재처리 시작에 실패했습니다.</Alert>
+          <ErrorAlert error={startReprocess.error} message="재처리를 시작하지 못했습니다." />
         )}
       </div>
     </Modal>

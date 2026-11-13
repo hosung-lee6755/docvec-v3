@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '../../lib/apiClient'
+import { ErrorText } from '../ui'
 
 // v3 마일스톤 6 — 쪽별 OCR 신뢰도. 스캔 이미지를 글자로 읽은 쪽만 나온다.
 // 기준(OCR_LOW_CONFIDENCE, 기본 50%)보다 낮은 쪽은 검색 결과와 인용에도 경고가 붙는다.
@@ -31,10 +32,10 @@ function useOcrConfidence(documentId: string) {
 }
 
 export default function OcrConfidencePanel({ documentId }: { documentId: string }) {
-  const { data, isLoading, isError } = useOcrConfidence(documentId)
+  const { data, isLoading, isError, error } = useOcrConfidence(documentId)
   if (isLoading) return null
   if (isError) {
-    return <p role="alert" style={{ fontSize: 12, color: 'var(--color-danger)', margin: 0 }}>OCR 신뢰도를 불러오지 못했습니다.</p>
+    return <ErrorText error={error} message="OCR 신뢰도를 불러오지 못했습니다." />
   }
   if (!data || !data.pages.length) {
     return (

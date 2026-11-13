@@ -8,10 +8,7 @@ import {
 import { useProjects } from '../hooks/useProjects'
 import VersionCompareModal from '../components/workflow/VersionCompareModal'
 import SetCollectionDefaultModal from '../components/workflow/SetCollectionDefaultModal'
-import {
-  Alert, Badge, Button, Field, IconButton, Input, Page, PageHeader, Select, StatStrip, Stat, Textarea,
-  Toolbar, EmptyState, Modal,
-} from '../components/ui'
+import { Badge, Button, EmptyState, ErrorAlert, ErrorText, Field, IconButton, Input, Modal, Page, PageHeader, Select, Stat, StatStrip, Textarea, Toolbar } from '../components/ui'
 import '../styles/screens/pipeline.css'
 
 const KIND_LABELS: Record<string, string> = { PREPROCESS: '전처리', ANALYSIS: '분석' }
@@ -63,13 +60,22 @@ function WorkflowRowMenu({
   const handleRename = async () => {
     const trimmed = renameValue.trim()
     if (!trimmed || trimmed === workflow.name) { closeMenu(); return }
-    await renameWorkflow.mutateAsync({ workflowId: workflow.id, name: trimmed, projectId: projectId ?? '' })
+    try {
+      await renameWorkflow.mutateAsync({ workflowId: workflow.id, name: trimmed, projectId: projectId ?? '' })
+    } catch {
+      // 실패 원인은 메뉴 단추 옆에 보인다
+    }
     closeMenu()
   }
 
   const handleDuplicate = async (targetProjectId: string) => {
     closeMenu()
-    const copy = await duplicateWorkflow.mutateAsync({ workflowId: workflow.id, projectId: targetProjectId })
+    let copy
+    try {
+      copy = await duplicateWorkflow.mutateAsync({ workflowId: workflow.id, projectId: targetProjectId })
+    } catch {
+      return // 실패 원인은 메뉴 단추 옆에 보인다
+    }
     navigate(`/projects/${targetProjectId}/workflows/${copy.id}/edit`)
   }
 
@@ -188,6 +194,9 @@ function WorkflowRowMenu({
           </div>
         </>
       )}
+      {renameWorkflow.isError && <ErrorText error={renameWorkflow.error} message="이름을 바꾸지 못했습니다." />}
+      {duplicateWorkflow.isError && <ErrorText error={duplicateWorkflow.error} message="복제하지 못했습니다." />}
+      {updateStatus.isError && <ErrorText error={updateStatus.error} message="상태를 바꾸지 못했습니다." />}
     </div>
   )
 }
@@ -197,7 +206,7 @@ export default function WorkflowsPage() {
   const { projectId } = useParams<{ projectId?: string }>()
   const isCrossProject = !projectId
   const [kindFilter, setKindFilter] = useState<'PREPROCESS' | 'ANALYSIS' | ''>('')
-  const { data, isLoading, isError } = useWorkflows(projectId ?? null, kindFilter || undefined)
+  const { data, isLoading, isError, error, refetch } = useWorkflows(projectId ?? null, kindFilter || undefined)
   const { data: projectsData } = useProjects()
   const createWorkflow = useCreateWorkflow()
   const deleteWorkflow = useDeleteWorkflow()
@@ -216,9 +225,14 @@ export default function WorkflowsPage() {
   const handleCreate = async () => {
     const targetProjectId = projectId ?? newProjectId
     if (!targetProjectId || !newName.trim()) return
-    const workflow = await createWorkflow.mutateAsync({
-      project_id: targetProjectId, name: newName, description: newDescription || undefined, kind: newKind,
-    })
+    let workflow
+    try {
+      workflow = await createWorkflow.mutateAsync({
+        project_id: targetProjectId, name: newName, description: newDescription || undefined, kind: newKind,
+      })
+    } catch {
+      return // 실패 원인은 만들기 창 안에 보인다
+    }
     setShowCreateModal(false)
     setNewName('')
     setNewDescription('')
@@ -266,6 +280,11 @@ export default function WorkflowsPage() {
           <Stat label="비활성" value={countByStatus('INACTIVE')} tone={countByStatus('INACTIVE') > 0 ? 'warning' : 'default'} />
         </StatStrip>
       )}
+      {deleteWorkflow.isError && (
+        <div style={{ padding: 'var(--space-3) var(--space-5) 0' }}>
+          <ErrorAlert error={deleteWorkflow.error} message="워크플로우를 삭제하지 못했습니다." />
+        </div>
+      )}
 
       <Toolbar
         label="워크플로우 거르기"
@@ -288,7 +307,7 @@ export default function WorkflowsPage() {
 
       <div style={{ padding: 'var(--space-4) var(--space-5)', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
         {isLoading && <div style={{ color: 'var(--color-text-subtle)', fontSize: 'var(--text-sm)' }}>불러오는 중...</div>}
-        {isError && <Alert tone="danger">워크플로우 목록을 불러오지 못했습니다.</Alert>}
+        {isError && <ErrorAlert error={error} message="워크플로우 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
 
         {!isLoading && data?.items.length === 0 && (
           <EmptyState
@@ -367,8 +386,12 @@ export default function WorkflowsPage() {
                               size="sm"
                               disabled={deleteWorkflow.isPending}
                               onClick={async () => {
-                                await deleteWorkflow.mutateAsync({ workflowId: workflow.id, projectId: rowProjectId ?? '' })
-                                setConfirmDeleteId(null)
+                                try {
+                                  await deleteWorkflow.mutateAsync({ workflowId: workflow.id, projectId: rowProjectId ?? '' })
+                                  setConfirmDeleteId(null)
+                                } catch {
+                                  // 실패 원인은 목록 위 알림이 보여 준다
+                                }
                               }}
                             >
                               확인
@@ -432,6 +455,7 @@ export default function WorkflowsPage() {
         footer={createFooter}
       >
         <div className="pipeline-modal-stack">
+          {createWorkflow.isError && <ErrorAlert error={createWorkflow.error} message="워크플로우를 만들지 못했습니다." />}
           <div className="pipeline-radios" role="radiogroup" aria-label="워크플로우 종류">
             <label>
               <input

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
+import { AxiosError, AxiosHeaders } from 'axios'
 import VersionHistoryPanel from './VersionHistoryPanel'
 import type { DocumentVersion } from '../../hooks/useDocumentLifecycle'
 
@@ -105,7 +106,10 @@ describe('VersionHistoryPanel', () => {
     mocks.restore.mockReturnValue({
       ...mutation(),
       isError: true,
-      error: { response: { data: { detail: '인덱싱이 끝난 버전만 되돌릴 수 있습니다.' } } },
+      error: new AxiosError('Request failed', 'ERR_BAD_REQUEST', { headers: new AxiosHeaders() }, {}, {
+        status: 409, statusText: '', headers: {}, config: { headers: new AxiosHeaders() },
+        data: { detail: '인덱싱이 끝난 버전만 되돌릴 수 있습니다.' },
+      }),
     })
     render(<VersionHistoryPanel documentId="v-2" />)
     expect(screen.getByRole('alert')).toHaveTextContent('인덱싱이 끝난 버전만 되돌릴 수 있습니다.')

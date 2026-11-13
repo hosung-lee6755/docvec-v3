@@ -1,11 +1,13 @@
 import { Loader2 } from 'lucide-react'
 import type { TabKey } from './documentDetailHelpers'
 import type { DocumentChunksResult, useDeleteChunk, useUpdateChunk } from '../../hooks/useDocuments'
+import { ErrorText } from '../ui'
 
 interface ChunksTabProps {
   documentId: string
   isLoading: boolean
   isError: boolean
+  error?: unknown
   chunksResult: DocumentChunksResult | undefined
   isPdfDoc: boolean
   chunkEditId: string | null
@@ -25,6 +27,7 @@ export default function ChunksTab({
   documentId,
   isLoading,
   isError,
+  error,
   chunksResult,
   isPdfDoc,
   chunkEditId,
@@ -49,9 +52,7 @@ export default function ChunksTab({
 
   if (isError) {
     return (
-      <p style={{ color: 'var(--color-danger)', fontSize: 13, margin: 0 }}>
-        청크를 불러오는 중 오류가 발생했습니다.
-      </p>
+      <ErrorText error={error} message="청크를 불러오지 못했습니다." />
     )
   }
 

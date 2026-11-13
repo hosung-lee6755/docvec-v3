@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
+import { ErrorText } from '../ui'
 import {
   useDocumentElements, useUpdateDocumentElement, type DocumentElementItem,
 } from '../../hooks/useDocumentElements'
@@ -11,7 +12,7 @@ const TYPE_LABELS: Record<string, string> = {
 }
 
 export default function ElementsTab({ documentId }: { documentId: string }) {
-  const { data, isLoading, isError } = useDocumentElements(documentId)
+  const { data, isLoading, isError, error } = useDocumentElements(documentId)
   const updateElement = useUpdateDocumentElement()
   const [editId, setEditId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
@@ -53,7 +54,7 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
   }
 
   if (isError) {
-    return <p style={{ color: 'var(--color-danger)', fontSize: 13, margin: 0 }}>요소를 불러오는 중 오류가 발생했습니다.</p>
+    return <ErrorText error={error} message="요소를 불러오지 못했습니다." />
   }
 
   if (!elements.length) {
@@ -165,9 +166,10 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
                     />
                   </label>
                 </div>
+                {updateElement.isError && <ErrorText error={updateElement.error} message="요소를 저장하지 못했습니다." />}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
                   <button
-                    onClick={() => setEditId(null)}
+                    onClick={() => { updateElement.reset(); setEditId(null) }}
                     disabled={updateElement.isPending}
                     className="ds-btn ds-btn--secondary ds-btn--sm"
                     style={{ cursor: 'pointer' }}

@@ -10,7 +10,7 @@ import { getBlockMeta } from '../../lib/workflowBlocks'
 import { apiClient } from '../../lib/apiClient'
 import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../../hooks/useAccess'
 import type { SecurityLevel } from '../../hooks/useDocumentMetadata'
-import { Alert, Button, Field, Input, Modal, Select, Textarea } from '../ui'
+import { Alert, Button, ErrorAlert, Field, Input, Modal, Select, Textarea } from '../ui'
 import { SearchSettingsSection } from './SearchSettingsSection'
 import type { ProjectOption } from './CollectionCreateModal'
 
@@ -180,7 +180,12 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
   const handleReprocess = async () => {
     setReprocessConfirming(false)
     setReprocessResult(null)
-    const result = await reprocessCollection.mutateAsync(collection.id)
+    let result
+    try {
+      result = await reprocessCollection.mutateAsync(collection.id)
+    } catch {
+      return // 실패 원인은 아래 알림이 보여 준다
+    }
     setReprocessResult(`${result.queued}건 재처리 시작됨${result.skipped ? ` (${result.skipped}건 건너뜀)` : ''}`)
   }
 
@@ -342,8 +347,9 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
 
         <SearchSettingsSection key={collection.id} collection={collection} />
 
-        {updateCollection.isError && <Alert tone="danger">컬렉션 수정에 실패했습니다.</Alert>}
+        {updateCollection.isError && <ErrorAlert error={updateCollection.error} message="컬렉션을 수정하지 못했습니다." />}
         {reprocessResult && <Alert tone="success">{reprocessResult}</Alert>}
+        {reprocessCollection.isError && <ErrorAlert error={reprocessCollection.error} message="컬렉션 문서를 다시 처리하지 못했습니다." />}
 
         {reprocessConfirming ? (
           <Alert tone="danger">

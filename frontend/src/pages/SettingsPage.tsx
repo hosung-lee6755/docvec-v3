@@ -6,9 +6,7 @@ import { useChatModels } from '../hooks/useChat'
 import { useAuthStore } from '../store/authStore'
 import AccessTokenSection from '../components/settings/AccessTokenSection'
 import { ROLE_LABELS } from '../lib/roleLabels'
-import {
-  Alert, Badge, Button, Card, DescriptionList, Field, Input, Page, PageBody, PageHeader, Textarea,
-} from '../components/ui'
+import { Alert, Badge, Button, Card, DescriptionList, ErrorAlert, Field, Input, Page, PageBody, PageHeader, Textarea } from '../components/ui'
 import '../styles/screens/user.css'
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -30,7 +28,7 @@ function Loading() {
 }
 
 function ProfileSection() {
-  const { data: profile, isLoading } = useProfile()
+  const { data: profile, isLoading, isError, error, refetch } = useProfile()
   const updateProfile = useUpdateProfile()
   const updateAuthUser = useAuthStore((s) => s.updateUser)
   const [username, setUsername] = useState('')
@@ -52,6 +50,9 @@ function ProfileSection() {
     })
   }
 
+  if (isError) {
+    return <ErrorAlert error={error} message="프로필을 불러오지 못했습니다." onRetry={() => refetch()} />
+  }
   if (isLoading || !profile) {
     return <Loading />
   }
@@ -83,6 +84,7 @@ function ProfileSection() {
             저장
           </Button>
         </div>
+        {updateProfile.isError && <ErrorAlert error={updateProfile.error} message="이름을 저장하지 못했습니다." />}
       </div>
     </SectionCard>
   )
@@ -144,7 +146,7 @@ function PasswordSection() {
           aria-label="새 비밀번호 확인"
         />
         {mismatch && <Alert tone="danger">새 비밀번호가 일치하지 않습니다.</Alert>}
-        {changePassword.isError && <Alert tone="danger">현재 비밀번호가 일치하지 않습니다.</Alert>}
+        {changePassword.isError && <ErrorAlert error={changePassword.error} message="비밀번호를 바꾸지 못했습니다." />}
         <Button
           type="submit"
           variant="primary"
@@ -161,7 +163,7 @@ function PasswordSection() {
 }
 
 function SystemPromptSection() {
-  const { data: profile, isLoading: profileLoading } = useProfile()
+  const { data: profile, isLoading: profileLoading, isError: isProfileError, error: profileError, refetch } = useProfile()
   const { data: modelsData } = useChatModels()
   const setSystemPrompt = useSetSystemPrompt()
   const [value, setValue] = useState('')
@@ -191,6 +193,9 @@ function SystemPromptSection() {
     setSystemPrompt.mutate(null)
   }
 
+  if (isProfileError) {
+    return <ErrorAlert error={profileError} message="시스템 프롬프트를 불러오지 못했습니다." onRetry={() => refetch()} />
+  }
   if (profileLoading || !profile) {
     return <Loading />
   }
@@ -233,12 +238,13 @@ function SystemPromptSection() {
           </Button>
         )}
       </div>
+      {setSystemPrompt.isError && <ErrorAlert error={setSystemPrompt.error} message="시스템 프롬프트를 저장하지 못했습니다." />}
     </SectionCard>
   )
 }
 
 function ApiKeySection() {
-  const { data, isLoading } = useApiKeys()
+  const { data, isLoading, isError, error, refetch } = useApiKeys()
   const setApiKey = useSetApiKey()
   const deleteApiKey = useDeleteApiKey()
   const [drafts, setDrafts] = useState<Record<string, string>>({})
@@ -268,6 +274,9 @@ function ApiKeySection() {
       </p>
 
       {isLoading && <Loading />}
+      {isError && <ErrorAlert error={error} message="API 키 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
+      {setApiKey.isError && <ErrorAlert error={setApiKey.error} message="API 키를 저장하지 못했습니다." />}
+      {deleteApiKey.isError && <ErrorAlert error={deleteApiKey.error} message="API 키를 삭제하지 못했습니다." />}
 
       <div className="user-settings__stack">
         {data?.items.map((item) => (

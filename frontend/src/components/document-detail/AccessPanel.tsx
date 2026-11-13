@@ -6,6 +6,8 @@ import {
 import type { AclEntry, PrincipalType } from '../../hooks/useAccess'
 import { useCollectionMembers } from '../../hooks/useCollections'
 import { Row } from './documentDetailParts'
+import { ErrorText } from '../ui'
+import { describeError } from '../../lib/apiError'
 
 // v3 문서 접근 허용 목록 — 문서 편집 권한이 있는 사용자에게만 보인다(API가 403이면 숨김).
 // 목록이 비어 있으면 컬렉션 권한·보안등급만 적용되고, 항목이 있으면 목록의 사용자·그룹과
@@ -24,8 +26,7 @@ function httpStatus(error: unknown): number | undefined {
 }
 
 function errorMessage(error: unknown): string {
-  const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
-  return typeof detail === 'string' ? detail : '허용 목록을 저장하지 못했습니다.'
+  return describeError(error, '허용 목록을 저장하지 못했습니다.')
 }
 
 function entryKey(e: { principal_type: PrincipalType; principal_id: string }): string {
@@ -42,7 +43,7 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
   if (acl.isError) {
     // 403 = 편집 권한 없음 → 패널 자체를 숨긴다. 그 밖의 오류만 알린다.
     if (httpStatus(acl.error) === 403) return null
-    return <Row label="접근 허용">허용 목록을 불러오지 못했습니다.</Row>
+    return <Row label="접근 허용"><ErrorText error={acl.error} message="허용 목록을 불러오지 못했습니다." /></Row>
   }
   if (!acl.data) return null
 

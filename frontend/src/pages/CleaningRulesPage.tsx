@@ -4,9 +4,7 @@ import {
   useCleaningRules, useCreateCleaningRule, useUpdateCleaningRule, useDeleteCleaningRule,
   type CleaningRule, type CleaningRuleInput, type CleaningRuleType, type CleaningRuleScope,
 } from '../hooks/useCleaningRules'
-import {
-  Badge, Button, EmptyState, Field, IconButton, Input, Modal, Page, PageHeader, Select,
-} from '../components/ui'
+import { Badge, Button, EmptyState, ErrorAlert, Field, IconButton, Input, Modal, Page, PageHeader, Select } from '../components/ui'
 import '../styles/screens/pipeline.css'
 
 const RULE_TYPE_LABELS: Record<CleaningRuleType, string> = {
@@ -34,12 +32,14 @@ function patternPlaceholder(ruleType: CleaningRuleType): string {
 }
 
 function RuleFormModal({
-  initial, onCancel, onSave, isSaving,
+  initial, onCancel, onSave, isSaving, saveError,
 }: {
   initial: CleaningRuleInput
   onCancel: () => void
   onSave: (input: CleaningRuleInput) => void
   isSaving: boolean
+  /** 저장이 실패했을 때의 오류. 없으면 null */
+  saveError: unknown
 }) {
   const [form, setForm] = useState<CleaningRuleInput>(initial)
 
@@ -147,13 +147,14 @@ function RuleFormModal({
           />
           활성화
         </label>
+        {saveError != null && <ErrorAlert error={saveError} message="정제 규칙을 저장하지 못했습니다." />}
       </div>
     </Modal>
   )
 }
 
 export default function CleaningRulesPage() {
-  const { data, isLoading } = useCleaningRules()
+  const { data, isLoading, isError, error, refetch } = useCleaningRules()
   const create = useCreateCleaningRule()
   const update = useUpdateCleaningRule()
   const del = useDeleteCleaningRule()
@@ -191,7 +192,10 @@ export default function CleaningRulesPage() {
           </div>
         )}
 
-        {!isLoading && !rules.length && (
+        {isError && <ErrorAlert error={error} message="정제 규칙 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
+        {del.isError && <ErrorAlert error={del.error} message="정제 규칙을 삭제하지 못했습니다." />}
+
+        {!isLoading && !isError && !rules.length && (
           <EmptyState title="등록된 정제 규칙이 없습니다." description="새 규칙을 만들면 텍스트 정제 블록이 문서 처리 때 적용합니다." />
         )}
 
@@ -272,9 +276,10 @@ export default function CleaningRulesPage() {
             priority: editing.priority,
             enabled: editing.enabled,
           }}
-          onCancel={() => setEditing(null)}
+          onCancel={() => { create.reset(); update.reset(); setEditing(null) }}
           onSave={handleSave}
           isSaving={create.isPending || update.isPending}
+          saveError={create.isError ? create.error : update.isError ? update.error : null}
         />
       )}
     </Page>

@@ -15,13 +15,13 @@ import { CollectionsTable } from '../components/collections/CollectionsTable'
 import { CollectionCreateModal } from '../components/collections/CollectionCreateModal'
 import { CollectionEditModal } from '../components/collections/CollectionEditModal'
 import { CollectionShareModal } from '../components/collections/CollectionShareModal'
-import { Alert, Button, EmptyState, Page, PageBody, PageHeader, Spinner } from '../components/ui'
+import { Button, EmptyState, ErrorAlert, Page, PageBody, PageHeader, Spinner } from '../components/ui'
 
 export default function CollectionsPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const { projectId: routeProjectId } = useParams<{ projectId?: string }>()
-  const { data, isLoading, isError } = useCollections(routeProjectId)
+  const { data, isLoading, isError, error, refetch } = useCollections(routeProjectId)
   const { data: projectsData } = useProjects()
   const { data: embeddingModels } = useEmbeddingModels()
   const deleteCollection = useDeleteCollection()
@@ -54,7 +54,11 @@ export default function CollectionsPage() {
   }, [routeProjectId])
 
   const handleDelete = async (id: string) => {
-    await deleteCollection.mutateAsync(id)
+    try {
+      await deleteCollection.mutateAsync(id)
+    } catch {
+      // 실패 원인은 목록 위 알림이 보여 준다
+    }
   }
 
   const items = data?.items ?? []
@@ -72,13 +76,14 @@ export default function CollectionsPage() {
         </>}
       />
       <PageBody>
+        {deleteCollection.isError && <ErrorAlert error={deleteCollection.error} message="컬렉션을 삭제하지 못했습니다." />}
         {isLoading && (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-8)' }}>
             <Spinner />
           </div>
         )}
 
-        {isError && <Alert tone="danger">컬렉션 목록을 불러오지 못했습니다.</Alert>}
+        {isError && <ErrorAlert error={error} message="컬렉션 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
 
         {!isLoading && !isError && items.length === 0 && (
           <EmptyState

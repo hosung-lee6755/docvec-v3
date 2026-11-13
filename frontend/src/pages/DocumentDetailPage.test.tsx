@@ -282,7 +282,7 @@ describe('DocumentDetailPage', () => {
 
     renderPage()
     expect(screen.getByText('오류 정보')).toBeInTheDocument()
-    expect(screen.getByText('Processing failed')).toBeInTheDocument()
+    expect(screen.getByText(/Processing failed/)).toBeInTheDocument()
   })
 
   it('renders metadata section with editable and read-only fields', () => {

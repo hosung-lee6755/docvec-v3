@@ -1,5 +1,6 @@
 import type { ConnectorStatus, LevelRule } from '../../hooks/useConnectors'
 import type { BadgeTone } from '../ui/classes'
+import { describeError } from '../../lib/apiError'
 
 // 원천 연결 화면에서 쓰는 사람이 읽는 이름표. 값의 정본은 백엔드 sync_engine과 acl_mapping이다.
 
@@ -50,9 +51,9 @@ export function formatDateTime(value: string | null): string {
   return new Date(value).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' })
 }
 
+// 실패 원인까지 붙인 문장. 원인 해석은 lib/apiError.ts 한 곳에서 한다.
 export function errorMessage(error: unknown, fallback: string): string {
-  const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
-  return typeof detail === 'string' ? detail : fallback
+  return describeError(error, fallback)
 }
 
 // 빈 접두어 규칙은 버리고 앞뒤 공백을 지운다

@@ -287,6 +287,11 @@ button.ds-stat:focus-visible, a.ds-stat:focus-visible { outline: none; box-shado
 .ds-alert--success { background: var(--color-success-bg); border-color: var(--color-success-border); color: var(--color-success); }
 .ds-alert--warning { background: var(--color-warning-bg); border-color: var(--color-warning-border); color: var(--color-warning); }
 .ds-alert--danger { background: var(--color-danger-bg); border-color: var(--color-danger-border); color: var(--color-danger); }
+/* 실패 알림: 첫 줄은 무엇을 못 했는지, 둘째 줄은 원인과 할 일 */
+.ds-alert__title { display: block; font-weight: var(--weight-semibold); }
+.ds-alert__cause { display: block; margin-top: 2px; color: var(--color-text-secondary); }
+.ds-alert__actions { display: block; margin-top: var(--space-2); }
+.ds-error-text { font-size: var(--text-sm); color: var(--color-danger); }
 
 /* ---------- 모달 ---------- */
 .ds-modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: var(--space-4); background: rgba(16, 24, 40, 0.45); }
@@ -369,6 +374,27 @@ button.ds-stat:focus-visible, a.ds-stat:focus-visible { outline: none; box-shado
 /* 본문 틀 높이가 고정되면서 화면(.ds-page, flex 세로) 안의 머리, 탭, 요약 띠, 툴바가 줄어들어 잘릴 수 있다.
    이것들은 내용만큼 높이를 지키고, 남는 높이는 본문이 쓴다. */
 .ds-page-header, .ds-tabs, .ds-stat-strip, .ds-toolbar, .ds-bulk-bar, .ds-alert { flex-shrink: 0; }
+
+/* 스크롤해도 화면 머리와 요약 띠는 위에 남는다. 높이 변수는 Page 컴포넌트가 잰다.
+   본문 틀 바깥(좁은 화면에서 틀이 스크롤하지 않을 때)에서는 sticky가 효과 없이 지나간다. */
+.ds-page:not(.ds-page--nested) > .ds-page-header { position: sticky; top: 0; z-index: 6; background: var(--color-surface); }
+.ds-page:not(.ds-page--nested) > .ds-stat-strip { position: sticky; top: var(--ds-sticky-header, 0px); z-index: 5; background: var(--color-surface); }
+/* 화면 상자가 틀 높이로 줄어들면 내용이 상자 밖으로 넘쳐, 오른쪽 패널의 sticky가 줄어든 상자 안에서만
+   동작한다(목록을 내리면 패널이 같이 사라지던 원인). 틀 높이를 채워 안에서 스크롤하는 채팅과
+   워크플로우 편집기만 빼고, 화면 상자는 내용 높이를 지킨다. */
+.ds-main__frame > .ds-page:not(.user-chat):not(.pipeline-editor) { flex-shrink: 0; }
+/* 목록 아래쪽 행을 눌러도 상세 패널이 요약 띠 바로 아래에 보이고, 목록은 그 자리에 남는다.
+   패널이 틀보다 길면 패널 안에서만 스크롤한다. */
+.ds-split > .ds-side-panel {
+  position: sticky;
+  top: var(--ds-sticky-top, 0px);
+  align-self: flex-start;
+  max-height: calc(var(--ds-frame-h, 100vh) - var(--ds-sticky-top, 0px));
+  overflow-y: auto;
+}
+@media (max-width: 860px) {
+  .ds-split > .ds-side-panel { position: static; max-height: none; overflow-y: visible; }
+}
 
 /* 표 안의 이름처럼 글자 모양 그대로 누르는 단추(안쪽 여백 없음). */
 .ds-link-btn { display: inline; padding: 0; border: 0; background: transparent; font: inherit; font-weight: var(--weight-medium); color: var(--color-text); text-align: left; cursor: pointer; }

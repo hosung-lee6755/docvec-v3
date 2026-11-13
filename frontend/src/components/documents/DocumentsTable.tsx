@@ -3,6 +3,7 @@ import { type Document, type DocumentSortBy, type SortOrder } from '../../hooks/
 import { formatLocalDate } from '../../lib/documentLifecycle'
 import { Badge, IconButton, StatusBadge, Button } from '../ui'
 import type { BadgeTone } from '../ui'
+import { explainFailure } from '../../lib/apiError'
 import '../../styles/screens/documents.css'
 
 // 통과(SUCCESS)는 배지를 달지 않는다. 눈여겨볼 판정만 보인다.
@@ -202,8 +203,8 @@ function DocumentStatusCell({ doc }: { doc: Document }) {
         </Badge>
       ))}
       {doc.status === 'FAILED' && doc.error_message && (
-        <span className="documents-text-danger" style={{ fontSize: 'var(--text-xs)' }} title={doc.error_message}>
-          ⚠ 실패 사유
+        <span className="documents-text-danger" style={{ fontSize: 'var(--text-xs)' }} title={explainFailure(doc.error_message)}>
+          ⚠ {explainFailure(doc.error_message).split('.')[0]}
         </span>
       )}
     </div>

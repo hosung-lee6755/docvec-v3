@@ -1,9 +1,7 @@
 import { ShieldOff } from 'lucide-react'
 import { useUsageSummary } from '../hooks/useUsage'
 import { useAuthStore } from '../store/authStore'
-import {
-  Alert, EmptyState, Page, PageBody, PageHeader, Spinner, Stat, StatStrip,
-} from '../components/ui'
+import { EmptyState, ErrorAlert, Page, PageBody, PageHeader, Spinner, Stat, StatStrip } from '../components/ui'
 
 function formatCost(cost: number): string {
   return `$${cost.toFixed(4)}`
@@ -15,7 +13,7 @@ function formatTokens(tokens: number): string {
 
 export default function UsageDashboardPage() {
   const currentUser = useAuthStore((s) => s.user)
-  const { data, isLoading, isError } = useUsageSummary()
+  const { data, isLoading, isError, error, refetch } = useUsageSummary()
 
   if (currentUser?.role !== 'admin') {
     return (
@@ -40,7 +38,7 @@ export default function UsageDashboardPage() {
 
       {isError && (
         <PageBody>
-          <Alert tone="danger">사용량 데이터를 불러오지 못했습니다.</Alert>
+          <ErrorAlert error={error} message="사용량 데이터를 불러오지 못했습니다." onRetry={() => refetch()} />
         </PageBody>
       )}
 

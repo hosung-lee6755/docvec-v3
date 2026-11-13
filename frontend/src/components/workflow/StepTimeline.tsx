@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import type { WorkflowRunStep } from '../../hooks/useWorkflows'
 import { Badge } from '../ui'
+import { explainFailure } from '../../lib/apiError'
 import '../../styles/screens/pipeline.css'
 
 const STEP_STATUS_LABELS: Record<string, string> = {
@@ -51,7 +52,7 @@ export default function StepTimeline({ steps, blockName, renderStepActions }: St
               )}
             </div>
             {step.error_message && (
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>{step.error_message}</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>{explainFailure(step.error_message)}</div>
             )}
             {!!step.warnings?.length && (
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-warning-text)' }}>

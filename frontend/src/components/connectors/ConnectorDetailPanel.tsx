@@ -6,9 +6,10 @@ import {
 import type { ConnectorDetail, LevelRule } from '../../hooks/useConnectors'
 import LevelRulesEditor from './LevelRulesEditor'
 import {
-  COUNT_LABELS, STATUS_LABELS, STATUS_TONE, cleanRules, errorMessage, formatDateTime, reasonLabel,
+  COUNT_LABELS, STATUS_LABELS, STATUS_TONE, cleanRules, formatDateTime, reasonLabel,
 } from './connectorLabels'
-import { Alert, Badge, Button, Field, Input, SidePanel, Spinner } from '../ui'
+import { Alert, Badge, Button, ErrorAlert, ErrorText, Field, Input, SidePanel, Spinner } from '../ui'
+import { explainFailure } from '../../lib/apiError'
 
 // 원천 연결 하나의 상세: 설정 수정, 지금 동기화, 연결 확인, 최근 실행, 보류·오류 파일.
 
@@ -88,7 +89,7 @@ function SettingsForm({ connector }: { connector: ConnectorDetail }) {
           설정 저장
         </Button>
         {update.isSuccess && <span role="status" className="ds-cell-muted" style={{ fontSize: 'var(--text-xs)' }}>저장했습니다. 등급 규칙은 다음 동기화부터 적용됩니다.</span>}
-        {update.isError && <span role="alert" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>{errorMessage(update.error, '설정을 저장하지 못했습니다.')}</span>}
+        {update.isError && <ErrorText error={update.error} message="설정을 저장하지 못했습니다." />}
       </div>
     </form>
   )
@@ -113,7 +114,7 @@ function RunHistory({ connector }: { connector: ConnectorDetail }) {
               <td><Badge tone={STATUS_TONE[run.status]} hasDot>{STATUS_LABELS[run.status]}</Badge></td>
               <td>
                 {runSummary(run.counts)}
-                {run.error_message && <span className="ds-cell-sub" style={{ color: 'var(--color-danger)' }}>{run.error_message}</span>}
+                {run.error_message && <span className="ds-cell-sub" style={{ color: 'var(--color-danger)' }}>{explainFailure(run.error_message)}</span>}
               </td>
             </tr>
           ))}
@@ -182,10 +183,10 @@ function Actions({ connector, onDeleted, onSyncRequested }: {
         </Alert>
       )}
       {sync.isSuccess && <span role="status" className="ds-cell-muted" style={{ fontSize: 'var(--text-xs)' }}>동기화를 요청했습니다. 결과는 아래 실행 기록에 나타납니다.</span>}
-      {sync.isError && <span role="alert" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>{errorMessage(sync.error, '동기화를 요청하지 못했습니다.')}</span>}
+      {sync.isError && <ErrorText error={sync.error} message="동기화를 요청하지 못했습니다." />}
       {test.data && <TestResult ok={test.data.ok} error={test.data.error} sample={test.data.sample} />}
-      {test.isError && <span role="alert" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>{errorMessage(test.error, '연결 확인을 요청하지 못했습니다.')}</span>}
-      {remove.isError && <span role="alert" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-danger)' }}>{errorMessage(remove.error, '연결을 삭제하지 못했습니다.')}</span>}
+      {test.isError && <ErrorText error={test.error} message="연결 확인을 요청하지 못했습니다." />}
+      {remove.isError && <ErrorText error={remove.error} message="연결을 삭제하지 못했습니다." />}
     </div>
   )
 }
@@ -196,7 +197,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 export default function ConnectorDetailPanel({ connectorId, onDeleted }: { connectorId: string; onDeleted: () => void }) {
   const [pollUntil, setPollUntil] = useState(0)
-  const { data: connector, isLoading, isError } = useConnector(connectorId, pollUntil)
+  const { data: connector, isLoading, isError, error } = useConnector(connectorId, pollUntil)
 
   if (isLoading) {
     return (
@@ -208,7 +209,7 @@ export default function ConnectorDetailPanel({ connectorId, onDeleted }: { conne
   if (isError || !connector) {
     return (
       <SidePanel title="원천 연결 상세" label="원천 연결 상세">
-        <Alert tone="danger">연결 정보를 불러오지 못했습니다.</Alert>
+        <ErrorAlert error={error} message="연결 정보를 불러오지 못했습니다." />
       </SidePanel>
     )
   }

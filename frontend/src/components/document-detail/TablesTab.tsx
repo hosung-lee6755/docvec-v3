@@ -1,9 +1,11 @@
 import { Loader2 } from 'lucide-react'
 import type { DocumentTablesResult } from '../../hooks/useDocuments'
+import { ErrorText } from '../ui'
 
 interface TablesTabProps {
   isLoading: boolean
   isError: boolean
+  error?: unknown
   tablesResult: DocumentTablesResult | undefined
   isPdfDoc: boolean
 }
@@ -11,6 +13,7 @@ interface TablesTabProps {
 export default function TablesTab({
   isLoading,
   isError,
+  error,
   tablesResult,
   isPdfDoc,
 }: TablesTabProps) {
@@ -24,9 +27,7 @@ export default function TablesTab({
 
   if (isError) {
     return (
-      <p style={{ color: 'var(--color-danger)', fontSize: 13, margin: 0 }}>
-        표 데이터를 불러오는 중 오류가 발생했습니다.
-      </p>
+      <ErrorText error={error} message="표 데이터를 불러오지 못했습니다." />
     )
   }
 

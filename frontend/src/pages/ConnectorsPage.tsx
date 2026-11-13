@@ -6,10 +6,8 @@ import type { Connector, LevelRule } from '../hooks/useConnectors'
 import { useAuthStore } from '../store/authStore'
 import ConnectorDetailPanel from '../components/connectors/ConnectorDetailPanel'
 import LevelRulesEditor from '../components/connectors/LevelRulesEditor'
-import { STATUS_LABELS, STATUS_TONE, cleanRules, errorMessage, formatDateTime } from '../components/connectors/connectorLabels'
-import {
-  Alert, Badge, Button, Card, EmptyState, Field, Input, Page, PageBody, PageHeader, Select, Spinner, Split, Stat, StatStrip, Toolbar,
-} from '../components/ui'
+import { STATUS_LABELS, STATUS_TONE, cleanRules, formatDateTime } from '../components/connectors/connectorLabels'
+import { Badge, Button, Card, EmptyState, ErrorAlert, Field, Input, Page, PageBody, PageHeader, Select, Spinner, Split, Stat, StatStrip, Toolbar } from '../components/ui'
 
 // v3 마일스톤 3 — 사내 파일 서버(SMB)를 컬렉션에 연결한다(관리자 전용).
 // 파일 서버의 권한을 그대로 옮기므로, 여기서 가져온 문서의 접근 권한은 문서 화면에서 고칠 수 없다.
@@ -113,7 +111,7 @@ function CreateConnectorForm({ onCreated }: { onCreated: (id: string) => void })
           </Button>
           <span className="ds-cell-muted" style={{ fontSize: 'var(--text-xs)' }}>비밀번호는 암호화해 저장하며 다시 보여 주지 않습니다.</span>
         </div>
-        {create.isError && <Alert tone="danger">{errorMessage(create.error, '연결을 추가하지 못했습니다. 입력값을 확인하세요.')}</Alert>}
+        {create.isError && <ErrorAlert error={create.error} message="연결을 추가하지 못했습니다." />}
       </form>
     </Card>
   )
@@ -182,7 +180,7 @@ function ConnectorTable({ connectors, selectedId, onSelect }: {
 
 export default function ConnectorsPage() {
   const currentUser = useAuthStore((s) => s.user)
-  const { data, isLoading, isError } = useConnectors()
+  const { data, isLoading, isError, error, refetch } = useConnectors()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
 
@@ -222,7 +220,7 @@ export default function ConnectorsPage() {
           <PageBody>
             {isCreating && <CreateConnectorForm onCreated={(id) => { setIsCreating(false); setSelectedId(id) }} />}
             {isLoading && <Spinner />}
-            {isError && <Alert tone="danger">원천 연결 목록을 불러오지 못했습니다.</Alert>}
+            {isError && <ErrorAlert error={error} message="원천 연결 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
             {!isLoading && !isError && (
               <>
                 <Toolbar label="원천 연결 도구" meta={`${connectors.length}개`}>

@@ -12,8 +12,8 @@ import {
   type GoldenEvalRun,
 } from '../hooks/useGoldenQueries'
 import { useDocuments } from '../hooks/useDocuments'
-import { apiErrorDetail } from '../lib/apiError'
-import { Alert, Badge, Button, Field, Input, Modal } from './ui'
+import { apiErrorDetail, explainFailure } from '../lib/apiError'
+import { Alert, Badge, Button, ErrorText, Field, Input, Modal } from './ui'
 import GoldenRunDetail from './golden/GoldenRunDetail'
 import GoldenQueryList from './golden/GoldenQueryList'
 import { RUN_STATUS_LABELS, RUN_TRIGGER_LABELS, formatPercent } from './golden/goldenLabels'
@@ -44,7 +44,7 @@ function RunStatusLine({ run }: { run: GoldenEvalRun }) {
       {isGoldenRunActive(run) && (
         <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>(자동으로 갱신됩니다)</span>
       )}
-      {run.status === 'FAILED' && run.error_message && <Alert tone="danger">{run.error_message}</Alert>}
+      {run.status === 'FAILED' && <Alert tone="danger">평가를 마치지 못했습니다. {explainFailure(run.error_message)}</Alert>}
     </div>
   )
 }
@@ -236,6 +236,7 @@ export default function GoldenEvalModal({ collectionId, collectionName, onClose 
             onSave={(queryId, input) => updateGoldenQuery.mutate({ queryId, ...input })}
             onDelete={(queryId) => deleteGoldenQuery.mutate(queryId)}
           />
+          {deleteGoldenQuery.isError && <ErrorText error={deleteGoldenQuery.error} message="골든 쿼리를 삭제하지 못했습니다." />}
         </section>
 
         <section style={{ borderTop: '1px solid var(--color-border)', paddingTop: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>

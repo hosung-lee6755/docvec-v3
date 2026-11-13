@@ -1,4 +1,4 @@
-import { toneFromKrdsClass } from '../ui'
+import { ErrorText, toneFromKrdsClass } from '../ui'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import type { TabKey } from './documentDetailHelpers'
 import type { QualityReport } from '../../hooks/useDocumentRuns'
@@ -176,7 +176,10 @@ export default function QualityTab({
         </div>
       )}
       {(cancelRun.isError || resumeRun.isError) && (
-        <p style={{ color: 'var(--color-danger)', fontSize: 12, margin: 0 }}>작업을 처리하지 못했습니다.</p>
+        <p style={{ margin: 0 }}>
+          {cancelRun.isError && <ErrorText error={cancelRun.error} message="실행을 취소하지 못했습니다." />}
+          {resumeRun.isError && <ErrorText error={resumeRun.error} message="실행을 재개하지 못했습니다." />}
+        </p>
       )}
     </div>
   )

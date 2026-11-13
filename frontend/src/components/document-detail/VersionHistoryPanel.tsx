@@ -76,7 +76,7 @@ export default function VersionHistoryPanel({ documentId }: VersionHistoryPanelP
     return (
       <section aria-label="문서 버전 이력">
         <h3 style={{ fontSize: 14, margin: '0 0 var(--space-1)' }}>문서 버전</h3>
-        <ErrorText message="버전 이력을 불러오지 못했습니다." />
+        <ErrorText message={apiErrorDetail(versions.error, '버전 이력을 불러오지 못했습니다.')} />
       </section>
     )
   }

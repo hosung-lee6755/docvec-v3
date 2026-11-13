@@ -8,4 +8,5 @@ export { Page, PageHeader, PageTitle, PageBody, Card, Toolbar, FilterChip, Segme
 export { Stat, StatStrip, BulkActionBar, Split, SidePanel, DescriptionList, Tabs } from './Data'
 export type { DescriptionItem, TabItem, StatTone } from './Data'
 export { Modal } from './Modal'
+export { ErrorAlert, ErrorText } from './ErrorAlert'
 export { Spinner } from './Spinner'

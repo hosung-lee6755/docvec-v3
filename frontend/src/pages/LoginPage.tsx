@@ -4,17 +4,24 @@ import { useMutation } from '@tanstack/react-query'
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
 import { Alert, Button, Field, Input } from '../components/ui'
+import { describeError } from '../lib/apiError'
 import '../styles/screens/user.css'
 
 const GENERIC_LOGIN_ERROR = "로그인하지 못했습니다. 아이디(이메일)와 비밀번호를 확인하세요."
 
 // 사내 계정 서버 장애(503)와 같은 이메일의 로컬 계정 충돌(409)은 서버 안내를 그대로 보여 준다.
 function loginErrorMessage(error: unknown): string {
-  if (axios.isAxiosError(error) && [409, 503].includes(error.response?.status ?? 0)) {
-    const detail = error.response?.data?.detail
-    if (typeof detail === "string") return detail
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status ?? 0
+    if ([409, 503].includes(status)) {
+      const detail = error.response?.data?.detail
+      if (typeof detail === "string") return detail
+    }
+    // 아이디·비밀번호 문제는 어느 쪽이 틀렸는지 알리지 않는다(계정 존재 여부 노출 방지)
+    if (status === 400 || status === 401 || status === 422) return GENERIC_LOGIN_ERROR
   }
-  return GENERIC_LOGIN_ERROR
+  // 서버에 닿지 못했거나 서버 쪽 문제면 그 원인을 그대로 알린다
+  return describeError(error, '로그인하지 못했습니다.')
 }
 
 export default function LoginPage() {

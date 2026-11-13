@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Download, Loader2, Save, X } from 'lucide-react'
 import { useAcceptTagSuggestion, useDeleteChunk, useDismissTagSuggestion, useDocument, useDocumentChunks, useDocumentContent, useDocumentImages, useDocumentPagesText, useDocumentPreview, useDocumentRevisions, useDocumentTables, useDownloadDocument, useProceedDocument, useReprocessDocument, useRestoreRevision, useRetryDocument, useUpdateChunk, useUpdateDocumentTags } from '../hooks/useDocuments'
 import { useDocumentQuality, useDocumentRuns } from '../hooks/useDocumentRuns'
@@ -27,9 +27,8 @@ import { toBlocksJson, type TabKey } from '../components/document-detail/documen
 import OcrConfidencePanel from '../components/document-detail/OcrConfidencePanel'
 import VersionHistoryPanel from '../components/document-detail/VersionHistoryPanel'
 import { SECURITY_LEVEL_LABELS } from '../hooks/useAccess'
-import {
-  Alert, Button, IconButton, Page, PageHeader, SecurityLevelBadge, Split, StatusBadge, Tabs, Textarea,
-} from '../components/ui'
+import { Alert, Button, ErrorAlert, IconButton, Page, PageHeader, SecurityLevelBadge, Split, StatusBadge, Tabs, Textarea } from '../components/ui'
+import { errorCause, explainFailure } from '../lib/apiError'
 
 // 문서 요약(doc.summary)·추천 태그는 분석 워크플로우 산출물이라 탭이 아니라
 // 옆 정보 패널로 이동했다 — 나머지는 전부 전처리 워크플로우 산출물이다.
@@ -61,21 +60,26 @@ const TAB_ID_PREFIX = 'doc-detail'
 export default function DocumentDetailPage() {
   const { id = '', projectId } = useParams<{ id: string; projectId?: string }>()
   const backTo = projectId ? `/projects/${projectId}/documents` : '/documents'
-  const { data: doc, isLoading, isError } = useDocument(id)
-  const [activeTab, setActiveTab] = useState<TabKey>('original')
+  const { data: doc, isLoading, isError, error: docError } = useDocument(id)
+  // 검토 대기나 실패 화면에서 "?tab=quality"처럼 열 탭을 지정해 들어올 수 있다
+  const [searchParams] = useSearchParams()
+  const [activeTab, setActiveTab] = useState<TabKey>(() => {
+    const requested = searchParams.get('tab')
+    return TABS.find((tab) => tab.key === requested)?.key ?? 'original'
+  })
   // 품질 탭의 "너무 짧은/큰 청크" 경고를 클릭했을 때 청크 탭으로 이동만 하는 게
   // 아니라 실제 문제 청크로 스크롤하기 위한 목표 id 목록.
   const [highlightChunkIds, setHighlightChunkIds] = useState<string[] | null>(null)
   const needsContent = activeTab === 'edit' || activeTab === 'original'
-  const { data: content, isLoading: isContentLoading, isError: isContentError } = useDocumentContent(id, needsContent)
-  const { data: tablesResult, isLoading: isTablesLoading, isError: isTablesError } = useDocumentTables(id, activeTab === 'tables')
-  const { data: imagesResult, isLoading: isImagesLoading, isError: isImagesError } = useDocumentImages(id, activeTab === 'images')
+  const { data: content, isLoading: isContentLoading, isError: isContentError, error: contentError } = useDocumentContent(id, needsContent)
+  const { data: tablesResult, isLoading: isTablesLoading, isError: isTablesError, error: tablesError } = useDocumentTables(id, activeTab === 'tables')
+  const { data: imagesResult, isLoading: isImagesLoading, isError: isImagesError, error: imagesError } = useDocumentImages(id, activeTab === 'images')
   // 청크 탭을 열지 않아도 왼쪽 RAG 현황 패널이 청크 개수를 보여줘야 하므로
   // INDEXED 상태가 되면 곧바로 가져온다(탭 진입 시점까지 미루지 않음). WAITING_REVIEW도
   // 포함 — 검토 게이트에 걸린 문서도 chunk_split이 이미 만든(아직 미임베딩) 청크를
   // 패널에서 바로 보여줘야 한다.
-  const { data: chunksResult, isLoading: isChunksLoading, isError: isChunksError } = useDocumentChunks(id, activeTab === 'chunks' || doc?.status === 'INDEXED' || doc?.status === 'WAITING_REVIEW')
-  const { data: previewResult, isError: isPreviewError } = useDocumentPreview(id, activeTab === 'original')
+  const { data: chunksResult, isLoading: isChunksLoading, isError: isChunksError, error: chunksError } = useDocumentChunks(id, activeTab === 'chunks' || doc?.status === 'INDEXED' || doc?.status === 'WAITING_REVIEW')
+  const { data: previewResult, isError: isPreviewError, error: previewError } = useDocumentPreview(id, activeTab === 'original')
   const { data: pagesTextResult } = useDocumentPagesText(id, activeTab === 'original')
   const [originalPage, setOriginalPage] = useState(1)
   const { data: revisionsResult } = useDocumentRevisions(id, activeTab === 'edit')
@@ -174,9 +178,7 @@ export default function DocumentDetailPage() {
         a.rel = 'noopener noreferrer'
         a.click()
       },
-      onError: () => {
-        // Error message will be shown by mutation error handler
-      },
+      // 실패하면 아래 MutationErrorBanner가 원인과 함께 알린다
     })
   }
 
@@ -245,8 +247,8 @@ export default function DocumentDetailPage() {
 
       {isError && (
         <Alert tone="warning">
-          <strong>문서 정보를 새로고침하는 중 오류가 발생했습니다</strong>
-          <div>표시된 정보가 최신이 아닐 수 있습니다. 페이지를 새로고침하거나 나중에 다시 시도하세요.</div>
+          <strong>문서 정보를 새로 불러오지 못했습니다.</strong>
+          <div>{errorCause(docError)} 지금 보이는 정보는 최신이 아닐 수 있습니다.</div>
         </Alert>
       )}
 
@@ -260,9 +262,10 @@ export default function DocumentDetailPage() {
           { label: '청크 수정', mutation: updateChunk },
           { label: '청크 삭제', mutation: deleteChunk },
           { label: '재시도 요청', mutation: retryDoc },
+          { label: '원본 내려받기', mutation: download },
         ]
           .filter(({ mutation }) => mutation.isError)
-          .map(({ label, mutation }) => ({ label, onDismiss: () => mutation.reset() }))}
+          .map(({ label, mutation }) => ({ label, error: mutation.error, onDismiss: () => mutation.reset() }))}
       />
 
       {reprocessModal && (
@@ -330,7 +333,7 @@ export default function DocumentDetailPage() {
                   />
                 )}
                 {proceed.isError && (
-                  <Alert tone="danger">처리를 재개하지 못했습니다.</Alert>
+                  <ErrorAlert error={proceed.error} message="처리를 재개하지 못했습니다." />
                 )}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-3)' }}>
                   <Button
@@ -353,7 +356,7 @@ export default function DocumentDetailPage() {
                     fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap',
                     wordBreak: 'break-all', margin: 0,
                   }}>
-                    {doc.error_message ?? '오류 메시지 없음'}
+                    {explainFailure(doc.error_message)}
                   </pre>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
                     <Button
@@ -404,6 +407,7 @@ export default function DocumentDetailPage() {
                       isLoading={isContentLoading}
                       content={content}
                       isContentError={isContentError}
+                      contentError={contentError}
                       revisionsResult={revisionsResult}
                       editNodesResult={editNodesResult}
                       editedContent={editedContent}
@@ -420,6 +424,7 @@ export default function DocumentDetailPage() {
                     <TablesTab
                       isLoading={isTablesLoading}
                       isError={isTablesError}
+                      error={tablesError}
                       tablesResult={tablesResult}
                       isPdfDoc={isPdfDoc}
                     />
@@ -429,6 +434,7 @@ export default function DocumentDetailPage() {
                     <ImagesTab
                       isLoading={isImagesLoading}
                       isError={isImagesError}
+                      error={imagesError}
                       imagesResult={imagesResult}
                       isPdfDoc={isPdfDoc}
                     />
@@ -438,6 +444,7 @@ export default function DocumentDetailPage() {
                       documentId={id}
                       isLoading={isChunksLoading}
                       isError={isChunksError}
+                      error={chunksError}
                       chunksResult={chunksResult}
                       isPdfDoc={isPdfDoc}
                       chunkEditId={chunkEditId}
@@ -457,6 +464,7 @@ export default function DocumentDetailPage() {
                     <OriginalTab
                       isContentLoading={isContentLoading}
                       isPreviewError={isPreviewError}
+                      previewError={previewError}
                       content={content}
                       pagesTextResult={pagesTextResult}
                       previewResult={previewResult}

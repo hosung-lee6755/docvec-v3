@@ -11,9 +11,7 @@ import { useSearchHistory } from '../hooks/useSearchHistory'
 import { useProjects } from '../hooks/useProjects'
 import { useAuthStore } from '../store/authStore'
 import { PROCESSING_STATUSES } from '../lib/documentStatus'
-import {
-  Button, Card, Page, PageBody, PageHeader, Stat, StatStrip, StatusBadge,
-} from '../components/ui'
+import { Button, Card, ErrorAlert, Page, PageBody, PageHeader, Stat, StatStrip, StatusBadge } from '../components/ui'
 import type { StatTone } from '../components/ui'
 import '../styles/screens/user.css'
 
@@ -75,7 +73,7 @@ export default function DashboardPage() {
     ? errorCount > 2 ? false : errorCount > 0 ? 30000 : baseInterval
     : false // Pause when tab is hidden
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['stats'],
     queryFn: fetchStats,
     refetchInterval,
@@ -146,6 +144,7 @@ export default function DashboardPage() {
       </StatStrip>
 
       <PageBody>
+        {isError && <ErrorAlert error={error} message="요약 통계를 불러오지 못했습니다. 위 숫자는 마지막으로 받은 값이거나 비어 있습니다." onRetry={() => refetch()} />}
         {processingDocs.length > 0 && (
           <Card
             title={(

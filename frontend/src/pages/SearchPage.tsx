@@ -7,9 +7,7 @@ import { useCollections } from '../hooks/useCollections'
 import { useAllTags } from '../hooks/useDocuments'
 import { useSearchHistory } from '../hooks/useSearchHistory'
 import { CitationEvidence, LowOcrBadge, type RetrievalEvidence } from '../components/chat/CitationEvidence'
-import {
-  Alert, Badge, Button, EmptyState, FilterChip, Input, Page, PageBody, PageHeader, SearchInput, Segmented, Select, Toolbar,
-} from '../components/ui'
+import { Badge, Button, EmptyState, ErrorAlert, FilterChip, Input, Page, PageBody, PageHeader, SearchInput, Segmented, Select, Toolbar } from '../components/ui'
 import '../styles/screens/user.css'
 
 interface SearchResult {
@@ -227,7 +225,7 @@ export default function SearchPage() {
         )}
 
         {search.isError && (
-          <Alert tone="danger">검색 중 오류가 발생했습니다.</Alert>
+          <ErrorAlert error={search.error} message="검색하지 못했습니다." />
         )}
 
         {!search.isPending && search.isSuccess && search.data.items.length === 0 && (

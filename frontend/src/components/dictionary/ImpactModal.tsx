@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { useStartPartialReprocess } from '../../hooks/useDocumentRuns'
 import { type DictionaryImpact, type DictionaryEntryType } from '../../hooks/useDictionary'
-import { Alert, Button, Modal } from '../ui'
+import { Alert, Button, ErrorAlert, Modal } from '../ui'
 import '../../styles/screens/pipeline.css'
 
 const ENTRY_TYPE_TO_BLOCK_TYPE: Record<DictionaryEntryType, string> = {
@@ -23,11 +24,15 @@ export function ImpactModal({
   onReprocessDone,
 }: ImpactModalProps) {
   const startPartialReprocess = useStartPartialReprocess()
+  const [failure, setFailure] = useState<{ count: number; error: unknown } | null>(null)
 
   const handleReprocessAffected = async () => {
     if (!impact) return
     const blockType = ENTRY_TYPE_TO_BLOCK_TYPE[tab]
     let done = 0
+    let failed = 0
+    let firstError: unknown = null
+    setFailure(null)
     for (const doc of impact.documents) {
       try {
         await startPartialReprocess.mutateAsync({
@@ -36,10 +41,13 @@ export function ImpactModal({
           reason: '사전 항목 변경에 따른 일괄 재처리',
         })
         done += 1
-      } catch {
-        // 개별 문서 재처리 실패는 건너뛰고 나머지는 계속 진행
+      } catch (err) {
+        // 개별 문서 재처리 실패는 건너뛰고 나머지는 계속 진행하되, 몇 건이 왜 실패했는지는 알린다
+        failed += 1
+        firstError ??= err
       }
     }
+    if (failed) setFailure({ count: failed, error: firstError })
     onReprocessDone(done)
   }
 
@@ -83,6 +91,9 @@ export function ImpactModal({
         </div>
         {reprocessDone !== null && (
           <Alert tone="success">{reprocessDone}건 재처리를 시작했습니다.</Alert>
+        )}
+        {failure && (
+          <ErrorAlert error={failure.error} message={`${failure.count}건은 재처리를 시작하지 못했습니다.`} />
         )}
       </div>
     </Modal>

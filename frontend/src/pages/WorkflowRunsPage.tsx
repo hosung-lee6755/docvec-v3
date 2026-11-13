@@ -13,10 +13,9 @@ import {
 import { apiClient } from '../lib/apiClient'
 import { getBlockMeta } from '../lib/workflowBlocks'
 import StepTimeline from '../components/workflow/StepTimeline'
-import {
-  Alert, Badge, Button, EmptyState, IconButton, Page, PageHeader, Stat, StatStrip,
-} from '../components/ui'
+import { Alert, Badge, Button, EmptyState, ErrorAlert, IconButton, Page, PageHeader, Stat, StatStrip } from '../components/ui'
 import type { BadgeTone } from '../components/ui/classes'
+import { describeError, explainFailure } from '../lib/apiError'
 import '../styles/screens/pipeline.css'
 
 const RUN_STATUS_BADGE: Record<string, { label: string; tone: BadgeTone }> = {
@@ -156,6 +155,11 @@ export default function WorkflowRunsPage() {
           <Stat label="진행 중" value={activeCount} />
         </StatStrip>
       )}
+      {deleteRun.isError && (
+        <div style={{ padding: 'var(--space-3) var(--space-5) 0' }}>
+          <ErrorAlert error={deleteRun.error} message="실행 기록을 삭제하지 못했습니다." />
+        </div>
+      )}
 
       {!runItems.length && (
         <div style={{ padding: 'var(--space-4) var(--space-5)' }}>
@@ -219,9 +223,13 @@ export default function WorkflowRunsPage() {
                               disabled={deleteRun.isPending}
                               onClick={async () => {
                                 if (!workflowId) return
-                                await deleteRun.mutateAsync({ workflowId, runId: run.id })
-                                setConfirmDeleteId(null)
-                                if (selectedRunId === run.id) setSelectedRunId(null)
+                                try {
+                                  await deleteRun.mutateAsync({ workflowId, runId: run.id })
+                                  setConfirmDeleteId(null)
+                                  if (selectedRunId === run.id) setSelectedRunId(null)
+                                } catch {
+                                  // 실패 원인은 요약 띠 아래 알림이 보여 준다
+                                }
                               }}
                             >
                               확인
@@ -266,14 +274,14 @@ export default function WorkflowRunsPage() {
               <Alert tone="warning">
                 {(runDetailError as { response?: { status?: number } }).response?.status === 403
                   ? '이 실행의 상세를 볼 권한이 없습니다. 대상 문서가 없거나 접근할 수 없는 실행입니다.'
-                  : '실행 상세를 불러오지 못했습니다. 잠시 후 다시 시도하세요.'}
+                  : describeError(runDetailError, '실행 상세를 불러오지 못했습니다.')}
               </Alert>
             )}
 
             {selectedRunId && runDetail && (
               <>
                 {runDetail.run.error_message && (
-                  <Alert tone="danger">{runDetail.run.error_message}</Alert>
+                  <Alert tone="danger">실행이 중간에 멈췄습니다. {explainFailure(runDetail.run.error_message)}</Alert>
                 )}
 
                 <div className="pipeline-runs-detail__section" style={{ marginTop: runDetail.run.error_message ? 'var(--space-4)' : 0 }}>

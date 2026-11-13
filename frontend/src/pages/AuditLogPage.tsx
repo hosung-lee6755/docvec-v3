@@ -3,9 +3,7 @@ import { ScrollText, ShieldOff } from 'lucide-react'
 import { useAuditLogs } from '../hooks/useAudit'
 import type { AuditLogItem } from '../hooks/useAudit'
 import { useAuthStore } from '../store/authStore'
-import {
-  Alert, Button, EmptyState, Page, PageBody, PageHeader, Select, Spinner, Stat, StatStrip, Toolbar,
-} from '../components/ui'
+import { Button, EmptyState, ErrorAlert, Page, PageBody, PageHeader, Select, Spinner, Stat, StatStrip, Toolbar } from '../components/ui'
 
 const PAGE_SIZE = 50
 
@@ -62,7 +60,7 @@ export default function AuditLogPage() {
   const [action, setAction] = useState('')
   const [page, setPage] = useState(0)
 
-  const { data, isLoading, isError } = useAuditLogs({
+  const { data, isLoading, isError, error, refetch } = useAuditLogs({
     action: action || undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
@@ -111,7 +109,7 @@ export default function AuditLogPage() {
 
       <PageBody>
         {isLoading && <Spinner />}
-        {isError && <Alert tone="danger">감사 로그를 불러오지 못했습니다.</Alert>}
+        {isError && <ErrorAlert error={error} message="감사 로그를 불러오지 못했습니다." onRetry={() => refetch()} />}
         {!isLoading && !isError && items.length === 0 && (
           <EmptyState icon={<ScrollText size={48} aria-hidden="true" />} title="기록된 로그가 없습니다." />
         )}

@@ -5,6 +5,7 @@ import {
 } from '../../hooks/useDocumentStructure'
 import { useDocumentRuns, useReprocessImpact } from '../../hooks/useDocumentRuns'
 import { useWorkflowRun } from '../../hooks/useWorkflows'
+import { ErrorText } from '../ui'
 
 const STRUCTURE_ANALYZE_BLOCK_TYPE = 'structure_analyze'
 const EMPTY_NODES: DocumentNodeItem[] = []
@@ -78,7 +79,7 @@ interface StructureTabProps {
 }
 
 export default function StructureTab({ documentId, onViewInOriginal, onReprocessFromStructure }: StructureTabProps) {
-  const { data, isLoading } = useDocumentNodes(documentId)
+  const { data, isLoading, isError, error } = useDocumentNodes(documentId)
   const updateNode = useUpdateDocumentNode()
   const [selected, setSelected] = useState<DocumentNodeItem | null>(null)
   const [levelInput, setLevelInput] = useState('')
@@ -129,6 +130,8 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
       fontName: fontNameInput || undefined,
     }, { onSuccess: () => setShowReprocessBanner(true) })
   }
+
+  if (isError) return <ErrorText error={error} message="문서 구조를 불러오지 못했습니다." />
 
   if (isLoading) {
     return (
@@ -277,6 +280,7 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
                   </button>
                 </div>
               )}
+              {updateNode.isError && <ErrorText error={updateNode.error} message="구조 보정을 저장하지 못했습니다." />}
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <button
                   type="button"

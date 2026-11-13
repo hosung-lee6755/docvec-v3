@@ -13,9 +13,8 @@ import {
   useDeleteProjectApiKey,
 } from '../hooks/useProjects'
 import { useChatModels } from '../hooks/useChat'
-import {
-  Alert, Badge, Button, Field, IconButton, Input, Modal, Page, PageHeader, Select, Spinner, Tabs, Textarea,
-} from '../components/ui'
+import { Alert, Badge, Button, ErrorAlert, Field, IconButton, Input, Modal, Page, PageBody, PageHeader, Select, Spinner, Tabs, Textarea } from '../components/ui'
+import { describeError } from '../lib/apiError'
 
 const API_KEY_PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI',
@@ -42,9 +41,18 @@ const SETTINGS_TAB_ITEMS: ReadonlyArray<{ value: SettingsTab; label: React.React
 
 export default function ProjectWorkspace() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { data: project, isLoading } = useProject(projectId ?? null)
+  const { data: project, isLoading, isError, error, refetch } = useProject(projectId ?? null)
   const [showSettings, setShowSettings] = useState(false)
 
+  if (isError) {
+    return (
+      <Page>
+        <PageBody>
+          <ErrorAlert error={error} message="프로젝트를 불러오지 못했습니다." onRetry={() => refetch()} />
+        </PageBody>
+      </Page>
+    )
+  }
   if (isLoading || !project) {
     return <Spinner />
   }
@@ -149,12 +157,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     setDescription(project.description ?? '')
     setEditing(true)
   }
-  const handleSave = async (e: React.FormEvent) => {
+  const handleSave = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
-    await updateProject.mutateAsync({ id: projectId, name: name.trim(), description: description.trim() || undefined })
-    setEditing(false)
-    setSaved(true)
+    updateProject.mutate(
+      { id: projectId, name: name.trim(), description: description.trim() || undefined },
+      { onSuccess: () => { setEditing(false); setSaved(true) } },
+    )
   }
 
   if (!editing) {
@@ -186,15 +195,16 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       </Field>
       <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
         <Button type="submit" variant="primary" size="sm" disabled={updateProject.isPending}>저장</Button>
-        <Button variant="secondary" size="sm" onClick={() => setEditing(false)}>취소</Button>
+        <Button variant="secondary" size="sm" onClick={() => { updateProject.reset(); setEditing(false) }}>취소</Button>
       </div>
+      {updateProject.isError && <ErrorAlert error={updateProject.error} message="프로젝트 정보를 저장하지 못했습니다." />}
     </form>
   )
 }
 
 function ProjectMembersTab({ projectId }: { projectId: string }) {
   const { data: project } = useProject(projectId)
-  const { data: memberData } = useProjectMembers(projectId)
+  const { data: memberData, isError: isMembersError, error: membersError, refetch: refetchMembers } = useProjectMembers(projectId)
   const inviteMember = useInviteProjectMember()
   const removeMember = useRemoveProjectMember()
 
@@ -213,8 +223,8 @@ function ProjectMembersTab({ projectId }: { projectId: string }) {
       await inviteMember.mutateAsync({ projectId, email: inviteEmail.trim(), role: inviteRole })
       setInviteEmail('')
       setInviteRole('viewer')
-    } catch {
-      setInviteError('초대에 실패했습니다. 가입된 사용자의 이메일인지 확인하세요.')
+    } catch (err) {
+      setInviteError(describeError(err, '초대하지 못했습니다.'))
     }
   }
 
@@ -254,6 +264,8 @@ function ProjectMembersTab({ projectId }: { projectId: string }) {
         </form>
       )}
       {inviteError && <Alert tone="danger">{inviteError}</Alert>}
+      {removeMember.isError && <ErrorAlert error={removeMember.error} message="멤버를 제거하지 못했습니다." />}
+      {isMembersError && <ErrorAlert error={membersError} message="멤버 목록을 불러오지 못했습니다." onRetry={() => refetchMembers()} />}
       <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', margin: 0, lineHeight: 1.6 }}>
         프로젝트 멤버는 이 프로젝트에 속한 모든 컬렉션·문서·채팅에 자동으로 접근합니다.
         특정 컬렉션에서 일부 멤버를 제외하려면 해당 컬렉션의 공유 설정에서 접근 범위를 제한하세요.
@@ -378,6 +390,7 @@ function ProjectAiTab({ projectId }: { projectId: string }) {
           </Button>
         )}
       </div>
+      {setSystemPrompt.isError && <ErrorAlert error={setSystemPrompt.error} message="AI 지침을 저장하지 못했습니다." />}
 
       <ProjectApiKeySection projectId={projectId} />
     </div>
@@ -385,7 +398,7 @@ function ProjectAiTab({ projectId }: { projectId: string }) {
 }
 
 function ProjectApiKeySection({ projectId }: { projectId: string }) {
-  const { data, isLoading } = useProjectApiKeys(projectId)
+  const { data, isLoading, isError, error, refetch } = useProjectApiKeys(projectId)
   const setApiKey = useSetProjectApiKey()
   const deleteApiKey = useDeleteProjectApiKey()
   const [drafts, setDrafts] = useState<Record<string, string>>({})
@@ -418,6 +431,9 @@ function ProjectApiKeySection({ projectId }: { projectId: string }) {
       </p>
 
       {isLoading && <Spinner />}
+      {isError && <ErrorAlert error={error} message="프로젝트 API 키를 불러오지 못했습니다." onRetry={() => refetch()} />}
+      {setApiKey.isError && <ErrorAlert error={setApiKey.error} message="API 키를 저장하지 못했습니다." />}
+      {deleteApiKey.isError && <ErrorAlert error={deleteApiKey.error} message="API 키를 삭제하지 못했습니다." />}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
         {data?.items.map((item) => (

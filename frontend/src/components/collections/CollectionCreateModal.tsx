@@ -4,7 +4,7 @@ import { useCreateCollection } from '../../hooks/useCollections'
 import { useWorkflows } from '../../hooks/useWorkflows'
 import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../../hooks/useAccess'
 import type { SecurityLevel } from '../../hooks/useDocumentMetadata'
-import { Alert, Button, Field, Input, Modal, Select, Textarea } from '../ui'
+import { Button, ErrorAlert, Field, Input, Modal, Select, Textarea } from '../ui'
 
 export interface ProjectOption {
   id: string
@@ -145,7 +145,7 @@ export function CollectionCreateModal({ projects, routeProjectId, initialProject
           )}
         </Field>
 
-        {createCollection.isError && <Alert tone="danger">컬렉션 생성에 실패했습니다.</Alert>}
+        {createCollection.isError && <ErrorAlert error={createCollection.error} message="컬렉션을 만들지 못했습니다." />}
       </form>
     </Modal>
   )

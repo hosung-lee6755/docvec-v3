@@ -2,7 +2,8 @@ import { useNavigate } from 'react-router-dom'
 import { AlertTriangle } from 'lucide-react'
 import { useProcessingStats } from '../hooks/useProcessingStats'
 import { getBlockMeta } from '../lib/workflowBlocks'
-import { Card, Page, PageHeader, Spinner, Stat, StatStrip } from '../components/ui'
+import { Card, ErrorAlert, Page, PageBody, PageHeader, Spinner, Stat, StatStrip } from '../components/ui'
+import { explainFailure } from '../lib/apiError'
 import '../styles/screens/documents.css'
 
 const FAILURE_RATE_WARNING_THRESHOLD = 0.05
@@ -18,13 +19,25 @@ function formatSeconds(value: number | null): string {
 
 export default function ProcessingStatusPage() {
   const navigate = useNavigate()
-  const { data, isLoading } = useProcessingStats()
+  const { data, isLoading, isError, error, refetch } = useProcessingStats()
 
   if (isLoading) {
     return (
       <Page>
         <PageHeader title="문서 처리 현황" subtitle="최근 24시간" />
         <div className="documents-center"><Spinner /></div>
+      </Page>
+    )
+  }
+
+  // 조회 실패를 0건으로 보이지 않게 한다
+  if (isError) {
+    return (
+      <Page>
+        <PageHeader title="문서 처리 현황" subtitle="최근 24시간" />
+        <PageBody>
+          <ErrorAlert error={error} message="처리 현황을 불러오지 못했습니다." onRetry={() => refetch()} />
+        </PageBody>
       </Page>
     )
   }
@@ -44,7 +57,7 @@ export default function ProcessingStatusPage() {
           label="검토 대기"
           value={waitingCount}
           tone={waitingCount > 0 ? 'warning' : 'default'}
-          onClick={() => navigate('/documents?status=WAITING_REVIEW')}
+          onClick={() => navigate('/review-queue')}
         />
         <Stat label="큐 대기" value={formatSeconds(data?.avg_queue_seconds ?? null)} />
       </StatStrip>
@@ -100,7 +113,7 @@ export default function ProcessingStatusPage() {
                     {f.filename}
                   </button>
                   <span className="documents-text-danger" style={{ fontSize: 'var(--text-xs)' }}>
-                    {f.error_message ?? '오류 메시지 없음'}
+                    {explainFailure(f.error_message)}
                   </span>
                 </div>
               ))}

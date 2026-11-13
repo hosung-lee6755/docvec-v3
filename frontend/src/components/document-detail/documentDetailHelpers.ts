@@ -76,6 +76,7 @@ export function documentLanguageLabel(code: string): string {
 
 export const REVISION_SOURCE_LABELS: Record<string, string> = {
   PARSE: '자동 파싱',
+  CLEAN: '정제 결과',
   REVIEW_EDIT: '검토 단계 수정',
   RAG_EDIT: 'RAG 데이터 수정',
   RESTORE: '이력 복원',

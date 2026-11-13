@@ -124,7 +124,7 @@ export function useDocuments(options: UseDocumentsOptions = {}) {
       // 배지(useWaitingReviewCount)가 백그라운드에서 새로 WAITING_REVIEW가 된
       // 문서를 반영하지 못하고 마운트 시점 값에 고정되는 버그가 있었다(사용자
       // 확인 2026-07-21, "검토대기문서는 3건인데... 1이라는 숫자가 있다").
-      if (status === 'WAITING_REVIEW' || status === 'FAILED') return 15000
+      if (status?.split(',').some((s) => s === 'WAITING_REVIEW' || s === 'FAILED')) return 15000
       const items = query.state.data?.items ?? []
       const hasProcessing = items.some((d) => PROCESSING_STATUSES.includes(d.status))
       return hasProcessing ? 3000 : false

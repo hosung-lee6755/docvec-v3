@@ -5,16 +5,14 @@ import { useAuthStore } from '../store/authStore'
 import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../hooks/useAccess'
 import type { SecurityLevel } from '../hooks/useDocumentMetadata'
 import { ROLE_LABELS } from '../lib/roleLabels'
-import {
-  Alert, Badge, Button, EmptyState, IconButton, Page, PageBody, PageHeader, Select, Spinner, Stat, StatStrip,
-} from '../components/ui'
+import { Badge, Button, EmptyState, ErrorAlert, IconButton, Page, PageBody, PageHeader, Select, Spinner, Stat, StatStrip } from '../components/ui'
 
 const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000001'
 
 
 export default function UsersPage() {
   const currentUser = useAuthStore((s) => s.user)
-  const { data, isLoading, isError } = useUsers()
+  const { data, isLoading, isError, error, refetch } = useUsers()
   const updateUser = useUpdateUser()
   const deleteUser = useDeleteUser()
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -44,8 +42,12 @@ export default function UsersPage() {
   }
 
   const handleDelete = async (id: string) => {
-    await deleteUser.mutateAsync(id)
-    setConfirmDeleteId(null)
+    try {
+      await deleteUser.mutateAsync(id)
+      setConfirmDeleteId(null)
+    } catch {
+      // 실패 원인은 목록 위 알림이 보여 준다
+    }
   }
 
   return (
@@ -58,13 +60,15 @@ export default function UsersPage() {
       </StatStrip>
 
       <PageBody>
+        {updateUser.isError && <ErrorAlert error={updateUser.error} message="사용자 정보를 바꾸지 못했습니다." />}
+        {deleteUser.isError && <ErrorAlert error={deleteUser.error} message="사용자를 삭제하지 못했습니다." />}
         {isLoading && (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-8)' }}>
             <Spinner />
           </div>
         )}
 
-        {isError && <Alert tone="danger">사용자 목록을 불러오지 못했습니다.</Alert>}
+        {isError && <ErrorAlert error={error} message="사용자 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
 
         {!isLoading && !isError && users.length === 0 && (
           <EmptyState icon={<Users size={48} aria-hidden="true" />} title="사용자가 없습니다." />
