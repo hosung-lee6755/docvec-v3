@@ -109,6 +109,7 @@ async def change_my_password(
     if not verify_password(data.current_password, current_user.hashed_password):
         raise HTTPException(status_code=403, detail="현재 비밀번호가 일치하지 않습니다")
     current_user.hashed_password = get_password_hash(data.new_password)
+    current_user.must_change_password = False
     await db.commit()
     return {"message": "비밀번호가 변경되었습니다"}
 

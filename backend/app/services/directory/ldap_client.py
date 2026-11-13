@@ -33,6 +33,8 @@ _IN_CHAIN = "1.2.840.113556.1.4.1941"
 _MAX_LOGIN_LEN = 255
 _USER_ATTRS = ["objectSid", "sAMAccountName", "userPrincipalName", "mail", "displayName", "userAccountControl"]
 _GROUP_ATTRS = ["objectSid", "cn", "description"]
+# 기본 그룹(primary group)은 member/memberOf에 나타나지 않아 따로 찾는다
+_PRIMARY_ATTRS = ["objectSid", "primaryGroupID"]
 
 
 class DirectoryUnavailable(Exception):
@@ -142,11 +144,12 @@ class LdapDirectoryClient:
         except LDAPException as exc:
             raise DirectoryUnavailable(f"service bind failed: {type(exc).__name__}") from exc
 
-    def _search(self, conn, base: str, flt: str, attrs: list[str]) -> list[dict]:
+    def _search(self, conn, base: str, flt: str, attrs: list[str], scope=None) -> list[dict]:
         # 한 번의 search(paged_size=...)는 첫 페이지(500건)만 돌려준다. 사용자가 그보다 많으면
         # 나머지가 "AD에서 사라진 사용자"로 보여 비활성화되므로 반드시 끝까지 넘겨 읽는다.
         entries = conn.extend.standard.paged_search(
-            base, flt, attributes=attrs, paged_size=_PAGE_SIZE, generator=False,
+            base, flt, search_scope=scope or ldap3.SUBTREE, attributes=attrs, paged_size=_PAGE_SIZE,
+            generator=False,
         )
         if conn.result.get("result") not in (0, 32):  # 32 = noSuchObject
             raise DirectoryUnavailable(f"search failed: {conn.result.get('description')}")
@@ -207,14 +210,32 @@ class LdapDirectoryClient:
             raise DirectoryUnavailable(f"user bind failed: {type(exc).__name__}") from exc
         return user
 
+    def _primary_group(self, conn, user_dn: str) -> DirectoryGroup | None:
+        """사용자의 기본 그룹. SID는 사용자 SID의 도메인 부분과 primaryGroupID로 만든다."""
+        me = self._search(conn, user_dn, "(objectClass=user)", _PRIMARY_ATTRS, scope=ldap3.BASE)
+        if len(me) != 1:
+            return None
+        rid = _first(me[0], "primaryGroupID")
+        user_sid = _entry_sid(me[0])
+        if not rid or "-" not in user_sid:
+            return None
+        group_sid = f"{user_sid.rsplit('-', 1)[0]}-{int(rid)}"
+        flt = f"(&(objectClass=group)(objectSid={escape_filter_chars(group_sid)}))"
+        found = self._search(conn, self._config.group_base_dn or self._config.base_dn, flt, _GROUP_ATTRS)
+        return self._to_group(found[0]) if len(found) == 1 else None
+
     def user_groups(self, user_dn: str) -> list[DirectoryGroup]:
         conn = self._service()
         try:
             flt = f"(&(objectClass=group)(member:{_IN_CHAIN}:={escape_filter_chars(user_dn)}))"
             entries = self._search(conn, self._config.group_base_dn or self._config.base_dn, flt, _GROUP_ATTRS)
+            groups = [self._to_group(e) for e in entries]
+            primary = self._primary_group(conn, user_dn)
         finally:
             conn.unbind()
-        return [self._to_group(e) for e in entries]
+        if primary is not None and primary.sid not in {g.sid for g in groups}:
+            groups.append(primary)
+        return groups
 
     def list_users(self) -> list[DirectoryUser]:
         conn = self._service()

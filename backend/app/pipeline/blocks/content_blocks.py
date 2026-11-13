@@ -122,6 +122,41 @@ def _pick_category(raw: str, categories: list[str]) -> str:
     return categories[-1]
 
 
+def _split_category(entry: str) -> tuple[str, str | None]:
+    """설정의 카테고리 한 줄. "이름: 설명"으로 쓰면 설명을 모델에 함께 준다."""
+    name, sep, description = entry.partition(":")
+    if not sep:
+        return entry.strip(), None
+    return name.strip(), description.strip() or None
+
+
+def _filename_keys(name: str) -> list[str]:
+    """파일명에서 찾을 이 카테고리의 핵심어. 한국어 복합 명사는 끝 단어가 종류를 말한다("정부 공고" → "공고").
+    "공고문"처럼 '문'으로 끝나면 "공고"도 찾는다."""
+    head = name.split()[-1]
+    keys = [head]
+    if len(head) >= 3 and head.endswith("문"):
+        keys.append(head[:-1])
+    return keys
+
+
+def _category_from_filename(filename: str, categories: list[str]) -> str | None:
+    """파일명이 카테고리 하나만 가리키면 그것을 고른다. 서로 다른 카테고리를 둘 이상 가리키면 모델에 맡긴다.
+    한 핵심어가 다른 핵심어 안에 들어 있으면(보고서 ⊂ 진단보고서) 같은 낱말을 본 것이므로 긴 쪽만 남긴다.
+    마지막 카테고리는 "기타" 같은 폴백이라 파일명으로 고르지 않는다."""
+    stem = filename.rsplit(".", 1)[0]
+    if not stem:
+        return None
+    matched: dict[str, str] = {}
+    for name in categories[:-1]:
+        hits = [k for k in _filename_keys(name) if k and k in stem]
+        if hits:
+            matched[name] = max(hits, key=len)
+    winners = [name for name, key in matched.items()
+               if not any(key != other and key in other for other in matched.values())]
+    return winners[0] if len(winners) == 1 else None
+
+
 def _parse_lines(raw: str, max_items: int) -> list[str]:
     """Line-per-item LLM output -> cleaned, deduped list (same approach as
     tasks/metadata.py's keyword parsing)."""
@@ -254,11 +289,18 @@ class ClassifyBlock(BaseBlock):
     def run(self, context: BlockContext) -> BlockResult:
         text = _upstream_text(context)
         # UI 설정에 섞인 빈 항목은 `"" in 응답` 이 항상 참이라 선택과 폴백을 망친다.
-        categories = [c for c in (context.config.get("categories") or []) if c and c.strip()]
-        categories = categories or _DEFAULT_CATEGORIES
+        entries = [_split_category(c) for c in (context.config.get("categories") or []) if c and c.strip()]
+        entries = [(name, desc) for name, desc in entries if name] or [(c, None) for c in _DEFAULT_CATEGORIES]
+        categories = [name for name, _ in entries]
         upstream = next(iter(context.upstream_outputs.values()), {})
         filename = str(upstream.get("filename") or "").strip()
-        hints = [f"- {name}: {_CATEGORY_HINTS[name]}" for name in categories if name in _CATEGORY_HINTS]
+        by_name = _category_from_filename(filename, categories)
+        if by_name is not None:
+            # 파일명은 정제·재처리로 바뀌지 않는다. 본문만 보고 고르면 같은 문서가 실행마다 달리 분류될 수 있다.
+            return BlockResult(output={**_carry(context), "category": by_name, "category_source": "filename",
+                                       "text": text})
+        hints = [f"- {name}: {desc or _CATEGORY_HINTS.get(name)}" for name, desc in entries
+                 if desc or name in _CATEGORY_HINTS]
         raw = _generate(
             "당신은 문서를 분류하는 어시스턴트입니다. 주어진 카테고리 중 문서에 가장 잘 맞는 "
             "하나만 골라 그 카테고리 이름만 답하세요. 설명이나 다른 문장은 쓰지 마세요. "
@@ -269,7 +311,7 @@ class ClassifyBlock(BaseBlock):
             + f"문서:\n{text[:_MAX_LLM_INPUT_CHARS]}",
         ).strip()
         category = _pick_category(raw, categories)
-        return BlockResult(output={**_carry(context), "category": category, "text": text})
+        return BlockResult(output={**_carry(context), "category": category, "category_source": "model", "text": text})
 
 
 class ExtractEntitiesBlock(BaseBlock):

@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { PlugZap, RefreshCw, Trash2 } from 'lucide-react'
 import {
-  useConnector, useDeleteConnector, useSyncConnector, useTestConnector, useUpdateConnector,
+  useConnector, useConnectorOptions, useDeleteConnector, useSyncConnector, useTestConnector, useUpdateConnector,
 } from '../../hooks/useConnectors'
-import type { ConnectorDetail, LevelRule } from '../../hooks/useConnectors'
+import type { AclMode, ConnectorDetail, LevelRule } from '../../hooks/useConnectors'
+import AclModeField from './AclModeField'
 import LevelRulesEditor from './LevelRulesEditor'
 import {
-  COUNT_LABELS, STATUS_LABELS, STATUS_TONE, cleanRules, formatDateTime, reasonLabel,
+  ACL_MODE_LABELS, COUNT_LABELS, STATUS_LABELS, STATUS_TONE, cleanRules, formatDateTime, reasonLabel,
 } from './connectorLabels'
 import { Alert, Badge, Button, ErrorAlert, ErrorText, Field, Input, SidePanel, Spinner } from '../ui'
 import { explainFailure } from '../../lib/apiError'
@@ -22,23 +23,28 @@ interface Draft {
   sync_interval_minutes: number
   enabled: boolean
   level_rules: LevelRule[]
+  acl_mode: AclMode
 }
 
 function toDraft(c: ConnectorDetail): Draft {
   return {
     name: c.name, password: '', sync_interval_minutes: c.sync_interval_minutes,
-    enabled: c.enabled, level_rules: c.level_rules,
+    enabled: c.enabled, level_rules: c.level_rules, acl_mode: c.acl_mode,
   }
 }
 
 function uncPath(c: ConnectorDetail): string {
+  if (c.kind === 'local') return `서버 폴더: ${c.base_path}`
   const base = c.base_path ? `\\${c.base_path.replace(/\//g, '\\')}` : ''
   return `\\\\${c.host}\\${c.share}${base}`
 }
 
 function SettingsForm({ connector }: { connector: ConnectorDetail }) {
   const update = useUpdateConnector()
+  const options = useConnectorOptions()
   const [draft, setDraft] = useState<Draft>(() => toDraft(connector))
+  const isLocal = connector.kind === 'local'
+  const isModeChanged = draft.acl_mode !== connector.acl_mode
   const isIntervalValid = Number.isInteger(draft.sync_interval_minutes) && draft.sync_interval_minutes >= MIN_INTERVAL
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -51,6 +57,8 @@ function SettingsForm({ connector }: { connector: ConnectorDetail }) {
           sync_interval_minutes: draft.sync_interval_minutes,
           enabled: draft.enabled,
           level_rules: cleanRules(draft.level_rules),
+          // 로컬 폴더는 늘 컬렉션 권한만 쓰므로 권한 기준을 보내지 않는다
+          ...(isLocal ? {} : { acl_mode: draft.acl_mode }),
           // 비워 두면 기존 비밀번호를 그대로 쓴다
           ...(draft.password ? { password: draft.password } : {}),
         },
@@ -67,12 +75,14 @@ function SettingsForm({ connector }: { connector: ConnectorDetail }) {
             onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
         )}
       </Field>
-      <Field label="새 비밀번호" hint="바꿀 때만 입력합니다">
-        {(id) => (
-          <Input id={id} type="password" autoComplete="new-password" value={draft.password} placeholder="바꿀 때만 입력"
-            controlSize="sm" onChange={(e) => setDraft({ ...draft, password: e.target.value })} />
-        )}
-      </Field>
+      {!isLocal && (
+        <Field label="새 비밀번호" hint="바꿀 때만 입력합니다">
+          {(id) => (
+            <Input id={id} type="password" autoComplete="new-password" value={draft.password} placeholder="바꿀 때만 입력"
+              controlSize="sm" onChange={(e) => setDraft({ ...draft, password: e.target.value })} />
+          )}
+        </Field>
+      )}
       <Field label="동기화 주기(분)">
         {(id) => (
           <Input id={id} type="number" min={5} max={10080} value={draft.sync_interval_minutes} controlSize="sm"
@@ -83,6 +93,17 @@ function SettingsForm({ connector }: { connector: ConnectorDetail }) {
         <input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
         자동 동기화 사용
       </label>
+      {!isLocal && (
+        <AclModeField
+          value={draft.acl_mode}
+          onChange={(acl_mode) => setDraft({ ...draft, acl_mode })}
+          hasDirectory={options.data?.directory_login ?? true}
+          disabled={update.isPending}
+        />
+      )}
+      {isModeChanged && (
+        <Alert tone="info">저장하면 다음 동기화 때 이미 가져온 문서의 권한도 새 기준으로 다시 겁니다.</Alert>
+      )}
       <LevelRulesEditor rules={draft.level_rules} onChange={(level_rules) => setDraft({ ...draft, level_rules })} disabled={update.isPending} />
       <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
         <Button type="submit" variant="primary" size="sm" disabled={update.isPending || !draft.name.trim() || !isIntervalValid}>
@@ -142,7 +163,7 @@ function ProblemItems({ connector }: { connector: ConnectorDetail }) {
 }
 
 function TestResult({ ok, error, sample }: { ok: boolean; error: string | null; sample: string[] }) {
-  if (!ok) return <Alert tone="danger">연결하지 못했습니다({error}). 주소, 계정, 하위 경로를 확인하세요.</Alert>
+  if (!ok) return <Alert tone="danger">연결하지 못했습니다({error}). 주소, 계정, 하위 경로(로컬 폴더는 폴더 위치)를 확인하세요.</Alert>
   const found = sample.length > 0 ? `읽은 파일 예: ${sample.join(', ')}` : '읽을 수 있는 파일이 아직 없습니다.'
   return <Alert tone="success">연결됐습니다. {found}</Alert>
 }
@@ -223,13 +244,15 @@ export default function ConnectorDetailPanel({ connectorId, onDeleted }: { conne
       <p className="ds-cell-muted" style={{ margin: 0, fontSize: 'var(--text-xs)', lineHeight: 1.6, wordBreak: 'break-all' }}>
         <code>{uncPath(connector)}</code>
         <br />
-        계정 {connector.username} · 컬렉션 {connector.collection_name ?? '-'} · 마지막 동기화 {formatDateTime(connector.last_sync_at)}
+        {connector.kind === 'smb' && <>계정 {connector.username} · </>}권한 기준 {ACL_MODE_LABELS[connector.acl_mode]} · 컬렉션 {connector.collection_name ?? '-'} · 마지막 동기화 {formatDateTime(connector.last_sync_at)}
       </p>
       <Actions connector={connector} onDeleted={onDeleted} onSyncRequested={() => setPollUntil(Date.now() + SYNC_WAIT_MS)} />
       <SettingsForm key={connector.id} connector={connector} />
       <SectionTitle>보류·오류 파일 ({connector.held_count + connector.error_count})</SectionTitle>
       <p className="ds-cell-muted" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>
-        권한을 그대로 옮길 수 없는 파일은 넓게 열지 않고 보류합니다. 파일 서버에서 권한을 고치면 다음 동기화 때 다시 판단합니다.
+        {connector.acl_mode === 'file_acl'
+          ? '권한을 그대로 옮길 수 없는 파일은 넓게 열지 않고 보류합니다. 파일 서버에서 권한을 고치면 다음 동기화 때 다시 판단합니다.'
+          : '컬렉션 권한만 적용하므로 권한 때문에 보류하는 파일은 없습니다. 읽기 오류나 크기 초과만 여기에 나타납니다.'}
       </p>
       <ProblemItems connector={connector} />
       <SectionTitle>최근 실행</SectionTitle>

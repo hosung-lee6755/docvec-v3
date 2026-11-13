@@ -19,7 +19,9 @@ def run_directory_sync(db, client) -> dict:
     from app.services.directory.provisioning import sync_directory
 
     try:
-        result = sync_directory(db, client, settings.ldap_admin_group_dn)
+        result = sync_directory(
+            db, client, settings.ldap_admin_group_dn, preprovision=settings.ldap_preprovision_users,
+        )
     except DirectoryUnavailable as exc:
         db.rollback()
         logger.warning("디렉터리 동기화 건너뜀(AD 연결 불가): %s", exc)

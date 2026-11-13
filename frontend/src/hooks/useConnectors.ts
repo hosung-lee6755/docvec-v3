@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
 import type { SecurityLevel } from './useDocumentMetadata'
@@ -12,10 +13,22 @@ export interface LevelRule {
 
 export type ConnectorStatus = 'running' | 'success' | 'partial' | 'failed'
 
+// smb=사내 파일 서버 공유 폴더, local=서버에 마운트한 폴더(파일 권한 없음)
+export type ConnectorKind = 'smb' | 'local'
+// file_acl=파일 서버 권한을 따름(사내 AD 필요), collection_only=컬렉션 권한만 적용
+export type AclMode = 'file_acl' | 'collection_only'
+
+export interface ConnectorOptions {
+  directory_login: boolean
+  local_root: string
+  local_folders: string[]
+}
+
 export interface Connector {
   id: string
   name: string
-  kind: string
+  kind: ConnectorKind
+  acl_mode: AclMode
   host: string
   port: number
   share: string
@@ -60,12 +73,14 @@ export interface ConnectorDetail extends Connector {
 
 export interface ConnectorCreateInput {
   name: string
-  host: string
+  kind?: ConnectorKind
+  acl_mode?: AclMode
+  host?: string
   port?: number
-  share: string
+  share?: string
   base_path?: string
-  username: string
-  password: string
+  username?: string
+  password?: string
   service_account_sid?: string | null
   collection_id: string
   level_rules?: LevelRule[]
@@ -82,6 +97,7 @@ export interface ConnectorUpdateInput {
   max_new_per_run?: number
   enabled?: boolean
   service_account_sid?: string | null
+  acl_mode?: AclMode
 }
 
 export interface ConnectionTestResult {
@@ -91,6 +107,14 @@ export interface ConnectionTestResult {
 }
 
 const KEY = ['connectors'] as const
+
+export function useConnectorOptions() {
+  return useQuery<ConnectorOptions>({
+    queryKey: ['connectors', 'options'],
+    queryFn: async () => (await apiClient.get('/admin/connectors/options')).data,
+    staleTime: 60_000,
+  })
+}
 
 export function useConnectors() {
   return useQuery<Connector[]>({
@@ -103,7 +127,8 @@ const POLL_MS = 5000
 
 // pollUntil: 동기화를 요청한 뒤 작업이 실제로 시작될 때까지 기다리는 시각(ms). 그때까지는 실행 기록이 없을 수 있다.
 export function useConnector(connectorId: string | null, pollUntil = 0) {
-  return useQuery<ConnectorDetail>({
+  const queryClient = useQueryClient()
+  const query = useQuery<ConnectorDetail>({
     queryKey: ['connectors', connectorId],
     queryFn: async () => (await apiClient.get(`/admin/connectors/${connectorId}`)).data,
     enabled: !!connectorId,
@@ -113,6 +138,12 @@ export function useConnector(connectorId: string | null, pollUntil = 0) {
       return isRunning || Date.now() < pollUntil ? POLL_MS : false
     },
   })
+  const lastSyncAt = query.data?.last_sync_at
+  useEffect(() => {
+    // 상세는 실행이 끝날 때까지 다시 읽지만 목록은 그대로다. 마지막 동기화 시각이 바뀌면 목록도 새로 읽는다
+    if (lastSyncAt) queryClient.invalidateQueries({ queryKey: KEY, exact: true })
+  }, [lastSyncAt, queryClient])
+  return query
 }
 
 function useInvalidate() {

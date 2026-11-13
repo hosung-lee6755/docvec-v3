@@ -1,4 +1,5 @@
-﻿import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+﻿import type { SecurityLevel } from './useDocumentMetadata'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
 
 // v3 마일스톤 6 — 컬렉션별 검색 설정. 서버 services/search_settings.py와 범위를 맞춘다.
@@ -82,6 +83,8 @@ export interface CreateCollectionInput {
   default_workflow_version?: number
   default_analysis_workflow_id?: string
   default_analysis_workflow_version?: number
+  // 등급이 없는 문서에 적용할 기본 보안등급. 비우면 공개
+  default_security_level?: SecurityLevel
 }
 
 export interface UpdateCollectionInput {

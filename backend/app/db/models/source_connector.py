@@ -18,6 +18,15 @@ from app.db.base import Base
 from app.db.types import UTCDateTime
 
 CONNECTOR_KIND_SMB = "smb"
+# 서버에 마운트한 폴더. 파일 권한 정보가 없으므로 항상 컬렉션 권한만 적용한다.
+CONNECTOR_KIND_LOCAL = "local"
+CONNECTOR_KINDS = (CONNECTOR_KIND_SMB, CONNECTOR_KIND_LOCAL)
+
+# 권한 기준. file_acl은 파일 서버 권한(NTFS)을 문서 ACL로 옮기고(사내 AD 필요), collection_only는
+# 파일 권한을 읽지 않고 문서를 모두 가져와 컬렉션 구성원 전원에게 연다.
+ACL_MODE_FILE = "file_acl"
+ACL_MODE_COLLECTION = "collection_only"
+ACL_MODES = (ACL_MODE_FILE, ACL_MODE_COLLECTION)
 
 ITEM_SYNCED = "synced"
 ITEM_HELD = "held"
@@ -45,6 +54,7 @@ class SourceConnector(Base):
     password_encrypted: Mapped[str] = mapped_column(Text)
     # 수집용 계정의 SID. 모든 파일에 읽기 권한으로 들어 있으므로 권한 매핑에서 뺀다.
     service_account_sid: Mapped[str | None] = mapped_column(String(184), nullable=True)
+    acl_mode: Mapped[str] = mapped_column(String(20), default=ACL_MODE_FILE, server_default=ACL_MODE_FILE)
     collection_id: Mapped[str] = mapped_column(
         UUID(as_uuid=True), ForeignKey("collections.id", ondelete="CASCADE"), index=True
     )

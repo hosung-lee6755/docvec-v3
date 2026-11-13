@@ -198,10 +198,10 @@ def test_classify_uses_custom_categories(monkeypatch):
 
 def test_classify_prompt_explains_default_categories_and_includes_filename(monkeypatch):
     calls = _fake_llm(monkeypatch, "소개서")
-    cb.ClassifyBlock().run(_ctx(extra={"filename": "AI_Servor_소개서.pdf"}))
+    cb.ClassifyBlock().run(_ctx(extra={"filename": "AI_Servor_자료.pdf"}))
     system_prompt, user_content = calls[0]
     assert "- 소개서:" in system_prompt and "주제로 고르지 마세요" in system_prompt
-    assert "파일명: AI_Servor_소개서.pdf" in user_content
+    assert "파일명: AI_Servor_자료.pdf" in user_content
 
 
 def test_classify_custom_categories_get_no_hints(monkeypatch):

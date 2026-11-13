@@ -131,7 +131,7 @@ async def test_me_returns_404_for_deleted_user_and_accepts_legacy_untyped_token(
     with patch.object(auth_module, "verify_token", return_value={"sub": "u"}):  # type 없는 구 토큰
         with pytest.raises(HTTPException) as exc_info:
             await auth_module.get_current_user(_credentials(), _db_with_user(None))
-        user = MagicMock(is_active=True)
+        user = MagicMock(is_active=True, token_version=0)
         assert await auth_module.get_current_user(_credentials(), _db_with_user(user)) is user
 
     assert exc_info.value.status_code == 404

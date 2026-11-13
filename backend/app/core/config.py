@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # entirely — there is no other UI to promote a user to admin.
     admin_signup_code: str = ""
 
+    # 로그인 화면의 회원가입. 꺼 두면(기본) 계정은 관리자가 사용자 화면에서 발급하고, 첫 관리자만
+    # ADMIN_SIGNUP_CODE로 가입할 수 있다. AD 로그인을 켜면 이 값과 상관없이 회원가입을 받지 않는다.
+    self_signup_enabled: bool = False
+
     # v3 마일스톤 3: 사내 Active Directory(LDAP) 로그인. 비밀번호는 환경변수로만 받는다.
     # LDAP_URL은 ldaps://host:636 이거나 LDAP_START_TLS=true와 함께 ldap://host:389 를 쓴다.
     ldap_enabled: bool = False
@@ -89,6 +93,10 @@ class Settings(BaseSettings):
     # 이 그룹의 구성원은 admin 역할을 받는다(빈 값이면 AD로 관리자를 정하지 않는다).
     ldap_admin_group_dn: str = ""
     ldap_sync_interval_minutes: int = 15
+    # 로컬 폴더 커넥터가 읽을 수 있는 최상위 폴더(컨테이너 안 경로). 이 밖의 경로는 등록할 수 없다.
+    connector_local_root: str = "/data/sources"
+    # 주기 동기화 때 아직 로그인하지 않은 AD 사용자 계정을 미리 만든다(컬렉션 공유와 파일 권한 매핑에 필요)
+    ldap_preprovision_users: bool = True
     # 평문 LDAP 허용. 개발용이며 운영(production)에서는 켤 수 없다.
     ldap_allow_insecure: bool = False
 

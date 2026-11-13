@@ -219,3 +219,78 @@ async def test_sync_refuses_to_deactivate_most_users_at_once(db_session):  # noq
         await db_session.run_sync(lambda s: sync_directory(s, directory, ADMIN_DN))
     await db_session.rollback()
     assert all([(await db_session.get(User, i)).is_active for i in ids])
+
+
+# ------------------------------------------------------------ 매칭 빈틈 보강
+async def test_admin_group_dn_matches_regardless_of_case_and_spaces(db_session):  # noqa: F811
+    loose = DirectoryGroup(dn="cn=DocVec-Admins, cn=users,  dc=T", sid=ADMINS.sid, name="docvec-admins",
+                           description=None)
+    user = await _login(db_session, _user("grace", 2501), [loose])
+    assert user.role == "admin"
+
+
+async def test_email_clash_is_found_regardless_of_case(db_session):  # noqa: F811
+    local = await make_user(db_session)
+    local.email = local.email.upper()
+    await db_session.commit()
+
+    with pytest.raises(DirectoryConflict):
+        await db_session.run_sync(lambda s: provision_login(s, _user("henry", 2502, email=local.email.lower()), [], ADMIN_DN))
+    await db_session.rollback()
+
+
+async def test_local_account_marked_for_directory_is_adopted_on_first_ad_login(db_session):  # noqa: F811
+    local = await make_user(db_session)
+    local.auth_source, local.external_id = "ldap", None  # 관리자가 "AD 계정으로 전환"한 상태
+    await db_session.commit()
+    local_id = local.id
+
+    user = await _login(db_session, _user("ivy", 2503, email=local.email), [SALES])
+
+    assert str(user.id) == str(local_id)
+    assert user.external_id == f"{DOMAIN}-2503" and user.auth_source == "ldap"
+    assert await _group_names(db_session, user.id) == ["sales"]
+
+
+async def test_sync_creates_accounts_for_ad_users_who_never_logged_in(db_session):  # noqa: F811
+    existing = _user("jack", 2601)
+    await _login(db_session, existing, [SALES])
+    newcomer, disabled = _user("kate", 2602), _user("leo", 2603, disabled=True)
+    directory = FakeDirectory([existing, newcomer, disabled], [SALES, RESEARCH],
+                              {existing.dn: [SALES], newcomer.dn: [RESEARCH]})
+
+    result = await db_session.run_sync(lambda s: sync_directory(s, directory, ADMIN_DN))
+    await db_session.commit()
+
+    created = await db_session.scalar(select(User).where(User.external_id == newcomer.sid))
+    assert created is not None and created.is_active and created.auth_source == "ldap"
+    assert await _group_names(db_session, created.id) == ["research"]
+    assert await db_session.scalar(select(User).where(User.external_id == disabled.sid)) is None
+    assert result["created"] == 1
+
+
+async def test_sync_skips_ad_users_whose_email_belongs_to_a_local_account(db_session):  # noqa: F811
+    local = await make_user(db_session)
+    await db_session.commit()
+    clash = _user("mia", 2604, email=local.email)
+
+    result = await db_session.run_sync(lambda s: sync_directory(s, FakeDirectory([clash], [], {}), ADMIN_DN))
+    await db_session.commit()
+
+    assert result["conflicts"] == [local.email]
+    assert (await db_session.get(User, local.id)).auth_source == "local"
+
+
+async def test_sync_reports_a_group_that_was_deleted_and_recreated_in_ad(db_session):  # noqa: F811
+    old = _group(f"team-{uuid4().hex[:4]}", 1301)
+    user_ad = _user("nick", 2605)
+    await _login(db_session, user_ad, [old])
+    recreated = DirectoryGroup(dn=old.dn, sid=f"{DOMAIN}-1399", name=old.name, description=None)
+    directory = FakeDirectory([user_ad], [recreated], {user_ad.dn: [recreated]})
+
+    result = await db_session.run_sync(lambda s: sync_directory(s, directory, ADMIN_DN))
+    await db_session.commit()
+
+    # 새 그룹은 다른 주체다. 옛 그룹의 권한을 넘기지 않고(fail-closed) 관리자가 다시 주도록 알린다.
+    assert result["recreated_groups"] == [old.name]
+    assert await db_session.scalar(select(UserGroup).where(UserGroup.external_id == old.sid)) is None

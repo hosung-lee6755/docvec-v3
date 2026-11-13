@@ -228,3 +228,59 @@ async def test_directory_account_activation_and_admin_role_follow_ad(world):
         ad_user.id, users_api.UserUpdate(role="editor", clearance_level="Confidential"), world.db, world.admin
     )
     assert (out.role, out.clearance_level) == ("editor", "Confidential")
+
+
+# ------------------------------------------------------------ 권한 기준과 로컬 폴더
+async def test_smb_connector_can_apply_collection_permissions_only(world):
+    out = await api.create_connector(_create_body(world.col.id, acl_mode="collection_only"), world.db, world.admin)
+    assert out["acl_mode"] == "collection_only"
+
+    changed = await api.update_connector(out["id"], api.ConnectorUpdate(acl_mode="file_acl"), world.db, world.admin)
+    assert changed["acl_mode"] == "file_acl"
+    [row] = await _audits(world.db, "connector.update", out["id"])
+    assert "acl_mode" in row.detail["fields"]
+
+
+def _local_body(collection_id, **over):
+    body = dict(kind="local", name="공용 폴더", base_path="영업", collection_id=collection_id)
+    return api.ConnectorCreate(**{**body, **over})
+
+
+@pytest.fixture
+def local_root(tmp_path, monkeypatch):
+    (tmp_path / "영업").mkdir()
+    monkeypatch.setattr(api.settings, "connector_local_root", str(tmp_path))
+    return tmp_path
+
+
+async def test_local_folder_connector_needs_no_server_credentials_and_always_uses_collection_permissions(
+        world, local_root):
+    out = await api.create_connector(_local_body(world.col.id, acl_mode="file_acl"), world.db, world.admin)
+
+    assert out["kind"] == "local" and out["acl_mode"] == "collection_only"
+    connector = await world.db.get(SourceConnector, out["id"])
+    assert connector.password_encrypted == "" and connector.host == ""
+
+    with pytest.raises(HTTPException) as exc:
+        await api.update_connector(out["id"], api.ConnectorUpdate(acl_mode="file_acl"), world.db, world.admin)
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize("folder", ["", "../", "없는폴더"])
+async def test_local_folder_must_exist_inside_the_source_root(world, local_root, folder):
+    with pytest.raises((HTTPException, ValidationError)) as exc:
+        await api.create_connector(_local_body(world.col.id, base_path=folder), world.db, world.admin)
+    if isinstance(exc.value, HTTPException):
+        assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize("missing", ["host", "share", "username", "password"])
+async def test_smb_connector_still_requires_server_details(world, missing):
+    with pytest.raises(ValidationError):
+        _create_body(world.col.id, **{missing: ""})
+
+
+async def test_connector_options_tell_the_screen_what_is_available(world, local_root, monkeypatch):
+    monkeypatch.setattr(api.settings, "ldap_enabled", False)
+    options = await api.connector_options(world.admin)
+    assert options == {"directory_login": False, "local_root": str(local_root), "local_folders": ["영업"]}

@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -18,6 +18,7 @@ from app.core.security import (
 )
 from app.db.models.user import AUTH_SOURCE_LDAP, AUTH_SOURCE_LOCAL, User
 from app.db.session import get_db
+from app.api.v1.deps import ensure_session_current
 from app.schemas.auth import LoginRequest, LoginResponse, TokenResponse, UserCreate, UserResponse
 from app.services.audit import log_audit
 from app.services.directory import get_directory_client
@@ -42,6 +43,26 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
     )
 
 
+def session_tokens(user) -> tuple[str, str]:
+    """로그인 세션의 (액세스, 리프레시) 토큰. 사용자의 세션 버전(tv)을 실어, 비밀번호를 초기화하면
+    그 전에 발급한 토큰이 모두 거절되게 한다."""
+    version = user.token_version or 0
+    access = create_access_token({"sub": str(user.id), "email": user.email, "tv": version})
+    refresh = create_refresh_token({"sub": str(user.id), "tv": version})
+    return access, refresh
+
+
+@router.get("/options")
+async def auth_options() -> dict:
+    """로그인 화면이 회원가입 링크를 보일지 정하는 데 쓴다. 인증 없이 읽는다."""
+    directory = bool(settings.ldap_enabled)
+    return {
+        "self_signup_enabled": bool(settings.self_signup_enabled) and not directory,
+        "admin_code_signup": bool(settings.admin_signup_code) and not directory,
+        "directory_login": directory,
+    }
+
+
 @router.post("/register", response_model=LoginResponse, status_code=201)
 async def register(
     request: UserCreate, response: Response, http_request: Request, db: AsyncSession = Depends(get_db)
@@ -54,7 +75,9 @@ async def register(
         # 먼저 만들어, 그 직원의 AD 로그인을 가로막거나 그 이름으로 행세할 수 있다.
         raise HTTPException(status_code=403, detail="사내 계정(AD)으로 로그인하세요. 별도 회원가입은 받지 않습니다.")
 
-    result = await db.execute(select(User).where(User.email == request.email))
+    # 로그인은 소문자로 먼저 찾는다. 대소문자만 다른 계정이 따로 생기지 않게 소문자로 저장하고 비교한다
+    email = request.email.strip().lower()
+    result = await db.execute(select(User).where(func.lower(User.email) == email).limit(1))
     if result.scalar_one_or_none():
         # Deliberately generic — a distinct "already registered" message lets
         # an attacker enumerate every registered email address.
@@ -70,14 +93,22 @@ async def register(
             request.admin_code,
             settings.admin_signup_code,
         )
+    if not settings.self_signup_enabled and not granted_admin:
+        # 회원가입을 끈 회사는 관리자가 계정을 발급한다. 첫 관리자만 ADMIN_SIGNUP_CODE로 가입할 수 있다.
+        raise HTTPException(
+            status_code=403,
+            detail="이 시스템은 회원가입을 받지 않습니다. 관리자에게 계정 발급을 요청하세요.",
+        )
     user = User(
         id=uuid4(),
-        email=request.email,
+        email=email,
         username=request.username,
         hashed_password=get_password_hash(request.password),
         role="admin" if granted_admin else "viewer",
         is_active=True,
         auth_source=AUTH_SOURCE_LOCAL,
+        must_change_password=False,
+        token_version=0,
     )
     db.add(user)
     await db.flush()
@@ -85,8 +116,7 @@ async def register(
     await db.commit()
     await db.refresh(user)
 
-    access_token = create_access_token({"sub": str(user.id), "email": user.email})
-    refresh_token = create_refresh_token({"sub": str(user.id)})
+    access_token, refresh_token = session_tokens(user)
     _set_refresh_cookie(response, refresh_token)
 
     return LoginResponse(
@@ -135,8 +165,7 @@ async def login(
         await db.commit()
         raise HTTPException(status_code=401, detail="User account is disabled")
 
-    access_token = create_access_token({"sub": str(user.id), "email": user.email})
-    refresh_token = create_refresh_token({"sub": str(user.id)})
+    access_token, refresh_token = session_tokens(user)
     _set_refresh_cookie(response, refresh_token)
 
     log_audit(
@@ -186,8 +215,11 @@ async def refresh(request: Request, db: AsyncSession = Depends(get_db)):
     user = await db.scalar(select(User).where(User.id == payload.get("sub")))
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
+    ensure_session_current(payload, user)
 
-    access_token = create_access_token({"sub": payload.get("sub")})
+    access_token = create_access_token(
+        {"sub": payload.get("sub"), "email": user.email, "tv": user.token_version or 0}
+    )
     return TokenResponse(access_token=access_token)
 
 
@@ -217,5 +249,6 @@ async def get_current_user(
         raise HTTPException(status_code=404, detail="User not found")
     if not user.is_active:
         raise HTTPException(status_code=401, detail="User account is disabled")
+    ensure_session_current(payload, user)
 
     return user

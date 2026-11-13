@@ -6,6 +6,8 @@ interface User {
   email: string
   username: string
   role: string
+  // 관리자가 발급하거나 초기화한 임시 비밀번호 상태. 참이면 비밀번호 변경 화면부터 보여 준다
+  must_change_password?: boolean
 }
 
 interface AuthState {

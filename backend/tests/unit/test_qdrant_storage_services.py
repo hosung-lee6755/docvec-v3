@@ -239,8 +239,11 @@ def test_download_file_releases_connection_even_when_read_fails(storage):
     response.release_conn.assert_called_once()
 
 
-def test_presigned_url_comes_from_public_client_with_expiry(storage):
+def test_presigned_url_comes_from_public_client_with_expiry(storage, monkeypatch):
     from datetime import timedelta
+
+    # 운영 환경이 상대 URL(MINIO_RELATIVE_URLS)을 켜 두어도 이 테스트는 기본값(절대 URL)을 본다
+    monkeypatch.setattr(settings, "minio_relative_urls", False)
 
     storage._public_client.presigned_get_object.return_value = "https://pub/x"
 

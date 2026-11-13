@@ -349,3 +349,48 @@ async def test_interrupted_run_is_closed_by_the_next_run(world, externals):
 
     status = await world.db.scalar(select(ConnectorRun.status).where(ConnectorRun.id == stale_id))
     assert status == "failed"
+
+
+# ------------------------------------------------------------ 권한 기준: 컬렉션 권한만 적용
+async def test_collection_only_mode_imports_every_file_without_reading_file_permissions(world, externals):
+    world.connector.acl_mode = "collection_only"
+    await world.db.commit()
+    world.source.broken_descriptors = set(world.source.files)  # 파일 권한은 읽지도 않는다
+
+    run = await _sync(world)
+
+    items = await _items(world)
+    assert run.status == "success" and run.counts["added"] == 6 and run.counts["held"] == 0
+    for path in ("held/denied.pdf", "personal/alice.pdf"):
+        assert await _acl(world.db, items[path].document_id) == set()
+    # 경로별 보안등급 규칙은 그대로 적용한다
+    salary = await world.db.get(Document, items["exec/salary.pdf"].document_id)
+    assert salary.security_level == "Confidential"
+
+
+async def test_switching_to_collection_only_opens_restricted_documents_and_brings_back_held_files(world, externals):
+    await _sync(world)
+    world.connector.acl_mode = "collection_only"
+    await world.db.commit()
+
+    run = await _sync(world)
+
+    items = await _items(world)
+    assert run.counts["acl_changed"] == 4 and run.counts["added"] == 2
+    assert await _acl(world.db, items["sales/plan.pdf"].document_id) == set()
+    assert items["held/denied.pdf"].state == "synced"
+
+
+async def test_switching_back_to_file_permissions_restricts_again(world, externals):
+    world.connector.acl_mode = "collection_only"
+    await world.db.commit()
+    await _sync(world)
+    world.connector.acl_mode = "file_acl"
+    await world.db.commit()
+
+    run = await _sync(world)
+
+    items = await _items(world)
+    assert await _acl(world.db, items["sales/plan.pdf"].document_id) == {("group", str(world.sales.id))}
+    assert items["held/denied.pdf"].state == "held" and items["held/denied.pdf"].document_id is None
+    assert run.counts["held"] == 2

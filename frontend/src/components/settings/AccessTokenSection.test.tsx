@@ -39,7 +39,8 @@ describe('AccessTokenSection', () => {
 
     expect(createMutate).toHaveBeenCalledWith({ name: '새 토큰', expires_in_days: 90 }, expect.anything())
     expect(screen.getByLabelText('발급된 토큰')).toHaveTextContent('dvp_secret-raw-token')
-    expect(screen.getByText(/claude mcp add --transport http docvec .*\/api\/v1\/mcp/)).toBeInTheDocument()
+    // 사용 방법 안내의 예시 명령(자리 표시 토큰)과 달리, 발급 직후에는 실제 토큰이 든 명령을 보인다
+    expect(screen.getByText(/claude mcp add --transport http docvec .*\/api\/v1\/mcp.*dvp_secret-raw-token/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '복사했습니다. 닫기' }))
     expect(screen.queryByText(/dvp_secret-raw-token/)).not.toBeInTheDocument()
@@ -57,6 +58,19 @@ describe('AccessTokenSection', () => {
     render(<AccessTokenSection />)
     fireEvent.click(screen.getByRole('button', { name: '노트북 Claude 회수' }))
     expect(revokeMutate).toHaveBeenCalledWith('t-1')
+  })
+
+  it('explains how to connect an agent and what it can do, before any token exists', () => {
+    tokens = { ...tokens, items: [] }
+    render(<AccessTokenSection />)
+
+    const guide = screen.getByRole('region', { name: '사용 방법' })
+    expect(guide).toHaveTextContent(`${window.location.origin}/api/v1/mcp`)
+    expect(guide).toHaveTextContent('Authorization: Bearer')
+    expect(guide).toHaveTextContent(/claude mcp add --transport http docvec/)
+    expect(guide).toHaveTextContent('search_documents')
+    expect(guide).toHaveTextContent('ask')
+    expect(guide).toHaveTextContent(/회수/)
   })
 
   it('hides the create form when MCP is turned off', () => {

@@ -1,8 +1,13 @@
-import type { ConnectorStatus, LevelRule } from '../../hooks/useConnectors'
+import type { AclMode, ConnectorStatus, LevelRule } from '../../hooks/useConnectors'
 import type { BadgeTone } from '../ui/classes'
 import { describeError } from '../../lib/apiError'
 
 // 원천 연결 화면에서 쓰는 사람이 읽는 이름표. 값의 정본은 백엔드 sync_engine과 acl_mapping이다.
+
+export const ACL_MODE_LABELS: Record<AclMode, string> = {
+  file_acl: '파일 서버 권한을 따름',
+  collection_only: '컬렉션 권한만 적용',
+}
 
 export const STATUS_LABELS: Record<ConnectorStatus, string> = {
   running: '동기화 중',

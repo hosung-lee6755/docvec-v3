@@ -3,6 +3,7 @@ import { useAuthStore } from './store/authStore'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
+import ChangePasswordPage from './pages/ChangePasswordPage'
 import DashboardPage from './pages/DashboardPage'
 import DocumentsPage from './pages/DocumentsPage'
 import ProjectsPage from './pages/ProjectsPage'
@@ -32,7 +33,11 @@ import NotFoundPage from './pages/NotFoundPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />
+  const mustChangePassword = useAuthStore((s) => s.user?.must_change_password === true)
+  if (!isAuthenticated) return <Navigate to="/login" replace />
+  // 임시 비밀번호로 들어온 사용자는 새 비밀번호를 정하기 전에는 다른 화면을 쓸 수 없다(서버도 403으로 막는다)
+  if (mustChangePassword) return <Navigate to="/change-password" replace />
+  return <>{children}</>
 }
 
 export default function App() {
@@ -40,6 +45,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/change-password" element={<ChangePasswordPage />} />
       <Route
         path="/"
         element={

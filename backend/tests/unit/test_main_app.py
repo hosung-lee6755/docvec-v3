@@ -189,13 +189,15 @@ async def test_readiness_closes_redis_client_even_when_ping_fails(client):
 # --------------------------------------------------------------------- CORS
 
 
-async def test_cors_allows_local_dev_origin_with_credentials(client):
+async def test_cors_allows_a_configured_origin_with_credentials(client):
+    # 허용 출처는 실행 환경(개발 기본값 또는 CORS_ALLOWED_ORIGINS)이 정한다. 그중 하나로 확인한다.
+    origin = main.origins[0]
     response = await client.options(
         "/health",
-        headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET"},
+        headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
     )
 
-    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert response.headers["access-control-allow-origin"] == origin
     assert response.headers["access-control-allow-credentials"] == "true"
 
 
@@ -237,6 +239,10 @@ def test_production_uses_configured_origins_and_hides_docs():
 
 
 def test_development_allows_only_local_origins_and_serves_docs():
-    assert "http://localhost:3000" in main.origins
-    assert all("localhost" in o or "127.0.0.1" in o for o in main.origins)
-    assert main.app.docs_url == "/docs"
+    # 컨테이너는 ENVIRONMENT=production으로 돈다. 개발 모드의 기본값은 새로 읽어 확인한다.
+    with patch.object(type(settings), "is_production", property(lambda _s: False)):
+        module = _load_main_as("app_main_dev")
+
+    assert "http://localhost:3000" in module.origins
+    assert all("localhost" in o or "127.0.0.1" in o for o in module.origins)
+    assert module.app.docs_url == "/docs"

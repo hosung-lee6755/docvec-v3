@@ -18,7 +18,7 @@ def _credentials(token="fake-token"):
 
 @pytest.mark.asyncio
 async def test_get_current_user_returns_active_user():
-    user = MagicMock(is_active=True)
+    user = MagicMock(is_active=True, token_version=0, must_change_password=False)
     db = AsyncMock()
     db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=user))
 

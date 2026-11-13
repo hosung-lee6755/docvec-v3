@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from app.core.config import settings
 from app.core.crypto import decrypt_secret
-from app.db.models.source_connector import SourceConnector
+from app.db.models.source_connector import CONNECTOR_KIND_LOCAL, SourceConnector
 from app.db.models.user import AUTH_SOURCE_SYSTEM, User
-from app.services.connectors.smb_client import SmbSourceClient
+from app.services.connectors.local_client import LocalSourceClient
+from app.services.connectors.smb_client import SmbSourceClient, SourceClient
 
 SYSTEM_EMAIL_DOMAIN = "system.invalid"
 
@@ -24,7 +26,9 @@ def new_service_user(connector_name: str) -> User:
     )
 
 
-def build_source_client(connector: SourceConnector) -> SmbSourceClient:
+def build_source_client(connector: SourceConnector) -> SourceClient:
+    if connector.kind == CONNECTOR_KIND_LOCAL:
+        return LocalSourceClient(settings.connector_local_root, connector.base_path or "")
     return SmbSourceClient(
         connector.host,
         connector.share,

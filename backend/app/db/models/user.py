@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, String, Text
+from sqlalchemy import Boolean, Integer, String, Text, false
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -29,6 +29,12 @@ class User(Base):
         default="viewer",
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 관리자가 발급하거나 초기화한 임시 비밀번호로 로그인한 상태. 바꾸기 전에는 비밀번호 변경만 할 수 있다.
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
+    # 토큰의 "tv" 클레임과 같아야 그 토큰을 받는다. 비밀번호를 초기화하면 올려 기존 로그인을 모두 끊는다.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     # v3 마일스톤 3: 계정 출처. local=자체 비밀번호, ldap=사내 AD(비밀번호는 AD가 확인),
     # system=커넥터 수집용 내부 계정(로그인 불가, 커넥터 문서의 업로더 자리를 채운다).
     auth_source: Mapped[str] = mapped_column(

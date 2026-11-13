@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import AccessTokensPage from './AccessTokensPage'
 
 let role = 'admin'
@@ -40,7 +41,7 @@ describe('AccessTokensPage', () => {
 
   it('lists every token and only offers revoke for active ones', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
-    render(<AccessTokensPage />)
+    render(<MemoryRouter><AccessTokensPage /></MemoryRouter>)
 
     expect(screen.getByText('회수됨')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '김직원의 옛 토큰 회수' })).not.toBeInTheDocument()
@@ -48,9 +49,15 @@ describe('AccessTokensPage', () => {
     expect(revokeMutate).toHaveBeenCalledWith('t-1')
   })
 
+  it('tells admins that tokens are issued from each user account settings', () => {
+    render(<MemoryRouter><AccessTokensPage /></MemoryRouter>)
+    expect(screen.getByText(/발급은 계정 설정 > 외부 에이전트에서 합니다/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '계정 설정 > 외부 에이전트로 가기' })).toHaveAttribute('href', '/settings?tab=agent')
+  })
+
   it('is closed to non-admins', () => {
     role = 'viewer'
-    render(<AccessTokensPage />)
+    render(<MemoryRouter><AccessTokensPage /></MemoryRouter>)
     expect(screen.getByText('관리자만 접근할 수 있습니다.')).toBeInTheDocument()
   })
 })

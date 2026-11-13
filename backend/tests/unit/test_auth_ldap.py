@@ -200,3 +200,30 @@ def test_directory_search_reads_every_page():
     entries = client._search(conn, "DC=t", "(objectClass=user)", ["cn"])
     assert len(entries) == 1200
     assert conn.extend.standard.paged_search.call_args.kwargs["generator"] is False
+
+
+def test_user_groups_include_the_primary_group_that_member_of_does_not_list():
+    from app.services.directory import ldap_client
+
+    client = ldap_client.LdapDirectoryClient(ldap_client.LdapConfig(
+        url="ldaps://dc:636", bind_dn="svc", bind_password="pw", base_dn="DC=t",
+    ))
+    chain = [{"dn": "CN=sales,DC=t", "attributes": {"cn": "sales", "objectSid": "S-1-5-21-1-2-3-1101"}}]
+    me = [{"dn": "CN=amy,DC=t", "attributes": {"objectSid": "S-1-5-21-1-2-3-2001", "primaryGroupID": 1150}}]
+    primary = [{"dn": "CN=field,DC=t", "attributes": {"cn": "field", "objectSid": "S-1-5-21-1-2-3-1150"}}]
+    calls = []
+
+    def fake_search(conn, base, flt, attrs, scope=None):
+        calls.append(flt)
+        if "member:" in flt:
+            return chain
+        if "objectSid=" in flt:
+            return primary
+        return me
+
+    client._service = MagicMock()
+    client._search = fake_search
+    groups = client.user_groups("CN=amy,DC=t")
+
+    assert [g.name for g in groups] == ["sales", "field"]
+    assert any("(objectSid=S-1-5-21-1-2-3-1150)" in f for f in calls)

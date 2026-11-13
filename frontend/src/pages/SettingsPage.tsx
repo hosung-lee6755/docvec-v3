@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { KeyRound, Trash2, Check, User as UserIcon, Lock, Bot, RotateCcw } from 'lucide-react'
 import { useApiKeys, useSetApiKey, useDeleteApiKey } from '../hooks/useApiKeys'
 import { useProfile, useUpdateProfile, useChangePassword, useSetSystemPrompt } from '../hooks/useProfile'
@@ -343,7 +344,11 @@ const TABS: { key: SettingsTab; label: string }[] = [
 ]
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<SettingsTab>('account')
+  // ?tab=agent처럼 주소로 탭을 고를 수 있다(관리 > 외부 에이전트 토큰 화면의 안내 링크)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requested = searchParams.get('tab')
+  const tab: SettingsTab = TABS.some((t) => t.key === requested) ? (requested as SettingsTab) : 'account'
+  const setTab = (key: SettingsTab) => setSearchParams(key === 'account' ? {} : { tab: key }, { replace: true })
 
   return (
     <Page>

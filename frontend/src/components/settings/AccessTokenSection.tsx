@@ -1,35 +1,16 @@
 import { useState } from 'react'
-import { Check, Copy, Plug, Trash2 } from 'lucide-react'
+import { Plug, Trash2 } from 'lucide-react'
 import {
   TOKEN_STATUS_BADGE, TOKEN_STATUS_LABELS, mcpConnectCommand,
   useCreateAccessToken, useMyAccessTokens, useRevokeMyAccessToken,
 } from '../../hooks/useAccessTokens'
 import type { IssuedToken } from '../../hooks/useAccessTokens'
 import { formatDateTime } from '../connectors/connectorLabels'
+import AccessTokenGuide, { CopyButton } from './AccessTokenGuide'
 import { Alert, Badge, Button, Card, ErrorAlert, Field, Input, toneFromKrdsClass } from '../ui'
 import '../../styles/screens/user.css'
 
 // v3 마일스톤 4 — 내 개인 접근 토큰. 이 토큰을 넣은 에이전트는 나와 같은 문서만 볼 수 있다.
-
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const [isCopied, setIsCopied] = useState(false)
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setIsCopied(true)
-      setTimeout(() => setIsCopied(false), 2000)
-    } catch {
-      // 클립보드를 쓸 수 없는 환경(HTTP 등)에서는 사용자가 직접 선택해 복사한다
-      setIsCopied(false)
-    }
-  }
-  return (
-    <Button variant="secondary" size="sm" onClick={handleCopy} aria-label={label}
-      icon={isCopied ? <Check size={12} /> : <Copy size={12} />}>
-      {isCopied ? '복사됨' : '복사'}
-    </Button>
-  )
-}
 
 function IssuedTokenNotice({ issued, path, onClose }: { issued: IssuedToken; path: string; onClose: () => void }) {
   const command = mcpConnectCommand(window.location.origin, path, issued.token)
@@ -88,6 +69,8 @@ export default function AccessTokenSection() {
         Claude Code 같은 AI 에이전트가 사내 문서를 검색하도록 연결할 때 씁니다. 에이전트는 이 토큰을 만든 사람과
         같은 권한으로만 문서를 보며, 에이전트가 한 모든 조회는 감사 로그에 남습니다.
       </p>
+
+      {data && <AccessTokenGuide mcpPath={data.mcp_path} isOpenByDefault={data.items.length === 0} />}
 
       {isLoading && <div className="user-spinner" role="status"><span className="sr-only">로딩 중</span></div>}
       {isError && <ErrorAlert error={error} message="토큰 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}

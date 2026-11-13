@@ -27,6 +27,8 @@ PUBLIC_ROUTES = {
     ("GET", "/health/ready"),
     ("POST", "/api/v1/auth/register"),
     ("POST", "/api/v1/auth/login"),
+    # 로그인 화면이 회원가입 링크를 보일지 정한다. 설정 값 세 개만 돌려준다
+    ("GET", "/api/v1/auth/options"),
     ("POST", "/api/v1/auth/refresh"),
     # 리프레시 쿠키만 지운다 — 액세스 토큰이 만료된 사용자도 로그아웃할 수 있어야 한다.
     ("POST", "/api/v1/auth/logout"),

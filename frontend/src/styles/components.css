@@ -291,6 +291,8 @@ button.ds-stat:focus-visible, a.ds-stat:focus-visible { outline: none; box-shado
 .ds-alert__title { display: block; font-weight: var(--weight-semibold); }
 .ds-alert__cause { display: block; margin-top: 2px; color: var(--color-text-secondary); }
 .ds-alert__actions { display: block; margin-top: var(--space-2); }
+.ds-alert a { color: inherit; font-weight: var(--weight-semibold); text-decoration: underline; text-underline-offset: 2px; }
+.ds-alert a:hover { text-decoration-thickness: 2px; }
 .ds-error-text { font-size: var(--text-sm); color: var(--color-danger); }
 
 /* ---------- 모달 ---------- */
@@ -401,3 +403,9 @@ button.ds-stat:focus-visible, a.ds-stat:focus-visible { outline: none; box-shado
 .ds-link-btn:hover { color: var(--color-primary); text-decoration: underline; }
 .ds-link-btn[aria-pressed='true'] { color: var(--color-primary); }
 .ds-link-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
+
+/* 원천 연결의 권한 기준 선택 */
+.connector-acl-mode { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.connector-acl-mode__option { display: flex; align-items: flex-start; gap: var(--space-2); font-size: var(--text-sm); cursor: pointer; }
+.connector-acl-mode__option input { margin-top: 3px; }
+.connector-acl-mode__option .ds-cell-sub { display: block; }

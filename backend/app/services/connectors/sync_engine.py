@@ -31,6 +31,8 @@ from app.core.config import settings
 from app.db.models.document import Document
 from app.db.models.document_acl import DocumentAclEntry
 from app.db.models.source_connector import (
+    ACL_MODE_COLLECTION,
+    CONNECTOR_KIND_LOCAL,
     ITEM_ERROR,
     ITEM_HELD,
     ITEM_SKIPPED,
@@ -49,6 +51,7 @@ from app.services.access_payload import sync_document_access
 from app.services.access_policy import PRINCIPAL_GROUP, PRINCIPAL_USER
 from app.services.connectors.acl_mapping import (
     DECISION_HELD,
+    DECISION_OPEN,
     HOLD_NO_PRINCIPAL,
     AclDecision,
     SecurityDescriptorError,
@@ -69,6 +72,17 @@ HOLD_BAD_DESCRIPTOR = "bad_descriptor"
 HOLD_UNREADABLE_DESCRIPTOR = "descriptor_unreadable"
 ERROR_ACCESS_SYNC = "access_sync_failed"
 SKIP_TOO_LARGE = "too_large"
+# 컬렉션 권한만 적용할 때 sd_hash 자리에 두는 값. 방식을 바꾸면 해시가 달라져 다음 실행이 권한을 다시 건다.
+COLLECTION_ONLY_HASH = "collection_only"
+
+
+def uses_collection_permissions(connector: SourceConnector) -> bool:
+    """파일 권한을 읽지 않고 컬렉션 권한만 적용하는 커넥터인가. 로컬 폴더는 파일 권한이 없어 항상 그렇다."""
+    return connector.kind == CONNECTOR_KIND_LOCAL or connector.acl_mode == ACL_MODE_COLLECTION
+
+
+def _access_hash(raw_descriptor: bytes | None) -> str:
+    return COLLECTION_ONLY_HASH if raw_descriptor is None else descriptor_hash(raw_descriptor)
 
 
 def level_for(rules: list | None, path: str) -> str | None:
@@ -99,6 +113,7 @@ class _Context:
     sid_to_group: dict[str, str]
     ignored: frozenset[str]
     budget: int
+    collection_only: bool = False
 
     @classmethod
     async def load(cls, db: AsyncSession, connector: SourceConnector) -> "_Context":
@@ -121,6 +136,7 @@ class _Context:
             sid_to_group={sid: str(gid) for sid, gid in groups.all()},
             ignored=frozenset({connector.service_account_sid} - {None}),
             budget=max(0, connector.max_new_per_run or 0),
+            collection_only=uses_collection_permissions(connector),
         )
 
     def decide(self, raw_descriptor: bytes) -> AclDecision:
@@ -235,19 +251,24 @@ async def _sync_file(db, ctx: _Context, client: SourceClient, remote: RemoteFile
 
     # 원천 입출력을 먼저 끝낸다. 실패하면 이 파일만 오류로 남긴다.
     content = None
-    try:
-        raw_descriptor = await asyncio.to_thread(client.read_security_descriptor, path)
-    except Exception as exc:
-        logger.warning("커넥터 권한 읽기 실패: connector=%s path=%s err=%s", ctx.connector.id, path, exc)
-        if document is None:
-            _mark(ctx.item(db, path), ITEM_ERROR, f"read_error:{type(exc).__name__}"[:255])
-            counts["errors"] += 1
-            await db.commit()
+    raw_descriptor = None
+    if ctx.collection_only:
+        # 파일 권한을 읽지 않는다. 문서 ACL 없이 등록해 컬렉션 권한만 적용한다.
+        decision = AclDecision(DECISION_OPEN)
+    else:
+        try:
+            raw_descriptor = await asyncio.to_thread(client.read_security_descriptor, path)
+        except Exception as exc:
+            logger.warning("커넥터 권한 읽기 실패: connector=%s path=%s err=%s", ctx.connector.id, path, exc)
+            if document is None:
+                _mark(ctx.item(db, path), ITEM_ERROR, f"read_error:{type(exc).__name__}"[:255])
+                counts["errors"] += 1
+                await db.commit()
+                return
+            await _hold(db, ctx, path, remote, document, None, HOLD_UNREADABLE_DESCRIPTOR,
+                        {"error": type(exc).__name__}, counts)
             return
-        await _hold(db, ctx, path, remote, document, None, HOLD_UNREADABLE_DESCRIPTOR,
-                    {"error": type(exc).__name__}, counts)
-        return
-    decision = ctx.decide(raw_descriptor)
+        decision = ctx.decide(raw_descriptor)
     try:
         if decision.kind != DECISION_HELD:
             moved = existing is None or (existing.size, existing.mtime) != (remote.size, remote.mtime)
@@ -262,7 +283,7 @@ async def _sync_file(db, ctx: _Context, client: SourceClient, remote: RemoteFile
         if document is not None and decision.kind != DECISION_HELD:
             # 내용은 못 읽었어도 권한은 읽었다. 좁아진 권한을 미루지 않고 바로 건다.
             level = level_for(ctx.connector.level_rules, path)
-            sd_hash = descriptor_hash(raw_descriptor)
+            sd_hash = _access_hash(raw_descriptor)
             if item.sd_hash != sd_hash or document.security_level != level:
                 try:
                     await _apply_access(db, document, decision, level)
@@ -275,7 +296,7 @@ async def _sync_file(db, ctx: _Context, client: SourceClient, remote: RemoteFile
         return
 
     level = level_for(ctx.connector.level_rules, path)
-    sd_hash = descriptor_hash(raw_descriptor)
+    sd_hash = _access_hash(raw_descriptor)
 
     if decision.kind == DECISION_HELD:
         detail = {"unmapped_sids": list(decision.unmapped)} if decision.reason == HOLD_NO_PRINCIPAL else None

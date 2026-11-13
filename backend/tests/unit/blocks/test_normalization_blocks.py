@@ -464,3 +464,15 @@ def test_application_context_masks_personal_data_even_across_the_window_edge():
     assert "hong@example.com" not in app.context_after and "*" in app.context_after
     # 가려도 길이는 그대로라 위치가 어긋나지 않는다
     assert len(app.context_before) == 40
+
+
+def test_find_spans_latin_term_glued_to_korean_still_matches():
+    # "\b"는 한글도 단어 글자로 봐서 "국가R&D"의 "R&D"를 놓쳤다. 앞 글자와 문자 체계가 다르면 경계로 본다.
+    assert nb._find_spans("R&D", "EXACT", False, "국가R&D과제와 R&D") == [(2, 5), (9, 12)]
+    assert nb._find_spans("반도체", "EXACT", False, "AI반도체") == [(2, 5)]
+
+
+def test_find_spans_still_refuses_a_match_inside_a_longer_word_of_the_same_script():
+    assert nb._find_spans("AI", "EXACT", False, "MAIL AI") == [(5, 7)]
+    assert nb._find_spans("민국", "EXACT", False, "대한민국 민국") == [(5, 7)]
+    assert nb._find_spans("v2", "PREFIX", False, "Av2 v2") == [(4, 6)]

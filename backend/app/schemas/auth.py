@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class LoginRequest(BaseModel):
@@ -23,6 +23,14 @@ class UserResponse(BaseModel):
     is_active: bool
     # v3 마일스톤 3: local, ldap(사내 AD), system(원천 연결용 내부 계정)
     auth_source: str = "local"
+    # 관리자가 발급하거나 초기화한 임시 비밀번호 상태. 화면은 이 값이 참이면 비밀번호 변경부터 받는다
+    must_change_password: bool = False
+
+    @field_validator("must_change_password", mode="before")
+    @classmethod
+    def _unset_means_false(cls, v):
+        # 아직 DB에 쓰기 전인 객체는 기본값이 비어 있다
+        return bool(v)
 
     class Config:
         from_attributes = True

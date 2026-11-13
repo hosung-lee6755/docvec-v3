@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import access_tokens, admin, answer_traces, auth, connectors, chat, cleaning_rules, collections, dictionary, documents, golden_queries, governance, groups, projects, search, stats, users, workflows
+from app.api.v1.endpoints import access_tokens, admin, answer_traces, auth, connectors, chat, cleaning_rules, collections, dictionary, documents, golden_queries, governance, groups, projects, search, stats, user_accounts, users, workflows
 
 from app.mcp import server as mcp_server
 
@@ -23,6 +23,7 @@ api_router.include_router(
 api_router.include_router(golden_queries.router, tags=["golden-queries"])
 api_router.include_router(search.router, tags=["search"])
 api_router.include_router(stats.router, tags=["stats"])
+api_router.include_router(user_accounts.router, prefix="/users", tags=["users"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(groups.router, prefix="/groups", tags=["groups"])
 api_router.include_router(chat.router, tags=["chat"])

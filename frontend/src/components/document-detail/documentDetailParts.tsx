@@ -9,7 +9,7 @@ import { SECURITY_LEVEL_LABELS } from '../../hooks/useAccess'
 const CHEVRON_ICON =
   "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23475569' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>\")"
 
-export const EDIT_BUTTON_STYLE: CSSProperties = {
+const EDIT_BUTTON_STYLE: CSSProperties = {
   background: 'var(--color-surface)',
   border: '1px solid var(--color-primary)',
   borderRadius: 4,
@@ -32,7 +32,7 @@ const ICON_BUTTON_STYLE: CSSProperties = {
   alignItems: 'center',
 }
 
-export const SELECT_STYLE: CSSProperties = {
+const SELECT_STYLE: CSSProperties = {
   fontSize: 12,
   color: 'var(--color-text)',
   border: '1px solid var(--color-text-subtle)',

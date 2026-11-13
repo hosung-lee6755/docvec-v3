@@ -3,6 +3,8 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
+import { useAuthOptions } from '../hooks/useAccounts'
+import type { AuthOptions } from '../hooks/useAccounts'
 import { Alert, Button, Field, Input } from '../components/ui'
 import { describeError } from '../lib/apiError'
 import '../styles/screens/user.css'
@@ -24,11 +26,39 @@ function loginErrorMessage(error: unknown): string {
   return describeError(error, '로그인하지 못했습니다.')
 }
 
+/** 가입 정책에 맞는 안내. 회원가입을 막은 회사에서는 링크 대신 계정 발급 안내를 보인다. */
+function SignupHint({ options }: { options: AuthOptions | undefined }) {
+  if (!options) return null
+  if (options.directory_login) {
+    return <p className="user-auth__footer">사내 계정(AD) 아이디와 비밀번호로 로그인합니다.</p>
+  }
+  if (options.self_signup_enabled) {
+    return (
+      <p className="user-auth__footer">
+        계정이 없으신가요?{' '}
+        <Link to="/register" className="user-auth__link">회원가입</Link>
+      </p>
+    )
+  }
+  return (
+    <p className="user-auth__footer">
+      계정은 관리자가 발급합니다. 계정이 없으면 관리자에게 요청하세요.
+      {options.admin_code_signup && (
+        <>
+          {' '}
+          <Link to="/register" className="user-auth__link">관리자 초대 코드로 가입</Link>
+        </>
+      )}
+    </p>
+  )
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const navigate = useNavigate()
   const setAuth = useAuthStore((s) => s.setAuth)
+  const { data: options } = useAuthOptions()
 
   const loginMutation = useMutation({
     mutationFn: async () => {
@@ -74,10 +104,7 @@ export default function LoginPage() {
             {loginMutation.isPending ? '로그인 중...' : '로그인'}
           </Button>
         </form>
-        <p className="user-auth__footer">
-          계정이 없으신가요?{' '}
-          <Link to="/register" className="user-auth__link">회원가입</Link>
-        </p>
+        <SignupHint options={options} />
       </div>
     </div>
   )

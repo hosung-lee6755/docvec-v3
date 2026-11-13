@@ -117,6 +117,8 @@ async def test_login_succeeds_for_active_user():
         email="user@test.com",
         username="user",
         role="viewer",
+        token_version=0,
+        must_change_password=False,
     )
     db = AsyncMock()
     db.add = MagicMock()
@@ -169,7 +171,7 @@ async def test_refresh_issues_new_access_token_for_active_user():
     request = _http_request()
     request.cookies.get.return_value = "some-refresh-token"
     db = AsyncMock()
-    db.scalar.return_value = MagicMock(is_active=True)
+    db.scalar.return_value = MagicMock(is_active=True, token_version=0, email="user@test.com")
 
     with _no_rate_limit, patch.object(
         auth_module, "verify_token", return_value={"sub": str(uuid4()), "type": "refresh"}

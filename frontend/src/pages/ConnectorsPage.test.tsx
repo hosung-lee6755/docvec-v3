@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import ConnectorsPage from './ConnectorsPage'
 
 let role = 'admin'
+let directoryLogin = true
 const createMutate = vi.fn()
 const updateMutate = vi.fn()
 const syncMutate = vi.fn()
@@ -16,7 +17,7 @@ vi.mock('../hooks/useCollections', () => ({
 }))
 
 const connector = {
-  id: 'c-1', name: '영업 공유', kind: 'smb', host: 'fs01.corp.local', port: 445, share: 'docs', base_path: '영업',
+  id: 'c-1', name: '영업 공유', kind: 'smb', acl_mode: 'file_acl', host: 'fs01.corp.local', port: 445, share: 'docs', base_path: '영업',
   username: 'svc-docvec', service_account_sid: null, collection_id: 'col-1', collection_name: '영업 문서',
   level_rules: [{ prefix: 'exec/', level: 'Confidential' }], sync_interval_minutes: 30, max_new_per_run: 200,
   enabled: true, last_sync_at: '2026-11-11T01:00:00Z', last_status: 'partial', held_count: 1, error_count: 0,
@@ -25,6 +26,9 @@ const connector = {
 
 vi.mock('../hooks/useConnectors', () => ({
   useConnectors: () => ({ isLoading: false, isError: false, data: [connector] }),
+  useConnectorOptions: () => ({
+    data: { directory_login: directoryLogin, local_root: '/data/sources', local_folders: ['공용문서'] },
+  }),
   useConnector: () => ({
     isLoading: false, isError: false,
     data: {
@@ -44,6 +48,7 @@ vi.mock('../hooks/useConnectors', () => ({
 describe('ConnectorsPage', () => {
   beforeEach(() => {
     role = 'admin'
+    directoryLogin = true
     createMutate.mockReset()
     updateMutate.mockReset()
     syncMutate.mockReset()
@@ -93,5 +98,42 @@ describe('ConnectorsPage', () => {
     expect(createMutate.mock.calls[0][0]).toMatchObject({
       name: '연구소', host: 'fs02', share: 'lab', username: 'svc', password: 'secret-1', collection_id: 'col-1', level_rules: [],
     })
+  })
+
+  it('creates a local folder connector without server credentials', () => {
+    render(<ConnectorsPage />)
+    fireEvent.click(screen.getByRole('button', { name: '새 연결' }))
+    fireEvent.click(screen.getByRole('button', { name: '서버 로컬 폴더' }))
+
+    expect(screen.queryByLabelText('서버 주소')).not.toBeInTheDocument()
+    expect(screen.getByText(/로컬 폴더에는 파일 권한 정보가 없어/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('이름'), { target: { value: '공용' } })
+    fireEvent.change(screen.getByLabelText('폴더'), { target: { value: '공용문서' } })
+    fireEvent.change(screen.getByLabelText('넣을 컬렉션'), { target: { value: 'col-1' } })
+    fireEvent.click(screen.getByRole('button', { name: /연결 추가/ }))
+
+    expect(createMutate.mock.calls[0][0]).toEqual(expect.objectContaining({
+      kind: 'local', acl_mode: 'collection_only', base_path: '공용문서',
+    }))
+    expect(createMutate.mock.calls[0][0]).not.toHaveProperty('password')
+  })
+
+  it('warns what each permission basis means', () => {
+    directoryLogin = false
+    render(<ConnectorsPage />)
+    fireEvent.click(screen.getByRole('button', { name: '새 연결' }))
+
+    expect(screen.getByText(/사내 AD 연결이 꺼져 있어/)).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText(/컬렉션 권한만 적용/))
+    expect(screen.getByText(/이 컬렉션 구성원 모두에게 열립니다/)).toBeInTheDocument()
+  })
+
+  it('sends the permission basis when it is changed in settings', () => {
+    render(<ConnectorsPage />)
+    fireEvent.click(screen.getByRole('button', { name: /영업 공유/ }))
+    fireEvent.click(screen.getByLabelText(/컬렉션 권한만 적용/))
+    expect(screen.getByText(/새 기준으로 다시 겁니다/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '설정 저장' }))
+    expect(updateMutate.mock.calls[0][0].input.acl_mode).toBe('collection_only')
   })
 })

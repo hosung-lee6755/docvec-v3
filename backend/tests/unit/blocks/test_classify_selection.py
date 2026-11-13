@@ -57,3 +57,55 @@ def test_blank_categories_do_not_become_the_fallback(monkeypatch):
 
 def test_falls_back_to_last_category_when_nothing_matches(monkeypatch):
     assert _classify(monkeypatch, "모르겠습니다") == "기타"
+
+
+# ------------------------------------------------------------ 파일명과 카테고리 설명
+def _run(monkeypatch, answer: str, *, filename: str, categories):
+    prompts = []
+
+    def fake(system_prompt, user_content):
+        prompts.append(system_prompt)
+        return answer
+
+    monkeypatch.setattr(cb, "_generate", fake)
+    ctx = BlockContext(
+        run_id="r", block_instance_id="b",
+        upstream_outputs={"up": {"text": "본문", "filename": filename}},
+        config={"categories": categories},
+    )
+    return cb.ClassifyBlock().run(ctx).output, prompts
+
+
+CUSTOM = ["정부 공고", "사업 제안서", "기타"]
+
+
+def test_a_filename_naming_exactly_one_category_decides_without_the_model(monkeypatch):
+    # 본문이 정제 결과로 바뀌어도 "…공고.hwp" 같은 파일명은 그대로라 분류가 흔들리지 않는다.
+    out, prompts = _run(monkeypatch, "사업 제안서", filename="2027년 지원사업 공고.hwp", categories=CUSTOM)
+    assert (out["category"], out["category_source"]) == ("정부 공고", "filename")
+    assert prompts == []
+
+
+def test_a_filename_naming_two_categories_is_left_to_the_model(monkeypatch):
+    out, _ = _run(monkeypatch, "사업 제안서", filename="공고 대응 제안서.hwp", categories=CUSTOM)
+    assert (out["category"], out["category_source"]) == ("사업 제안서", "model")
+
+
+def test_default_categories_match_the_filename_by_their_stem(monkeypatch):
+    out, _ = _run(monkeypatch, "보고서", filename="모집 공고.pdf", categories=CATEGORIES)
+    assert out["category"] == "공고문"
+    out, _ = _run(monkeypatch, "보고서", filename="품질 진단보고서.pdf", categories=CATEGORIES)
+    assert out["category"] == "진단보고서"
+
+
+def test_the_fallback_category_is_never_picked_from_the_filename(monkeypatch):
+    out, _ = _run(monkeypatch, "사례집", filename="기타 자료.pdf", categories=CATEGORIES)
+    assert out["category"] == "사례집"
+
+
+def test_custom_categories_can_carry_a_description_for_the_model(monkeypatch):
+    categories = ["정부 공고: 정부나 공공기관이 낸 모집·지원사업 안내", "사업 제안서: 사업을 따내려고 낸 계획서", "기타"]
+    out, prompts = _run(monkeypatch, "정부 공고", filename="", categories=categories)
+
+    assert out["category"] == "정부 공고"
+    assert "- 정부 공고: 정부나 공공기관이 낸 모집·지원사업 안내" in prompts[0]

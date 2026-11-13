@@ -6,23 +6,37 @@
 지우지 않고 비활성으로 남긴다.
 """
 import asyncio
+import os
 import re
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user, require_admin
+from app.core.config import settings
 from app.core.crypto import encrypt_secret
 from app.db.models.collection import Collection
-from app.db.models.source_connector import ITEM_ERROR, ITEM_HELD, ConnectorRun, SourceConnector, SourceItem
+from app.db.models.source_connector import (
+    ACL_MODE_COLLECTION,
+    ACL_MODE_FILE,
+    CONNECTOR_KIND_LOCAL,
+    CONNECTOR_KIND_SMB,
+    ITEM_ERROR,
+    ITEM_HELD,
+    ConnectorRun,
+    SourceConnector,
+    SourceItem,
+)
 from app.db.models.user import User
 from app.db.session import get_db
 from app.services.access_policy import SECURITY_LEVELS
 from app.services.audit import log_audit
+from app.services.connectors.local_client import LocalPathError, resolve_local_folder
 from app.services.connectors.registry import new_service_user
 from app.services.sync_lock import connector_lock_key, held_lock
 
@@ -33,6 +47,7 @@ _SHARE_RE = re.compile(r"^[^\\/:*?\"<>|\x00]{1,80}$")
 _SID_RE = re.compile(r"^S-1-\d+(-\d+){1,14}$")
 _RECENT_RUNS = 10
 _MAX_LISTED_ITEMS = 200
+_MAX_LOCAL_FOLDERS = 200
 
 
 def _check_sid(value: str | None) -> str | None:
@@ -55,11 +70,15 @@ class LevelRule(BaseModel):
 
 class ConnectorBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    host: str
+    # smb=파일 서버 공유 폴더, local=서버에 마운트한 폴더(CONNECTOR_LOCAL_ROOT 아래)
+    kind: Literal["smb", "local"] = CONNECTOR_KIND_SMB
+    # file_acl=파일 서버 권한을 따름(사내 AD 필요), collection_only=컬렉션 권한만 적용
+    acl_mode: Literal["file_acl", "collection_only"] = ACL_MODE_FILE
+    host: str = ""
     port: int = Field(default=445, ge=1, le=65535)
-    share: str
+    share: str = ""
     base_path: str = Field(default="", max_length=1024)
-    username: str = Field(min_length=1, max_length=255)
+    username: str = Field(default="", max_length=255)
     service_account_sid: str | None = None
     collection_id: UUID
     level_rules: list[LevelRule] = Field(default_factory=list, max_length=100)
@@ -70,14 +89,14 @@ class ConnectorBase(BaseModel):
     @field_validator("host")
     @classmethod
     def _host(cls, v: str) -> str:
-        if not _HOST_RE.match(v):
+        if v and not _HOST_RE.match(v):
             raise ValueError("호스트 이름이나 IP 주소만 쓸 수 있습니다")
         return v
 
     @field_validator("share")
     @classmethod
     def _share(cls, v: str) -> str:
-        if not _SHARE_RE.match(v):
+        if v and not _SHARE_RE.match(v):
             raise ValueError("공유 이름에 쓸 수 없는 문자가 있습니다")
         return v
 
@@ -96,7 +115,23 @@ class ConnectorBase(BaseModel):
 
 
 class ConnectorCreate(ConnectorBase):
-    password: str = Field(min_length=1, max_length=256)
+    password: str = Field(default="", max_length=256)
+
+    @model_validator(mode="after")
+    def _by_kind(self) -> "ConnectorCreate":
+        if self.kind == CONNECTOR_KIND_LOCAL:
+            # 로컬 폴더에는 파일 권한이 없어 항상 컬렉션 권한만 적용한다. 서버 접속 정보는 쓰지 않는다.
+            if not self.base_path:
+                raise ValueError("로컬 폴더 커넥터는 폴더를 지정해야 합니다")
+            self.acl_mode = ACL_MODE_COLLECTION
+            self.host = self.share = self.username = self.password = ""
+            self.service_account_sid = None
+            return self
+        missing = [label for label, value in (("서버 주소", self.host), ("공유 이름", self.share),
+                                              ("계정", self.username), ("비밀번호", self.password)) if not value]
+        if missing:
+            raise ValueError(f"파일 서버 연결에는 {', '.join(missing)}이(가) 필요합니다")
+        return self
 
 
 class ConnectorUpdate(BaseModel):
@@ -107,6 +142,7 @@ class ConnectorUpdate(BaseModel):
     max_new_per_run: int | None = Field(default=None, ge=1, le=5000)
     enabled: bool | None = None
     service_account_sid: str | None = None
+    acl_mode: Literal["file_acl", "collection_only"] | None = None
 
     @field_validator("service_account_sid")
     @classmethod
@@ -116,7 +152,7 @@ class ConnectorUpdate(BaseModel):
 
 def _connector_out(c: SourceConnector, collection_name: str | None, held: int = 0, errors: int = 0) -> dict:
     return {
-        "id": str(c.id), "name": c.name, "kind": c.kind, "host": c.host, "port": c.port, "share": c.share,
+        "id": str(c.id), "name": c.name, "kind": c.kind, "acl_mode": c.acl_mode, "host": c.host, "port": c.port, "share": c.share,
         "base_path": c.base_path, "username": c.username, "service_account_sid": c.service_account_sid,
         "collection_id": str(c.collection_id), "collection_name": collection_name,
         "level_rules": c.level_rules or [], "sync_interval_minutes": c.sync_interval_minutes,
@@ -174,6 +210,24 @@ async def list_connectors(db: AsyncSession = Depends(get_db), current_user: User
     return out
 
 
+def _local_folders(root: str) -> list[str]:
+    """원천 루트 바로 아래 폴더 목록(화면의 선택지). 루트가 없으면 빈 목록."""
+    try:
+        with os.scandir(root) as entries:
+            names = sorted(e.name for e in entries if e.is_dir(follow_symlinks=False) and not e.name.startswith("."))
+    except OSError:
+        return []
+    return names[:_MAX_LOCAL_FOLDERS]
+
+
+@router.get("/admin/connectors/options")
+async def connector_options(current_user: User = Depends(get_current_user)):
+    """원천 연결 화면이 고를 수 있는 것: AD 사용 여부(파일 서버 권한을 따르려면 필요)와 로컬 폴더 목록."""
+    require_admin(current_user)
+    root = settings.connector_local_root
+    return {"directory_login": bool(settings.ldap_enabled), "local_root": root, "local_folders": _local_folders(root)}
+
+
 @router.post("/admin/connectors", status_code=201)
 async def create_connector(
     data: ConnectorCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
@@ -183,20 +237,26 @@ async def create_connector(
     if collection is None:
         raise HTTPException(status_code=404, detail="Collection not found")
 
+    if data.kind == CONNECTOR_KIND_LOCAL:
+        try:
+            resolve_local_folder(settings.connector_local_root, data.base_path)
+        except LocalPathError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     service_user = new_service_user(data.name)
     db.add(service_user)
     await db.flush()
     connector = SourceConnector(
         **data.model_dump(exclude={"password", "level_rules"}),
         level_rules=[r.model_dump() for r in data.level_rules],
-        password_encrypted=encrypt_secret(data.password),
+        password_encrypted=encrypt_secret(data.password) if data.password else "",
         service_user_id=service_user.id,
         created_by=current_user.id,
     )
     db.add(connector)
     await db.flush()
     log_audit(db, str(current_user.id), "connector.create", "connector", str(connector.id),
-              detail={"name": data.name, "host": data.host, "share": data.share,
+              detail={"name": data.name, "kind": data.kind, "acl_mode": data.acl_mode, "host": data.host, "share": data.share,
                       "collection_id": str(data.collection_id)})
     await db.commit()
     await db.refresh(connector)
@@ -243,6 +303,10 @@ async def update_connector(
     require_admin(current_user)
     connector = await _get(db, connector_id)
     changes = data.model_dump(exclude_unset=True)
+    if connector.kind == CONNECTOR_KIND_LOCAL and (
+        changes.get("acl_mode") == ACL_MODE_FILE or changes.get("password") or changes.get("service_account_sid")
+    ):
+        raise HTTPException(status_code=422, detail="로컬 폴더에는 파일 권한이 없어 컬렉션 권한만 적용합니다.")
     password = changes.pop("password", None)
     for field, value in changes.items():
         if value is None and field != "service_account_sid":

@@ -50,6 +50,7 @@ export function CollectionCreateModal({ projects, routeProjectId, initialProject
       project_id: projectId || undefined,
       default_workflow_id: workflowId || undefined,
       default_analysis_workflow_id: analysisWorkflowId || undefined,
+      default_security_level: securityLevel || undefined,
     })
     onClose()
   }

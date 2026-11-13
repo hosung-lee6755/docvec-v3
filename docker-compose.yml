@@ -113,6 +113,8 @@ services:
       - ./backend:/app
       - backend_venv:/app/.venv
       - model_cache:/model_cache
+      # 로컬 폴더 커넥터가 읽는 원천 폴더(읽기 전용). 호스트 경로는 CONNECTOR_LOCAL_DIR로 바꾼다
+      - ${CONNECTOR_LOCAL_DIR:-./data/sources}:/data/sources:ro
     ports:
       - "127.0.0.1:18001:8000"  # 로컬 전용(외부는 Caddy→frontend→/api)
     depends_on:
@@ -162,6 +164,8 @@ services:
       - ./backend:/app
       - worker_venv:/app/.venv
       - model_cache:/model_cache
+      # 로컬 폴더 커넥터가 읽는 원천 폴더(읽기 전용). 호스트 경로는 CONNECTOR_LOCAL_DIR로 바꾼다
+      - ${CONNECTOR_LOCAL_DIR:-./data/sources}:/data/sources:ro
     deploy:
       resources:
         reservations:

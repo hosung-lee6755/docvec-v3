@@ -449,9 +449,14 @@ async def test_check_run_access_system_workflow_falls_back_to_collection(system_
 
 
 @pytest.mark.asyncio
-async def test_check_run_access_system_workflow_without_target_is_403(system_world):
+async def test_run_whose_document_was_deleted_is_admin_only_and_hidden_from_others(system_world):
+    # 문서를 지우면 실행의 document_id가 비어 대상이 남지 않는다. 관리자는 기록을 열 수 있어야 하고,
+    # 다른 사용자에게는 기록이 있다는 사실도 드러내지 않는다(목록에서도 보이지 않는다).
     w = system_world
+    admin = await make_user(w["db"], "admin")
     run = await _make_run(w["db"], w["version"])
+
+    await check_run_access(w["db"], w["workflow"], run, admin, "viewer")
     with pytest.raises(HTTPException) as exc:
         await check_run_access(w["db"], w["workflow"], run, w["owner"], "viewer")
-    assert exc.value.status_code == 403
+    assert exc.value.status_code == 404

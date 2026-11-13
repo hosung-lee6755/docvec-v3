@@ -51,7 +51,11 @@ async def check_run_access(
     if run.collection_id:
         await check_collection_access(db, run.collection_id, user, min_role=min_role)
         return
-    raise HTTPException(status_code=403, detail="Access denied")
+    # 대상 문서가 지워져 문서도 컬렉션도 남지 않은 실행. 처리 이력은 관리자만 보고, 다른 사용자에게는
+    # 목록과 같이 없는 실행으로 보인다(403은 기록이 있다는 사실을 알려 준다).
+    if user.role == "admin":
+        return
+    raise HTTPException(status_code=404, detail="Run not found")
 
 
 async def check_workflow_access(

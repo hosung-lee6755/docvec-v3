@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { ShieldOff } from 'lucide-react'
 import {
   TOKEN_STATUS_BADGE, TOKEN_STATUS_LABELS, useAllAccessTokens, useRevokeAnyAccessToken,
@@ -49,6 +50,11 @@ export default function AccessTokensPage() {
       </StatStrip>
 
       <PageBody>
+        <Alert tone="info">
+          이 화면은 발급된 토큰을 보고 회수하는 곳입니다. 발급은 계정 설정 &gt; 외부 에이전트에서 합니다. 직원마다 자기 계정으로
+          로그인해 직접 발급하며, 그 화면에 에이전트 연결 방법도 함께 안내되어 있습니다.{' '}
+          <Link to="/settings?tab=agent">계정 설정 &gt; 외부 에이전트로 가기</Link>
+        </Alert>
         {data && !data.mcp_enabled && (
           <Alert tone="warning">지금은 외부 에이전트 연결이 꺼져 있어 어떤 토큰도 쓸 수 없습니다.</Alert>
         )}

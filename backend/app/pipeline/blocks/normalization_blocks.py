@@ -55,6 +55,22 @@ def _load_entries_as_of(db, entry_type: str, cutoff) -> list:
     return query.all()
 
 
+# 앞쪽 경계는 같은 문자 체계끼리만 따진다. `\b`는 한글과 영문을 모두 단어 글자로 봐서 "국가R&D"의
+# "R&D"처럼 한글 바로 뒤에 붙은 영문 용어를 놓쳤다. 영문·숫자로 시작하는 항목은 앞이 영문·숫자가 아닐 때,
+# 한글로 시작하는 항목은 앞이 한글이 아닐 때 시작으로 본다("MAIL" 속 "AI", "대한민국" 속 "민국"은 계속 막는다).
+_LATIN_OR_DIGIT = "A-Za-z0-9"
+_HANGUL = "가-힣ㄱ-ㅎㅏ-ㅣ"
+
+
+def _front_boundary(term: str) -> str:
+    first = term[:1]
+    if re.match(f"[{_LATIN_OR_DIGIT}]", first):
+        return f"(?<![{_LATIN_OR_DIGIT}])"
+    if re.match(f"[{_HANGUL}]", first):
+        return f"(?<![{_HANGUL}])"
+    return ""
+
+
 def _find_spans(term: str, match_type: str, case_sensitive: bool, text: str) -> list[tuple[int, int]]:
     """entry.match_type 의미를 원문 오프셋 검색에 맞게 적용 — dictionary_service.
     _is_stopword의 토큰 단위 판정을 문자열 구간 탐색으로 옮긴 것.
@@ -71,13 +87,13 @@ def _find_spans(term: str, match_type: str, case_sensitive: bool, text: str) -> 
     if match_type == "REGEX":
         pattern = term
     elif match_type == "PREFIX":
-        pattern = r"\b" + escaped
+        pattern = _front_boundary(term) + escaped
     elif match_type == "SUFFIX":
         pattern = escaped + r"\b"
     elif match_type == "CONTAINS":
         pattern = escaped
     else:  # EXACT
-        pattern = r"\b" + escaped
+        pattern = _front_boundary(term) + escaped
     try:
         return [(m.start(), m.end()) for m in re.finditer(pattern, text, flags)]
     except re.error:

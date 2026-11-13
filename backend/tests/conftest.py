@@ -31,3 +31,5 @@ def _directory_login_off_by_default(monkeypatch):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "ldap_enabled", False)
+    # 기존 회원가입 테스트는 가입이 열린 상태를 전제로 한다. 꺼진 동작은 test_auth_local_accounts가 따로 시험한다
+    monkeypatch.setattr(settings, "self_signup_enabled", True)
