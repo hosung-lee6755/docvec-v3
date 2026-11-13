@@ -228,3 +228,79 @@ def test_estimate_token_count_mixes_hangul_and_other():
     assert cs._estimate_token_count("가나다") == 3
     assert cs._estimate_token_count("abcdefgh") == 2
     assert cs._estimate_token_count("a") == 1
+
+
+
+# ---- 짧은 구획 합치기(자동 구조 기준, 2026-11-13) ----
+# 소제목이 촘촘한 슬라이드형 PDF에서 제목마다 청크를 닫으면 6~50자짜리 조각이 쏟아졌다.
+
+
+def _slides():
+    parts = [("H", "개요", 1), ("P", "요구사항 정의", None), ("H", "세부", 1),
+             ("P", "사전분석을 통한 제안사 의견 도출 및 제시입니다.", None),
+             ("H", "결과", 1), ("T", "| 항목 | 값 | 비고 | 가 | 1 | 없음 |", None), ("H", "끝", 1), ("P", "짧음", None)]
+    text, nodes = "", []
+    for i, (kind, body, level) in enumerate(parts):
+        if text:
+            text += "\n\n"
+        start = len(text)
+        text += body
+        node_type = {"H": "HEADING", "P": "PARAGRAPH", "T": "TABLE"}[kind]
+        nodes.append(_node(f"n{i}", node_type, start, len(text), text=body, level=level))
+    return text, nodes
+
+
+def test_short_sections_are_merged_with_a_neighbour_when_asked():
+    text, nodes = _slides()
+
+    chunks = _tree(nodes, text, max_chars=200, min_chars=20, respect_headings=True, merge_small_sections=True)
+
+    bodies = [c.text for c in chunks]
+    assert bodies[0] == "요구사항 정의\n\n세부\n\n사전분석을 통한 제안사 의견 도출 및 제시입니다."
+    assert chunks[0].section_path == ["세부"]  # 더 긴 쪽의 구획 경로를 따른다
+    assert "| 항목 | 값 | 비고 | 가 | 1 | 없음 |" in bodies  # 표는 다른 내용과 섞지 않는다
+
+
+def test_short_sections_stay_apart_by_default():
+    text, nodes = _slides()
+
+    chunks = _tree(nodes, text, max_chars=200, min_chars=20, respect_headings=True)
+
+    assert chunks[0].text == "요구사항 정의"
+
+
+def test_merging_never_exceeds_max_chars():
+    text, nodes = _slides()
+
+    chunks = _tree(nodes, text, max_chars=30, min_chars=20, respect_headings=True, merge_small_sections=True)
+
+    assert chunks[0].text == "요구사항 정의"
+
+
+
+def test_a_tiny_title_table_is_merged_like_a_heading():
+    # HWP 공고문은 칸 하나짜리 표를 장 제목으로 쓴다
+    title = "[표 1] 1. 사업개요 |"
+    body = "중소기업의 공장 자동화를 지원하는 사업입니다."
+    text = title + "XX" + body
+    nodes = [_node("t", "TABLE", 0, len(title)), _node("p", "PARAGRAPH", len(title) + 2, len(text))]
+
+    chunks = _tree(nodes, text, max_chars=200, min_chars=30, respect_headings=True, merge_small_sections=True)
+
+    assert len(chunks) == 1 and chunks[0].text.startswith(title)
+
+
+
+def test_a_short_line_right_before_a_table_becomes_its_title():
+    # 표 사이에 낀 "※ ... 비교표" 한 줄은 바로 뒤 표의 제목이다. 앞 표에는 붙이지 않는다
+    first = "| 구분 | 내용 | 비고 | 가 | 나 | 다 | 라 |"
+    caption = "※ 대안 프레임워크 비교표"
+    second = "| 이름 | 장점 | 단점 | 리액트 | 생태계 | 무거움 |"
+    text = first + "XX" + caption + "XX" + second
+    a, b = len(first) + 2, len(first) + 2 + len(caption)
+    nodes = [_node("t1", "TABLE", 0, len(first)), _node("p", "PARAGRAPH", a, b),
+             _node("t2", "TABLE", b + 2, len(text))]
+
+    chunks = _tree(nodes, text, max_chars=200, min_chars=30, respect_headings=True, merge_small_sections=True)
+
+    assert [c.text for c in chunks] == [first, caption + "XX" + second]

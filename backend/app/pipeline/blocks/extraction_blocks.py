@@ -326,6 +326,34 @@ def _assemble_full_text(pages, excluded_lines: set[str]) -> tuple[str, dict[str,
     return "\n\n".join(full_text_parts), element_spans
 
 
+def _page_map_for_assembly(pages, excluded_lines: set[str]) -> list[list[int]]:
+    """`_assemble_full_text`와 똑같이 블록을 걸러 [[쪽 끝 위치, 쪽 번호], ...]를 만든다.
+
+    예전에는 머리말·꼬리말을 지우기 전 블록 길이로 셌다(process._build_page_map). 지운 글자만큼 쪽 경계가
+    parsed_text보다 뒤로 밀려, 988쪽 문서에서 청크 719개 중 130개만 쪽이 맞았다(2026-11-13)."""
+    page_map: list[list[int]] = []
+    cursor = 0
+    current_page: int | None = None
+    has_text = False
+    for page in pages:
+        for block in page.text_blocks:
+            block_text = _strip_nul_bytes(_strip_excluded_lines(block.text, excluded_lines))
+            if not block_text.strip():
+                continue
+            if current_page is None:
+                current_page = page.page_number
+            elif page.page_number != current_page:
+                page_map.append([cursor, current_page])
+                current_page = page.page_number
+            if has_text:
+                cursor += 2  # "\n\n" separator, same as _assemble_full_text
+            has_text = True
+            cursor += len(block_text)
+    if current_page is not None:
+        page_map.append([cursor, current_page])
+    return page_map
+
+
 _HANGUL_RE = re.compile(r"[가-힣]")
 _LATIN_RE = re.compile(r"[a-zA-Z]")
 
@@ -497,7 +525,11 @@ class TextExtractBlock(BaseBlock):
         # 1.19.0: Document.page_count 를 어댑터가 센 원본 쪽수로 기록(DOCX 는 미리보기 PDF 쪽수)하고, 원본
         # 제목 속성을 Document.source_title 로 남기며, 한글 비중 40% 이상이면 한국어로 판정하고, 사용자가
         # 고친 언어는 덮어쓰지 않는다 — 캐시된 이전 결과는 쪽수·제목 속성이 없고 언어 판정이 달랐다.
-        return "1.21.0"
+        #
+        # 1.22.0: (2026-11-13 전처리 성능 검토) page_map 을 실제 조립 텍스트 기준으로 만들고, HWP/HWPX 표를
+        # 문서 순서 자리에 두며 셀 안 문단을 " / "로 구분하고, Docling 표의 실제 머리글 행을 남기고, OCR 이 %를
+        # 9·96으로 읽은 값을 고치고, 잡음뿐인 그림 인식 결과를 본문에서 뺀다 — 이전 캐시는 이 모두가 달랐다.
+        return "1.22.0"
 
     @property
     def category(self) -> str:
@@ -515,7 +547,6 @@ class TextExtractBlock(BaseBlock):
         from app.pipeline.job_tracker import complete_job, fail_job, start_job
         from app.pipeline.tasks.process import (
             _apply_preview_page_count,
-            _build_page_map,
             _recognize_document_images,
             _repaginate_hwp_like,
             _resolve_vision_credentials,
@@ -603,6 +634,13 @@ class TextExtractBlock(BaseBlock):
                     logger.exception("image recognition failed", extra={"document_id": str(doc.id)})
                     image_records = []
 
+            # OCR이 %를 9·96으로 읽은 숫자(87.00%→87.009)를 되돌린다. 비율 표에서 모든 값이 그 모양일 때만 고친다.
+            from app.pipeline.ocr_cleanup import fix_percent_in_pages
+
+            percent_fixes = fix_percent_in_pages(parsed.pages)
+            if percent_fixes:
+                parsed.warnings.append(f"OCR이 %를 숫자로 읽은 값 {percent_fixes}개를 고쳤습니다.")
+
             excluded_lines = (
                 _detect_header_footer_footnote_lines(parsed)
                 if cfg.exclude_headers_footers else set()
@@ -616,7 +654,7 @@ class TextExtractBlock(BaseBlock):
             )
 
             doc.parsed_text = full_text
-            doc.page_map = _build_page_map(parsed.pages)
+            doc.page_map = _page_map_for_assembly(parsed.pages, excluded_lines)
             doc.extraction_layout = _strip_nul_bytes(parsed.metadata.get("line_layout")) or None
             # Docling 도입 설계서(2026-07-23) Phase 1 — Docling 경로에서만 채워지는
             # 통합 요소 JSON. legacy 어댑터(HWP/HWPX, engine=="legacy")는 이 키를

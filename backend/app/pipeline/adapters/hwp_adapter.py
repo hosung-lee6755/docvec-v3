@@ -82,18 +82,45 @@ def _hwpx_collect_text(elem, *, skip_tables: bool = False) -> str:
     return "".join(parts)
 
 
+# 셀 안의 여러 문단을 잇는 구분자. 예전에는 글자를 그대로 붙여 "사업계획서- 국세…"처럼 항목이 붙었다
+# (2026-11-13 검토). 표 텍스트는 " | "로 셀을 나누므로 그와 겹치지 않는 구분자를 쓴다
+CELL_PARAGRAPH_SEP = " / "
+
+
+def _record(order: list | None, kind: str, index: int) -> None:
+    """문단("p")과 표("t")가 문서에 나온 순서를 남긴다. 추출할 때 이 순서로 블록을 만든다."""
+    if order is not None:
+        order.append((kind, index))
+
+
+def _hwpx_cell_text(tc) -> str:
+    parts: list[str] = []
+
+    def _walk(e) -> None:
+        for child in e:
+            if _hwpx_local_tag(child) == "p":
+                text = _hwpx_collect_text(child).strip()
+                if text:
+                    parts.append(text)
+            else:
+                _walk(child)
+
+    _walk(tc)
+    return CELL_PARAGRAPH_SEP.join(parts)
+
+
 def _hwpx_table_rows(tbl_elem) -> list[list[str]]:
     rows = []
     for tr in tbl_elem:
         if _hwpx_local_tag(tr) != "tr":
             continue
-        cells = [_hwpx_collect_text(tc).strip() for tc in tr if _hwpx_local_tag(tc) == "tc"]
+        cells = [_hwpx_cell_text(tc) for tc in tr if _hwpx_local_tag(tc) == "tc"]
         if any(cells):
             rows.append(cells)
     return rows
 
 
-def _collect_nested_hwpx_tables(elem, tables: list[list[list[str]]]) -> None:
+def _collect_nested_hwpx_tables(elem, tables: list[list[list[str]]], order: list | None = None) -> None:
     """HWPX anchors a table as an inline object inside its host paragraph's
     run (hp:p > hp:run > hp:tbl), not as the paragraph's sibling — so once a
     paragraph's own text is collected, its children must still be searched
@@ -104,8 +131,9 @@ def _collect_nested_hwpx_tables(elem, tables: list[list[list[str]]]) -> None:
             rows = _hwpx_table_rows(child)
             if rows:
                 tables.append(rows)
+                _record(order, "t", len(tables) - 1)
             continue
-        _collect_nested_hwpx_tables(child, tables)
+        _collect_nested_hwpx_tables(child, tables, order)
 
 
 def _hwp_collect_text(elem) -> str:
@@ -138,13 +166,15 @@ def _hwp_table_rows(table_body_elem) -> list[list[str]]:
                 for p in cell
                 if p.tag == "Paragraph" and _hwp_collect_text(p).strip()
             ]
-            cells.append(" ".join(parts))
+            cells.append(CELL_PARAGRAPH_SEP.join(parts))
         if any(cells):
             rows.append(cells)
     return rows
 
 
-def _walk_hwp_body(elem, paragraphs: list[str], tables: list[list[list[str]]]) -> None:
+def _walk_hwp_body(
+    elem, paragraphs: list[str], tables: list[list[list[str]]], order: list | None = None,
+) -> None:
     """Walks pyhwp's nested XML model of a binary .hwp document. A table is
     anchored inline inside its host paragraph's LineSeg (Paragraph > LineSeg >
     TableControl), so unlike _walk_hwpx, a Paragraph must still descend into
@@ -161,11 +191,12 @@ def _walk_hwp_body(elem, paragraphs: list[str], tables: list[list[list[str]]]) -
             elif child.tag == "TableCaption":
                 caption = child
         if caption is not None:
-            _walk_hwp_body(caption, paragraphs, tables)
+            _walk_hwp_body(caption, paragraphs, tables, order)
         if table_body is not None:
             rows = _hwp_table_rows(table_body)
             if rows:
                 tables.append(rows)
+                _record(order, "t", len(tables) - 1)
         return
     if tag == "GShapeObjectControl":
         return
@@ -173,14 +204,17 @@ def _walk_hwp_body(elem, paragraphs: list[str], tables: list[list[list[str]]]) -
         text = _hwp_collect_text(elem).strip()
         if text:
             paragraphs.append(text)
+            _record(order, "p", len(paragraphs) - 1)
         for child in elem:
-            _walk_hwp_body(child, paragraphs, tables)
+            _walk_hwp_body(child, paragraphs, tables, order)
         return
     for child in elem:
-        _walk_hwp_body(child, paragraphs, tables)
+        _walk_hwp_body(child, paragraphs, tables, order)
 
 
-def _walk_hwpx(elem, paragraphs: list[str], tables: list[list[list[str]]]) -> None:
+def _walk_hwpx(
+    elem, paragraphs: list[str], tables: list[list[list[str]]], order: list | None = None,
+) -> None:
     """Walks an HWPX section XML tree, separating table cells from loose
     paragraph text. A table is anchored inline inside its host paragraph's
     run (hp:p > hp:run > hp:tbl), so a paragraph must still descend into its
@@ -192,15 +226,35 @@ def _walk_hwpx(elem, paragraphs: list[str], tables: list[list[list[str]]]) -> No
         rows = _hwpx_table_rows(elem)
         if rows:
             tables.append(rows)
+            _record(order, "t", len(tables) - 1)
         return
     if tag == "p":
         text = _hwpx_collect_text(elem, skip_tables=True).strip()
         if text:
             paragraphs.append(text)
-        _collect_nested_hwpx_tables(elem, tables)
+            _record(order, "p", len(paragraphs) - 1)
+        _collect_nested_hwpx_tables(elem, tables, order)
         return
     for child in elem:
-        _walk_hwpx(child, paragraphs, tables)
+        _walk_hwpx(child, paragraphs, tables, order)
+
+
+def _ordered_text_blocks(
+    paragraphs: list[str], tables: list[list[list[str]]], order: list[tuple[str, int]],
+) -> tuple[list[RawTextBlock], list[RawTableCandidate]]:
+    """문단과 표를 문서에 나온 순서대로 블록으로 만든다. 예전에는 표를 모두 문서 끝에 붙여 표가 설명 문단과
+    떨어지고, 청크에서 무슨 표인지 알 수 없었다(2026-11-13 검토). 표 번호 [표 N]도 문서 순서다."""
+    table_candidates = [RawTableCandidate(page_number=1, rows=rows) for rows in tables]
+    text_blocks: list[RawTextBlock] = []
+    for kind, index in order:
+        if kind == "p":
+            text_blocks.append(RawTextBlock(text=paragraphs[index], page_number=1))
+            continue
+        table_text = "\n".join(" | ".join(row) for row in tables[index])
+        text_blocks.append(
+            RawTextBlock(text=f"[표 {index + 1}]\n{table_text}", page_number=1, block_type="table")
+        )
+    return text_blocks, table_candidates
 
 
 class HWPAdapter(BaseAdapter):
@@ -257,13 +311,14 @@ class HWPAdapter(BaseAdapter):
 
         paragraphs: list[str] = []
         raw_tables: list[list[list[str]]] = []
+        order: list[tuple[str, int]] = []
         try:
             buf = BytesIO()
             Hwp5File(str(file_path)).xmlevents(embedbin=False).dump(buf, xml_declaration=True)
             root = parse_xml_bytes(buf.getvalue())
             body = root.find("BodyText")
             if body is not None:
-                _walk_hwp_body(body, paragraphs, raw_tables)
+                _walk_hwp_body(body, paragraphs, raw_tables, order)
         except Exception as exc:
             return RawParsedDocument(
                 format_id="hwp",
@@ -278,16 +333,7 @@ class HWPAdapter(BaseAdapter):
         # can match each paragraph against the rendered preview PDF's per-page
         # text and assign it a real page number — see hwp_adapter.py's
         # page_number=1 placeholders below, which that pass overwrites.
-        text_blocks = [RawTextBlock(text=p, page_number=1) for p in paragraphs]
-
-        table_candidates = [RawTableCandidate(page_number=1, rows=rows) for rows in raw_tables]
-        for i, table in enumerate(table_candidates):
-            table_text = "\n".join(" | ".join(row) for row in table.rows)
-            text_blocks.append(
-                RawTextBlock(
-                    text=f"[표 {i + 1}]\n{table_text}", page_number=1, block_type="table"
-                )
-            )
+        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order)
 
         warnings: list[str] = []
         image_regions: list[RawImageRegion] = []
@@ -318,12 +364,13 @@ class HWPAdapter(BaseAdapter):
 
         paragraphs: list[str] = []
         raw_tables: list[list[list[str]]] = []
+        order: list[tuple[str, int]] = []
         try:
             with zipfile.ZipFile(file_path, "r") as z:
                 for name in sorted(z.namelist()):
                     if name.startswith("Contents/") and name.endswith(".xml"):
                         with z.open(name) as f:
-                            _walk_hwpx(parse_xml(f), paragraphs, raw_tables)
+                            _walk_hwpx(parse_xml(f), paragraphs, raw_tables, order)
                 raw_images = _hwpx_bindata_images(z)
         except Exception as exc:
             return RawParsedDocument(
@@ -337,18 +384,7 @@ class HWPAdapter(BaseAdapter):
         # See the matching comment in _extract_hwp: one block per paragraph so
         # the repagination pass can locate each paragraph independently in the
         # rendered preview PDF's per-page text.
-        text_blocks = [RawTextBlock(text=p, page_number=1) for p in paragraphs]
-
-        table_candidates = [
-            RawTableCandidate(page_number=1, rows=rows) for rows in raw_tables
-        ]
-        for i, table in enumerate(table_candidates):
-            table_text = "\n".join(" | ".join(row) for row in table.rows)
-            text_blocks.append(
-                RawTextBlock(
-                    text=f"[표 {i + 1}]\n{table_text}", page_number=1, block_type="table"
-                )
-            )
+        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order)
 
         page = RawPage(
             page_number=1,

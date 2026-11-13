@@ -17,6 +17,26 @@ logger = logging.getLogger(__name__)
 _BOUNDARY_LOOKBACK_RATIO = 4
 
 
+_SENTENCE_END_RE = re.compile(r"[.!?。！？]\s")
+
+
+def _cut_point(text: str, search_start: int, hard_end: int) -> int | None:
+    """search_start~hard_end 안에서 가장 늦은 자연스러운 자를 곳(그 뒤 첫 글자 위치). 문단, 문장 끝, 줄바꿈, 공백 순."""
+    boundary = text.rfind("\n\n", search_start, hard_end)
+    if boundary > search_start:
+        return boundary + 2
+    sentence_end = None
+    for m in _SENTENCE_END_RE.finditer(text, search_start, hard_end):
+        sentence_end = m.end()
+    if sentence_end is not None and sentence_end > search_start:
+        return sentence_end
+    for sep in ("\n", " "):
+        pos = text.rfind(sep, search_start, hard_end)
+        if pos > search_start:
+            return pos + 1
+    return None
+
+
 def _chunk_text(
     text: str, max_chars: int = 2000, overlap: int = 200, min_chars: int = 0
 ) -> list[tuple[str, int, int]]:
@@ -25,8 +45,9 @@ def _chunk_text(
 
     Prefers cutting at a paragraph boundary ("\n\n", inserted between blocks by
     text_extract block — see _build_page_map) near the target size, so a [표 N] table
-    block or a paragraph isn't split mid-way. Falls back to a hard character cut
-    when no boundary is found within the lookback window.
+    block or a paragraph isn't split mid-way. Without a paragraph break it cuts after a
+    sentence end, then at a line break or space, and only then at a hard character cut
+    (2026-11-13: half of the size-based chunks ended mid-sentence).
     """
     if not text.strip():
         return []
@@ -37,14 +58,11 @@ def _chunk_text(
         end = hard_end
         if hard_end < len(text):
             lookback = max_chars // _BOUNDARY_LOOKBACK_RATIO
-            search_start = max(start, hard_end - lookback)
-            boundary = text.rfind("\n\n", search_start, hard_end)
-            if boundary != -1 and boundary > start:
-                end = boundary + 2
+            end = _cut_point(text, max(start, hard_end - lookback), hard_end) or hard_end
         chunks.append((text[start:end], start, end))
         if end == len(text):
             break
-        start = end - overlap
+        start = end - overlap if end - overlap > start else end
     if len(chunks) > 1 and len(chunks[-1][0]) < min_chars:
         prev_text, prev_start, _prev_end = chunks[-2]
         last_text, _last_start, last_end = chunks[-1]
@@ -267,6 +285,7 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
     from PIL import Image
 
     from app.pipeline.adapters.base import RawTextBlock
+    from app.pipeline.ocr_cleanup import figure_text_for_body
     from app.services.storage import storage_service
 
     candidates: list[tuple[object, bytes, str | None]] = []  # (RawPage, png_bytes, native_text)
@@ -320,8 +339,11 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
         # 그림 안에 원본 텍스트 레이어가 있으면(차트 라벨·수치) 이미지 OCR 보다 정확하므로 그것을 쓴다.
         if native_text and len(native_text.strip()) >= _FIGURE_MIN_MEANINGFUL_CHARS:
             text = native_text.strip()
+            body_text = text
         else:
             text = _recognize_figure_text(png_bytes, vision_options)
+            # 이미지 인식 결과의 잡음 줄은 본문(색인)에 넣지 않는다. 인식 원문은 그림 기록에 그대로 둔다.
+            body_text = figure_text_for_body(text)
         storage_key = f"images/{document_id}/{figure_no}.png"
         storage_service.upload_file(
             settings.minio_bucket_artifacts, storage_key, png_bytes, "image/png"
@@ -329,10 +351,10 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
         records.append(
             {"page_number": page.page_number, "storage_key": storage_key, "text": text}
         )
-        if len(text) >= _FIGURE_MIN_MEANINGFUL_CHARS:
+        if len(body_text) >= _FIGURE_MIN_MEANINGFUL_CHARS:
             page.text_blocks.append(
                 RawTextBlock(
-                    text=f"[그림 {figure_no}]\n{text}",
+                    text=f"[그림 {figure_no}]\n{body_text}",
                     page_number=page.page_number,
                     block_type="image",
                 )
@@ -430,7 +452,10 @@ def _repaginate_hwp_like(document_id: str, doc, parsed) -> None:
             # Match on the raw cell text instead (order matches table_candidates
             # 1:1 — see hwp_adapter.py's enumerate(table_candidates) loop).
             table = next(table_iter)
-            raw_cells = "".join(cell for row in table.rows for cell in row)
+            # 셀 안 문단 구분자(" / ")도 미리보기 PDF에는 없는 글자라 빼고 맞춘다
+            from app.pipeline.adapters.hwp_adapter import CELL_PARAGRAPH_SEP
+
+            raw_cells = "".join(cell.replace(CELL_PARAGRAPH_SEP, "") for row in table.rows for cell in row)
             needle = _normalize_ws(raw_cells)[:_REPAGINATE_ANCHOR_CHARS]
         else:
             needle = _normalize_ws(block.text)[:_REPAGINATE_ANCHOR_CHARS]

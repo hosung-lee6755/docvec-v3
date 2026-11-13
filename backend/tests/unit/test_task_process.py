@@ -694,3 +694,21 @@ def test_apply_preview_page_count_keeps_the_count_when_no_pdf_preview():
     _apply_preview_pages(parsed, None)
 
     assert parsed.page_count == 1
+
+
+
+def test_chunk_text_cuts_at_a_sentence_end_when_there_is_no_paragraph_break():
+    # 문단 경계가 없으면 예전에는 글자 수로 잘라 청크 절반이 문장 중간에서 끝났다(2026-11-13 검토)
+    text = "지원 대상은 제조 중소기업입니다. " * 40
+    chunks = proc._chunk_text(text, max_chars=200, overlap=0)
+
+    for chunk_text, _start, _end in chunks[:-1]:
+        assert chunk_text.rstrip().endswith("다.")
+
+
+def test_chunk_text_falls_back_to_a_space_before_a_hard_cut():
+    text = "가나다 " * 200
+    chunks = proc._chunk_text(text, max_chars=101, overlap=0)
+
+    for chunk_text, _start, _end in chunks[:-1]:
+        assert chunk_text.endswith(" ")

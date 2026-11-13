@@ -342,7 +342,9 @@ async def start_reprocess_on_latest_version(
     parent_run = await db.get(WorkflowRun, doc.active_run_id)
     if parent_run is None:
         raise ReprocessError("원본 실행 기록을 찾을 수 없습니다.")
-    if parent_run.status not in ("COMPLETED", "FAILED"):
+    # 이전 단계를 복사하지 않고 처음부터 도므로, 취소된 실행도 끝난 실행으로 본다. 그렇지 않으면
+    # 실행을 취소한 문서는 다시 처리할 방법이 없다.
+    if parent_run.status not in ("COMPLETED", "FAILED", "CANCELLED"):
         raise ReprocessError(
             "원본 실행이 아직 완료되지 않았습니다(백그라운드 후속 처리 중). 잠시 후 다시 시도하세요."
         )

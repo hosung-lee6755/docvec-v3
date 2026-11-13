@@ -19,4 +19,4 @@ services:
       - LOG_LEVEL=debug
     volumes:
       - ./backend:/app
-    command: celery -A app.pipeline.celery_app worker --loglevel=debug --concurrency=2 -Q critical,high,normal,low,embed
+    command: celery -A app.pipeline.celery_app worker --loglevel=debug --concurrency=2 -Q critical,high,normal,low,embed,llm,extract

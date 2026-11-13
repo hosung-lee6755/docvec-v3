@@ -144,13 +144,16 @@ def _fake_flag_module(instance=None, error=None):
     return {"FlagEmbedding": module}, module
 
 
-def test_reranker_loads_once_without_fp16(clean_reranker):
+@pytest.mark.parametrize("has_gpu, fp16", [(True, True), (False, False)])
+def test_reranker_loads_once_with_fp16_only_on_gpu(clean_reranker, has_gpu, fp16):
+    # GPU에서는 fp16으로 메모리를 반으로 줄인다(채팅 모델들이 한 프로세스에 함께 산다).
+    # CPU는 fp16 연산이 오히려 수십 배 느려 fp32를 유지한다
     modules, module = _fake_flag_module(instance="MODEL")
-    with patch.dict("sys.modules", modules):
+    with patch.dict("sys.modules", modules), patch.object(reranker, "_has_gpu", return_value=has_gpu):
         assert reranker._get_reranker() == "MODEL"
         assert reranker._get_reranker() == "MODEL"
 
-    module.FlagReranker.assert_called_once_with(reranker._MODEL_NAME, use_fp16=False)
+    module.FlagReranker.assert_called_once_with(reranker._MODEL_NAME, use_fp16=fp16)
 
 
 def test_reranker_load_failure_is_permanent_and_not_retried(clean_reranker):

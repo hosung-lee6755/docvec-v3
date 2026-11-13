@@ -27,6 +27,75 @@ _CARD_RE = re.compile(r"(?<!\d)\d{4}-?\d{4}-?\d{4}-?\d{4}(?!\d)")
 
 _RRN_WEIGHTS = [2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4, 5]
 
+# 공고문·보고서에서 실제로 나온 오탐을 줄이는 문맥 규칙(2026-11-13 전처리 검토).
+# 계좌번호 패턴은 날짜(2026-06-08), 사업자등록번호, 한전 고객번호, 문서번호에도 맞는다. 일정이 가려져
+# "언제 접수하느냐"에 답하지 못했다. 그래서 바로 앞에 계좌·은행 단서가 있을 때만 계좌로 본다.
+_CONTEXT_WINDOW = 20
+_ACCOUNT_CONTEXT_RE = re.compile(
+    r"계좌|은행|예금|입금|송금|이체|뱅크|농협|우체국|새마을금고|신협|수협|증권"
+    # 은행 이름 가운데 일반 단어로도 흔한 것(국민, 기업, 우리, 하나, 지역명)은 사업자번호 오탐을 부르므로 뺀다
+    r"|신한|카카오|토스|씨티|SC제일"
+)
+# 계좌 단서 뒤에 "A, B", "A 또는 B"처럼 이어 적은 계좌는 앞 계좌의 단서를 이어받는다
+_ACCOUNT_LIST_GAP_RE = re.compile(r"[ \t,/·]*(?:및|또는|or)?[ \t,/·]*")
+_DATE_LIKE_RE = re.compile(r"(?:19|20)\d{2}-(?:0?[1-9]|1[0-2])-(?:0?[1-9]|[12]\d|3[01])")
+# 공고문의 기관 문의처(유선)는 공개된 업무 연락처다. 번호 바로 앞(같은 줄 12자 이내)에 문의·대표 같은
+# 말이 있을 때만 뺀다. 휴대전화는 어떤 문맥이어도 개인정보로 본다
+_PUBLIC_CONTACT_RE = re.compile(r"(?:문의|대표|고객센터|콜센터|상담|안내|접수|TEL|Tel|tel|☎|FAX|Fax|팩스)[^\n]{0,12}$")
+# 공고문 표의 "국가뿌리산업진흥센터 032-…", "임치센터(02-…, …@….or.kr)"처럼 기관명 바로 뒤의 유선번호와
+# 공공기관 도메인 메일은 기관 연락처다. 사람 직함과 겹치는 "연구원"은 넣지 않는다(2026-11-13 재처리 검증)
+_ORG_CONTACT_RE = re.compile(
+    r"(?:센터|진흥원|재단|공단|협회|협력단|진흥회|조합|공사|본부)\s*[(|:,]?\s*(?:[^\n]{0,24},\s*)?$"
+)
+# 고객번호·등록번호처럼 이름이 붙은 식별번호는 전화번호 모양이어도 전화번호가 아니다
+_ID_NUMBER_CONTEXT_RE = re.compile(r"(?:고객번호|관리번호|등록번호|접수번호|문서번호|사업자번호)[^\n]{0,6}$")
+# 공공기관 도메인 메일은 바로 앞에 접수·문의 같은 창구 표시가 있을 때만 공고문의 업무 메일로 본다.
+# 담당자·연구원처럼 사람에게 붙은 주소는 공공기관 도메인이어도 개인정보다(2026-11-13 리뷰)
+_PUBLIC_EMAIL_SUFFIXES = (".go.kr", ".or.kr", ".re.kr")
+_PUBLIC_EMAIL_CONTEXT_RE = re.compile(
+    r"(?:문의|접수|제출|안내|고객센터|이메일|전자우편|E-?mail|e-?mail|EMAIL|메일)[^\n]{0,8}$"
+)
+
+
+def _preceding(text: str, start: int) -> str:
+    return text[max(0, start - _CONTEXT_WINDOW):start]
+
+
+def _is_account(text: str, match: re.Match, previous_account_end: int | None = None) -> bool:
+    if _DATE_LIKE_RE.fullmatch(match.group()):
+        return False
+    if previous_account_end is not None and _ACCOUNT_LIST_GAP_RE.fullmatch(
+        text, previous_account_end, match.start()
+    ):
+        return True
+    return bool(_ACCOUNT_CONTEXT_RE.search(_preceding(text, match.start())))
+
+
+def _account_matches(text: str) -> list[tuple[int, int, float]]:
+    out: list[tuple[int, int, float]] = []
+    previous_end = None
+    for m in _ACCOUNT_RE.finditer(text):
+        if _is_account(text, m, previous_end):
+            out.append((m.start(), m.end(), 0.5))
+            previous_end = m.end()
+    return out
+
+
+def _is_personal_phone(text: str, match: re.Match) -> bool:
+    before = _preceding(text, match.start())
+    if _ID_NUMBER_CONTEXT_RE.search(before):
+        return False  # 고객번호·등록번호 같은 식별번호는 전화번호가 아니다
+    if match.group().startswith("01"):
+        return True
+    return not (_PUBLIC_CONTACT_RE.search(before) or _ORG_CONTACT_RE.search(before))
+
+
+def _is_personal_email(text: str, match: re.Match) -> bool:
+    if not match.group().lower().endswith(_PUBLIC_EMAIL_SUFFIXES):
+        return True
+    before = _preceding(text, match.start())
+    return not (_PUBLIC_EMAIL_CONTEXT_RE.search(before) or _ORG_CONTACT_RE.search(before))
+
 # 우선순위 순서로 겹치는 매치를 먼저 차지한 쪽이 이긴다(예: 카드번호 패턴이
 # 계좌번호 패턴과 겹치면 카드로 판정) — 이후 낮은 우선순위 탐지기는 이미
 # 차지된 구간을 건너뛴다.
@@ -74,11 +143,11 @@ def _detect_regex_matches(text: str, entity_type: str) -> list[tuple[int, int, f
                 out.append((m.start(), m.end(), 0.95))
         return out
     if entity_type == "PHONE":
-        return [(m.start(), m.end(), 0.9) for m in _PHONE_RE.finditer(text)]
+        return [(m.start(), m.end(), 0.9) for m in _PHONE_RE.finditer(text) if _is_personal_phone(text, m)]
     if entity_type == "ACCOUNT":
-        return [(m.start(), m.end(), 0.5) for m in _ACCOUNT_RE.finditer(text)]
+        return _account_matches(text)
     if entity_type == "EMAIL":
-        return [(m.start(), m.end(), 0.98) for m in _EMAIL_RE.finditer(text)]
+        return [(m.start(), m.end(), 0.98) for m in _EMAIL_RE.finditer(text) if _is_personal_email(text, m)]
     return []
 
 

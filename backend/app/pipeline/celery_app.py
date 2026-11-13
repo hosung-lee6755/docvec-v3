@@ -45,6 +45,12 @@ celery_app.conf.task_queues = (
     Queue("normal", exchange=default_exchange, routing_key="normal"),
     Queue("low", exchange=default_exchange, routing_key="low"),
     Queue("embed", exchange=default_exchange, routing_key="embed"),
+    # GPU 모델을 쓰는 작업은 프로세스 하나짜리 워커에서만 돈다. 메인 worker(4개 프로세스)에서 돌면
+    # 프로세스마다 모델을 따로 올려 12GB GPU를 넘치고 WSL VM 메모리까지 바닥낸다(2026-11-13 Docker 정지).
+    # llm: 답변 생성·골든 평가 — worker-embed가 embed와 함께 받아 LLM·임베딩·재순위 모델 한 벌을 같이 쓴다.
+    # extract: 텍스트 추출(Docling·EasyOCR) — worker-extract가 받는다.
+    Queue("llm", exchange=default_exchange, routing_key="llm"),
+    Queue("extract", exchange=default_exchange, routing_key="extract"),
 )
 
 celery_app.conf.task_routes = {

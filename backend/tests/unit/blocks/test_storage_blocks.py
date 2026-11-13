@@ -340,3 +340,71 @@ def test_block_metadata():
     assert split.category == store.category == "분할·저장"
     assert split.config_schema is sb.ChunkSplitConfig
     assert store.config_schema is sb.RagStoreConfig
+
+
+
+# ---- 컬렉션 기본값(size)일 때 구조 기준으로 자르기(2026-11-13 전처리 검토) ----
+# 크기 기준은 구조를 보지 않아 section_path가 모두 비고 청크 절반이 문장 중간에서 끝났다.
+# 컬렉션 화면에는 전략 선택이 없어 size는 사용자가 고른 값이 아니므로, 구조 노드가 있으면 구조 기준으로 자른다.
+
+def _node(node_id, node_type, text, start, end, level=None):
+    return SimpleNamespace(
+        id=node_id, node_type=node_type, element_id=None, text=text, sort_order=0,
+        span_start=start, span_end=end, level=level, parent_id=None, page_number=1, meta=None,
+        source_table_id=None,
+    )
+
+
+def _structured_doc():
+    heading = "1. 사업 개요"
+    body = "이 사업은 중소기업의 공장 자동화를 지원합니다.   지원 한도는 2억원입니다."
+    text = heading + "\n\n" + body
+    nodes = [
+        _node("h1", "HEADING", heading, 0, len(heading), level=1),
+        _node("p1", "PARAGRAPH", body, len(heading) + 2, len(text)),
+    ]
+    return text, nodes
+
+
+def test_default_size_strategy_uses_structure_when_nodes_exist():
+    text, nodes = _structured_doc()
+    result, db = _split(_doc(parsed_text=text), nodes=nodes, settings=("m", 200, 10, 0, "size"))
+
+    assert result.metrics["strategy"] == "section_aware"
+    child = [r for r in _added(db) if r.chunk_tier == "child"][0]
+    assert child.section_path == ["1. 사업 개요"]
+
+
+def test_default_size_strategy_without_nodes_stays_size_based():
+    result, _ = _split(_doc(), nodes=[], settings=("m", 100, 10, 0, "size"))
+
+    assert result.metrics["strategy"] != "section_aware"
+    assert result.output["chunk_count"] >= 1
+
+
+def test_default_size_strategy_stays_when_nodes_leave_most_text_uncovered():
+    # 구조 기준은 노드 밖 글자를 자르지 않으므로, 노드가 본문 대부분을 덮지 못하면 크기 기준을 유지한다
+    text, nodes = _structured_doc()
+    result, _ = _split(_doc(parsed_text=text), nodes=nodes[:1], settings=("m", 200, 10, 0, "size"))
+
+    assert result.metrics["strategy"] == "size"
+
+
+def test_explicit_fixed_strategy_is_kept_even_with_nodes():
+    text, nodes = _structured_doc()
+    result, _ = _split(_doc(parsed_text=text), {"strategy": "fixed"}, nodes=nodes,
+                       settings=("m", 200, 10, 0, "size"))
+
+    assert result.metrics["strategy"] == "fixed"
+
+
+def test_structure_chunks_follow_the_normalized_text():
+    # 노드 위치는 원문 기준이고, 청크는 공백 정리·치환을 거친 텍스트에서 자른다
+    text, nodes = _structured_doc()
+    normalized = " ".join(text.split(" ")).replace("   ", " ").replace("2억원", "2억 원")
+    result, db = _split(_doc(parsed_text=text), nodes=nodes, upstream={"text": normalized},
+                        settings=("m", 200, 10, 0, "size"))
+
+    child = [r for r in _added(db) if r.chunk_tier == "child"][0]
+    assert child.original_text.startswith("이 사업은")
+    assert child.original_text.endswith("2억 원입니다.")

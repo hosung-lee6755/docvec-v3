@@ -142,7 +142,7 @@ def test_walk_hwp_body_collects_paragraphs_and_anchored_tables_once():
     hwp._walk_hwp_body(body, paragraphs, tables)
 
     assert paragraphs == ["본문", "끝"]  # table cell text is not folded into the host paragraph
-    assert tables == [[["이름", "값 둘째줄"]]]
+    assert tables == [[["이름", "값 / 둘째줄"]]]  # 셀 안 문단 구분을 남긴다
 
 
 def test_walk_hwp_body_reads_table_caption_and_skips_shape_objects():
@@ -282,11 +282,12 @@ def test_extract_hwpx_builds_single_page_with_paragraph_table_and_image_blocks(t
 
     assert doc.format_id == "hwpx" and doc.page_count == 1 and doc.warnings == []
     page = doc.pages[0]
-    # sections are read in name order; paragraphs first, then "[표 N]" blocks
+    # sections are read in name order; a table stays where it appears in the document
+    # (예전에는 표를 모두 문서 끝에 모아 설명 문단과 떨어졌다, 2026-11-13)
     assert [b.text for b in page.text_blocks] == [
-        "첫 섹션", "둘째 섹션", "[표 1]\nA | B\nC | D",
+        "첫 섹션", "[표 1]\nA | B\nC | D", "둘째 섹션",
     ]
-    assert page.text_blocks[2].block_type == "table"
+    assert page.text_blocks[1].block_type == "table"
     assert page.table_candidates[0].rows == [["A", "B"], ["C", "D"]]
     assert [r.image_bytes for r in page.image_regions] == [PNG]
     assert (page.width, page.height) == (595, 842)
@@ -388,3 +389,36 @@ def test_extract_hwp_reports_missing_pyhwp_library():
 
     assert doc.pages == []
     assert "pyhwp library not installed" in doc.warnings[0]
+
+
+# ------------------------------------------------- 문서 순서와 셀 안 문단(2026-11-13)
+
+
+def test_walk_hwpx_records_document_order_of_paragraphs_and_tables():
+    root = ET.fromstring(_hp(_p("앞 설명") + _tbl(["가", "나"]) + _p("뒤 설명")))
+    paragraphs, tables, order = [], [], []
+
+    hwp._walk_hwpx(root, paragraphs, tables, order)
+
+    assert order == [("p", 0), ("t", 0), ("p", 1)]
+
+
+def test_hwpx_cell_paragraphs_are_kept_apart():
+    cell = "<hp:tc>" + _p("사업계획서") + _p("- 국세 납세증명서") + "</hp:tc>"
+    root = ET.fromstring(_hp(f"<hp:tbl><hp:tr>{cell}</hp:tr></hp:tbl>"))
+
+    assert hwp._hwpx_table_rows(root[0]) == [["사업계획서 / - 국세 납세증명서"]]
+
+
+def test_walk_hwp_body_records_document_order():
+    table = (
+        "<TableControl><TableBody>"
+        f"<TableRow>{_hwp_cell('셀')}</TableRow>"
+        "</TableBody></TableControl>"
+    )
+    body = _hwp_xml(_hwp_p("앞", inner=table) + _hwp_p("뒤"))
+    paragraphs, tables, order = [], [], []
+
+    hwp._walk_hwp_body(body, paragraphs, tables, order)
+
+    assert order == [("p", 0), ("t", 0), ("p", 1)]

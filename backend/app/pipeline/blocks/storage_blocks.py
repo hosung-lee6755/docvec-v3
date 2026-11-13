@@ -38,6 +38,68 @@ class ChunkSplitConfig(BaseModel):
     table_chunk_max_rows: int | None = None
 
 
+def _run_structure_nodes(db, node_model, document_id, run_id) -> list:
+    return (
+        db.query(node_model)
+        .filter(node_model.document_id == document_id, node_model.run_id == run_id)
+        .order_by(node_model.sort_order)
+        .all()
+    )
+
+
+_MIN_NODE_COVERAGE = 0.8
+
+
+def _node_coverage(nodes: list, text: str) -> float:
+    """노드 구간이 덮는 비공백 글자의 비율."""
+    total = sum(1 for ch in text if not ch.isspace())
+    if total == 0:
+        return 0.0
+    covered = [False] * len(text)
+    for node in nodes:
+        if node.span_start is None or node.span_end is None:
+            continue
+        for i in range(max(0, node.span_start), min(len(text), node.span_end)):
+            covered[i] = True
+    return sum(1 for i, ch in enumerate(text) if covered[i] and not ch.isspace()) / total
+
+
+class _SpanRemappedNode:
+    """구조 노드의 위치만 청크를 자르는 텍스트 기준으로 바꾼 사본. 나머지 속성은 원래 노드를 따른다."""
+
+    def __init__(self, node, span_start: int | None, span_end: int | None) -> None:
+        self._node = node
+        self.span_start = span_start
+        self.span_end = span_end
+
+    def __getattr__(self, name: str):
+        return getattr(self._node, name)
+
+
+def _nodes_in_text(nodes: list, parsed_text: str, chunk_text: str) -> list:
+    """노드 위치는 원문(parsed_text) 기준이고 청크는 정제·치환·마스킹 뒤 텍스트에서 자른다.
+    그대로 쓰면 뒤로 갈수록 노드 경계가 밀려 청크가 문장 중간에서 시작했으므로, 청크 텍스트 위치로 옮긴다."""
+    if not parsed_text or parsed_text == chunk_text:
+        return nodes
+    from app.pipeline.page_alignment import OffsetMapper
+
+    mapper = OffsetMapper(parsed_text, chunk_text)
+    remapped = []
+    previous_start = 0
+    for node in nodes:
+        if node.span_start is None or node.span_end is None:
+            remapped.append(node)
+            continue
+        # 노드는 문서 순서로 온다. 반복되는 머리글 때문에 앵커가 앞쪽에 잘못 맞아도 거꾸로 가지 않게 한다
+        start = max(previous_start, mapper.map(node.span_start))
+        previous_start = start
+        end = max(start, mapper.map(node.span_end))
+        while end > start and chunk_text[end - 1].isspace():
+            end -= 1
+        remapped.append(_SpanRemappedNode(node, start, end))
+    return remapped
+
+
 class ChunkSplitBlock(BaseBlock):
     @property
     def block_type(self) -> str:
@@ -96,7 +158,6 @@ class ChunkSplitBlock(BaseBlock):
             _chunk_text,
             _chunk_text_semantic,
             _clean_rag_text,
-            _page_number_for_offset,
             _resolve_collection_settings,
         )
         from app.services.embedding import get_embedding_provider
@@ -113,6 +174,10 @@ class ChunkSplitBlock(BaseBlock):
 
             upstream = next(iter(context.upstream_outputs.values()), {})
             full_text = upstream.get("text") or doc.parsed_text or ""
+            # 청크 위치는 정제·치환·마스킹 뒤 텍스트 기준이고 page_map은 원문 기준이라, 원문 위치로 되돌려 쪽을 정한다
+            from app.pipeline.page_alignment import PageLocator
+
+            page_locator = PageLocator(doc.parsed_text or "", doc.page_map, full_text)
             # pii_detect(action=exclude_from_embedding)이 표시한 구간 — 이 구간과
             # 겹치는 청크는 excluded_pii=True로 저장해 rag_store가 걸러낸다.
             pii_excluded_spans = [tuple(s) for s in (upstream.get("pii_excluded_spans") or [])]
@@ -121,6 +186,17 @@ class ChunkSplitBlock(BaseBlock):
                 _resolve_collection_settings(db, doc)
             )
             strategy = cfg.strategy or coll_strategy
+            structure_nodes = None
+            if cfg.strategy is None and coll_strategy == "size":
+                # 컬렉션 화면에는 전략 선택이 없어 size는 사용자가 고른 값이 아니다. 크기 기준은 구조를 보지 않아
+                # section_path가 모두 비고 청크 절반이 문장 중간에서 끝났으므로(2026-11-13 검토), 이 실행에
+                # 구조 노드가 있으면 구조 기준으로 자른다. 블록에서 fixed 등을 명시하면 그대로 따른다.
+                structure_nodes = _run_structure_nodes(db, DocumentNode, doc.id, context.run_id)
+                # 구조 기준은 노드 밖 글자를 청크로 만들지 않는다. 노드가 본문 대부분을 덮을 때만 바꾼다
+                if structure_nodes and _node_coverage(structure_nodes, doc.parsed_text or full_text) >= _MIN_NODE_COVERAGE:
+                    strategy = "section_aware"
+                else:
+                    structure_nodes = None
             max_tokens = cfg.max_tokens if cfg.max_tokens is not None else coll_max
             min_tokens = cfg.min_tokens if cfg.min_tokens is not None else coll_min
             overlap_tokens = cfg.overlap_tokens if cfg.overlap_tokens is not None else coll_overlap
@@ -145,12 +221,7 @@ class ChunkSplitBlock(BaseBlock):
                     for s in _sentence_based_chunks(full_text, max_chars=max_tokens, min_chars=min_tokens)
                 ]
             elif strategy in ("paragraph", "section_aware", "table_unit"):
-                nodes = (
-                    db.query(DocumentNode)
-                    .filter(DocumentNode.document_id == doc.id, DocumentNode.run_id == context.run_id)
-                    .order_by(DocumentNode.sort_order)
-                    .all()
-                )
+                nodes = structure_nodes or _run_structure_nodes(db, DocumentNode, doc.id, context.run_id)
                 if not nodes:
                     raise ValueError(
                         f"'{strategy}' 분할 전략을 사용하려면 상류에 구조 분석(structure_analyze) "
@@ -158,7 +229,7 @@ class ChunkSplitBlock(BaseBlock):
                     )
                 node_by_id = {str(n.id): n for n in nodes}
                 tree_spans = _tree_based_chunks(
-                    nodes, full_text,
+                    _nodes_in_text(nodes, doc.parsed_text or "", full_text), full_text,
                     max_chars=max_tokens, min_chars=min_tokens,
                     respect_headings=strategy == "section_aware" or cfg.preserve_heading,
                     include_previous_heading=cfg.include_previous_heading,
@@ -167,6 +238,8 @@ class ChunkSplitBlock(BaseBlock):
                     tables_only=strategy == "table_unit",
                     tables=doc.tables,
                     table_chunk_max_rows=cfg.table_chunk_max_rows,
+                    # 자동으로 구조 기준을 쓸 때만 짧은 구획을 이웃과 합친다(명시적 section_aware는 그대로)
+                    merge_small_sections=structure_nodes is not None,
                 )
                 spans = [(s.text, s.start, s.end, s.section_path, s.source_node_ids) for s in tree_spans]
             else:  # "fixed" — 인식되지 않는 값도 여기로 폴백(기존 동작 그대로)
@@ -230,8 +303,8 @@ class ChunkSplitBlock(BaseBlock):
                         chunk_order=1_000_000 + g,
                         chunk_text=full_text[g_start:g_end],
                         original_text=full_text[g_start:g_end],
-                        page_start=_page_number_for_offset(doc.page_map, g_start),
-                        page_end=_page_number_for_offset(doc.page_map, g_end),
+                        page_start=page_locator.page_for(g_start),
+                        page_end=page_locator.page_for(max(g_start, g_end - 1)),
                         section_path=cleaned_spans[group_indices[0]][4] or None,
                         span_start=g_start,
                         span_end=g_end,
@@ -257,8 +330,8 @@ class ChunkSplitBlock(BaseBlock):
                     chunk_order=i,
                     chunk_text=cleaned,
                     original_text=raw,
-                    page_start=_page_number_for_offset(doc.page_map, start),
-                    page_end=_page_number_for_offset(doc.page_map, end),
+                    page_start=page_locator.page_for(start),
+                    page_end=page_locator.page_for(max(start, end - 1)),
                     section_path=section_path or None,
                     source_node_ids=source_node_ids or None,
                     span_start=start,

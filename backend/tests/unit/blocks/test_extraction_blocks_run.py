@@ -287,7 +287,7 @@ def _extract(doc, parsed=None, config=None, adapter_error=None, extract_error=No
             patch("app.pipeline.job_tracker.start_job", job["start"]), \
             patch("app.pipeline.job_tracker.complete_job", job["complete"]), \
             patch("app.pipeline.job_tracker.fail_job", job["fail"]), \
-            patch("app.pipeline.tasks.process._build_page_map", return_value=[[10, 1]]), \
+            patch("app.pipeline.blocks.extraction_blocks._page_map_for_assembly", return_value=[[10, 1]]), \
             patch("app.pipeline.tasks.process._recognize_document_images", images_mock), \
             patch("app.pipeline.tasks.process._repaginate_hwp_like", repaginate), \
             patch("app.pipeline.tasks.process._apply_preview_page_count", preview_pages), \
@@ -405,7 +405,7 @@ def test_block_metadata(block, btype, schema):
 
 
 def test_text_extract_block_version():
-    assert eb.TextExtractBlock().block_version == "1.21.0"
+    assert eb.TextExtractBlock().block_version == "1.22.0"
 
 
 def test_config_defaults_and_validation():

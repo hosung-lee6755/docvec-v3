@@ -8,20 +8,29 @@ _reranker = None
 _load_failed = False
 
 
+def _has_gpu() -> bool:
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 def _get_reranker():
     """Lazy singleton. Loading can fail (download error, OOM) — in that case
     we permanently fall back to the hybrid ordering for this process instead
-    of retrying every request. Runs in the `worker` container (queue=high),
-    which has no GPU — only `worker-embed` does — so fp16 must stay off here:
-    measured at ~8.7s per (query, doc) pair with use_fp16=True on CPU vs.
-    sub-100ms with fp16 off, since CPU kernels don't accelerate fp16 the way
-    a GPU tensor core does."""
+    of retrying every request.
+
+    fp16은 GPU에서만 켠다. 채팅은 worker-embed 한 프로세스에서 LLM·임베딩과 함께 돌아 fp32(약 2.1GB)면
+    12GB GPU가 빠듯하다. fp16은 메모리를 반으로 줄이고 순위는 거의 같다. CPU(api 컨테이너의 검색 화면)는
+    fp16을 가속하지 못해 쌍 하나에 약 8.7초가 걸리므로 fp32를 유지한다."""
     global _reranker, _load_failed
     if _reranker is None and not _load_failed:
         try:
             from FlagEmbedding import FlagReranker
 
-            _reranker = FlagReranker(_MODEL_NAME, use_fp16=False)
+            _reranker = FlagReranker(_MODEL_NAME, use_fp16=_has_gpu())
             logger.info("cross-encoder reranker loaded", extra={"model": _MODEL_NAME})
         except Exception:
             logger.exception("reranker load failed; hybrid ordering will be used as-is")

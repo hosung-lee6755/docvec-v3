@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 # 재순위 모델과 채팅 검색이 도는 worker(high 큐)에서 실행한다. GPU 임베딩 워커(embed)는 쓰지 않는다.
-@celery_app.task(name="tasks.run_golden_eval", queue="high")
+@celery_app.task(name="tasks.run_golden_eval", queue="llm")
 def run_golden_eval(run_id: str) -> dict:
     from app.db.session import get_sync_db
     from app.services.golden_eval import evaluate_run_sync

@@ -109,7 +109,7 @@ def test_advance_uses_run_timeout_override_over_block_config(mock_task):
     _advance(db, run_id, source, {})
 
     mock_task.apply_async.assert_called_once_with(
-        args=[run_id, str(target_id)], time_limit=1200, queue="normal",
+        args=[run_id, str(target_id)], time_limit=1200, queue="extract",
     )
 
 
@@ -127,7 +127,7 @@ def test_advance_falls_back_to_block_config_when_no_override_for_block_type(mock
     _advance(db, run_id, source, {})
 
     mock_task.apply_async.assert_called_once_with(
-        args=[run_id, str(target_id)], time_limit=300, queue="normal",
+        args=[run_id, str(target_id)], time_limit=300, queue="extract",
     )
 
 

@@ -177,6 +177,7 @@ def _tree_based_chunks(
     tables_only: bool = False,
     tables: list[dict] | None = None,
     table_chunk_max_rows: int | None = None,
+    merge_small_sections: bool = False,
 ) -> list[ChunkSpan]:
     """구조 분석 노드 트리(정렬순 `DocumentNode` 목록)를 훑어 청크를 만든다.
     `paragraph`(respect_headings=False 기본)/`section_aware`(항상 True)/
@@ -319,4 +320,46 @@ def _tree_based_chunks(
             )
             chunks.pop()
 
+    if merge_small_sections:
+        return _merge_small_sections(chunks, text, min_chars, max_chars, table_node_ids, with_prefix)
     return chunks
+
+
+def _merge_small_sections(chunks, text, min_chars, max_chars, table_node_ids, with_prefix) -> list[ChunkSpan]:
+    """min_chars보다 짧은 청크를 이웃 청크와 합친다(구획이 달라도). 표 청크는 건드리지 않고, 합친 길이가
+    max_chars를 넘으면 합치지 않는다. 구획 경로는 더 긴 쪽을 따른다.
+
+    자동 구조 기준(컬렉션 기본값 size에서 전환)에서만 쓴다. 소제목이 촘촘한 슬라이드형 PDF에서 제목마다
+    청크를 닫으면 6~50자짜리 조각이 쏟아져 품질 검사에 걸리고 검색 단서도 약해졌다(2026-11-13)."""
+    def is_table(chunk: ChunkSpan) -> bool:
+        # 칸 하나짜리 짧은 표("[표 1] 1. 사업개요 |")는 HWP 공고문이 제목 대신 쓰는 것이라 표로 지키지 않는다
+        return bool(table_node_ids.intersection(chunk.source_node_ids)) and chunk.end - chunk.start >= min_chars
+
+    merged: list[ChunkSpan] = []
+    for chunk in chunks:
+        prev = merged[-1] if merged else None
+        can_merge = (
+            prev is not None
+            and not is_table(prev) and not is_table(chunk)
+            and prev.end <= chunk.start
+            and min(prev.end - prev.start, chunk.end - chunk.start) < min_chars
+            and chunk.end - prev.start <= max_chars
+        )
+        # 표 바로 앞의 짧은 한 줄("※ ... 비교표")은 그 표의 제목이므로 표 앞에 붙인다(표 내용은 그대로 한 덩어리)
+        is_caption_of_table = (
+            prev is not None
+            and not is_table(prev) and is_table(chunk)
+            and prev.end <= chunk.start
+            and prev.end - prev.start < min_chars
+            and chunk.end - prev.start <= max_chars
+        )
+        if not (can_merge or is_caption_of_table):
+            merged.append(chunk)
+            continue
+        longer = prev if prev.end - prev.start >= chunk.end - chunk.start else chunk
+        merged[-1] = ChunkSpan(
+            with_prefix(text[prev.start:chunk.end], longer.section_path),
+            prev.start, chunk.end, longer.section_path,
+            prev.source_node_ids + chunk.source_node_ids,
+        )
+    return merged

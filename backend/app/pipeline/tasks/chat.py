@@ -548,7 +548,7 @@ def _elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
 
-@celery_app.task(name="tasks.generate_answer", queue="high", bind=True, max_retries=2)
+@celery_app.task(name="tasks.generate_answer", queue="llm", bind=True, max_retries=2)
 def generate_answer(self, chat_message_id: str) -> dict:
     from app.db.models.answer_trace import (
         GROUNDING_FAILED,

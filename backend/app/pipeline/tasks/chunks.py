@@ -6,7 +6,7 @@ from app.pipeline.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="tasks.update_chunk_text", queue="high", bind=True, max_retries=1)
+@celery_app.task(name="tasks.update_chunk_text", queue="embed", bind=True, max_retries=1)
 def update_chunk_text(self, document_id: str, point_id: str, new_text: str) -> dict:
     """Re-embeds a single edited chunk and upserts it under the same point id,
     preserving the rest of the payload. Runs on the worker because the

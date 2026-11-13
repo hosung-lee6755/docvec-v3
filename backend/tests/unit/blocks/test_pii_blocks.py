@@ -226,3 +226,111 @@ def test_block_metadata():
     assert block.block_type == "pii_detect"
     assert block.category == "구조·보호"
     assert block.config_schema is pb.PiiDetectConfig
+
+
+# --- 공고문·보고서에서 실제로 나온 오탐(2026-11-13 전처리 검토) ---------------------------------
+
+def _found(text, entity_type):
+    return [text[s:e] for s, e, _ in pb._detect_regex_matches(text, entity_type)]
+
+
+@pytest.mark.parametrize("text", [
+    "신청 기간: 2026-04-27 ~ 2026-06-08까지",
+    "공고일 2026-07-13",
+    "사업자등록번호 123-45-67890",
+    "한전 고객번호 01-2345-6789",
+    "문서번호 2026-0123-45",
+    "중소기업 사업자번호 123-45-67890",
+    "국민연금 관리번호 12-3456-7890",
+])
+def test_account_needs_bank_context(text):
+    assert _found(text, "ACCOUNT") == []
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("입금 계좌 110-123-456789 (신한은행)", "110-123-456789"),
+    ("국민은행 123456-01-123456 예금주 홍길동", "123456-01-123456"),
+])
+def test_account_with_bank_context_is_found(text, expected):
+    assert _found(text, "ACCOUNT") == [expected]
+
+
+def test_dates_are_never_accounts_even_near_bank_words():
+    assert _found("은행 거래일 2026-06-08", "ACCOUNT") == []
+
+
+@pytest.mark.parametrize("text", [
+    "문의: 042-123-4567",
+    "사업 문의처 (TEL. 02-2110-1234)",
+    "고객센터 1588-1234, 대표전화 031-123-4567",
+    "☎ 02-123-4567",
+])
+def test_public_contact_landlines_are_not_personal(text):
+    assert _found(text, "PHONE") == []
+
+
+@pytest.mark.parametrize("text", [
+    # 공고문의 기관 연락처: 기관명 바로 뒤에 오는 유선번호
+    "| 자동화공정구축 | 국가뿌리산업진흥센터 032-850-0000~5 |",
+    "| 제조로봇도입 | 한국로봇산업진흥원 053-210-9600 |",
+    "기술자료 임치센터(02-2222-3333, help@kosmes.or.kr)",
+    # 전화번호가 아닌 식별번호
+    "| 한전고객번호 | 05-1234-5678 |",
+    "고객번호 01-2345-6789",
+])
+def test_institution_contacts_and_id_numbers_are_not_personal_phones(text):
+    assert _found(text, "PHONE") == []
+
+
+def test_institution_contact_email_with_public_domain_is_not_personal():
+    assert _found("기술자료 임치센터(02-2222-3333, help@kosmes.or.kr)", "EMAIL") == []
+
+
+def test_mobile_after_an_institution_name_is_still_personal():
+    assert _found("진흥원 담당 010-1234-5678", "PHONE") == ["010-1234-5678"]
+
+
+def test_mobile_numbers_stay_personal_even_as_contacts():
+    assert _found("문의: 010-1234-5678", "PHONE") == ["010-1234-5678"]
+
+
+def test_landline_without_contact_wording_is_still_found():
+    assert _found("자택 02-123-4567", "PHONE") == ["02-123-4567"]
+
+
+@pytest.mark.parametrize("text", [
+    "접수 smart@kosmes.or.kr",
+    "문의처 이메일: help@korea.go.kr",
+    "E-mail. desk@kist.re.kr",
+])
+def test_public_institution_contact_emails_are_not_personal(text):
+    assert _found(text, "EMAIL") == []
+
+
+@pytest.mark.parametrize("text, expected", [
+    # 공공기관 도메인이어도 접수·문의 창구가 아니라 사람에게 붙은 주소는 개인정보로 본다
+    ("담당 홍길동 hong@korea.go.kr", "hong@korea.go.kr"),
+    ("연구원 lee@kist.re.kr", "lee@kist.re.kr"),
+])
+def test_public_domain_emails_of_people_are_still_found(text, expected):
+    assert _found(text, "EMAIL") == [expected]
+
+
+@pytest.mark.parametrize("text, expected", [
+    # 계좌 단서 뒤에 쉼표로 이어 적은 계좌도 계좌다
+    ("입금계좌: 111-222-333333, 444-555-666666", ["111-222-333333", "444-555-666666"]),
+    ("환불 계좌 111-222-333333 또는 444-555-666666", ["111-222-333333", "444-555-666666"]),
+    # '은행'을 빼고 은행 이름만 적은 경우
+    ("신한 110-123-456789 홍길동", ["110-123-456789"]),
+    ("카카오뱅크 3333-01-1234567", ["3333-01-1234567"]),
+])
+def test_accounts_listed_after_a_bank_cue_are_found(text, expected):
+    assert _found(text, "ACCOUNT") == expected
+
+
+def test_a_number_after_an_account_in_another_sentence_is_not_an_account():
+    assert _found("입금계좌 111-222-333333입니다. 접수번호는 2026-0123-45", "ACCOUNT") == ["111-222-333333"]
+
+
+def test_ordinary_emails_are_still_found():
+    assert _found("개인 메일 hong@gmail.com", "EMAIL") == ["hong@gmail.com"]

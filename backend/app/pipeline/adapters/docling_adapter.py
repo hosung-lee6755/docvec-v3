@@ -70,13 +70,17 @@ def _item_page_and_bbox(item) -> tuple[int, tuple[float, float, float, float] | 
 
 
 def _table_rows(table_item) -> list[list[str]]:
+    """표를 [머리글, 행, 행, ...]으로 바꾼다. Docling이 머리글 행을 알아보지 못하면 열 이름이 0, 1, 2…가
+    되는데, 그때는 번호 대신 첫 행을 머리글로 쓴다(번호 머리글 표 87개, 2026-11-13 검토)."""
     try:
         df = table_item.export_to_dataframe()
     except Exception:
         return []
-    rows = [[str(c) for c in df.columns]]
-    rows.extend([str(v) for v in row] for row in df.itertuples(index=False))
-    return rows
+    body = [[str(v) for v in row] for row in df.itertuples(index=False)]
+    header = [str(c) for c in df.columns]
+    if header == [str(i) for i in range(len(header))]:
+        return body
+    return [header, *body]
 
 
 def _page_native_text(page: RawPage) -> str:
@@ -215,6 +219,34 @@ def _escalate_low_coverage_pages(
     return escalated
 
 
+_converter = None
+
+
+def _get_converter():
+    """프로세스마다 변환기를 한 번만 만든다. 문서마다 새로 만들면 레이아웃·표·OCR 모델을 매번 다시
+    올린다(8쪽 문서 첫 변환 18초, 재사용 11초 실측, 2026-11-13). 텍스트 추출은 프로세스 하나인
+    worker-extract에서만 돌아 모델이 한 벌만 남는다."""
+    global _converter
+    if _converter is None:
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import EasyOcrOptions, PdfPipelineOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.do_ocr = True
+        # 기본 RapidOCR(중국어 모델)이 한글을 한자로 오인식하는 것을 실제
+        # 확인함 — 반드시 EasyOCR + 한국어로 명시 설정.
+        pipeline_options.ocr_options = EasyOcrOptions(lang=["ko"])
+        # generate_picture_images 기본값은 False라 PictureItem.get_image()가
+        # 항상 None을 반환했다 — 아래 picture 분기에서 실제 PNG bytes를 얻으려면
+        # 반드시 켜야 한다(그림 탭 표출 버그, 2026-07-25).
+        pipeline_options.generate_picture_images = True
+        _converter = DocumentConverter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+        )
+    return _converter
+
+
 class DoclingAdapter(BaseAdapter):
     @property
     def format_id(self) -> str:
@@ -236,24 +268,7 @@ class DoclingAdapter(BaseAdapter):
         return mime_type == "application/pdf" or file_path.suffix.lower() == ".pdf"
 
     def extract(self, file_path: Path, options: dict) -> RawParsedDocument:
-        from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import EasyOcrOptions, PdfPipelineOptions
-        from docling.document_converter import DocumentConverter, PdfFormatOption
-
-        pipeline_options = PdfPipelineOptions()
-        pipeline_options.do_ocr = True
-        # 기본 RapidOCR(중국어 모델)이 한글을 한자로 오인식하는 것을 실제
-        # 확인함 — 반드시 EasyOCR + 한국어로 명시 설정.
-        pipeline_options.ocr_options = EasyOcrOptions(lang=["ko"])
-        # generate_picture_images 기본값은 False라 PictureItem.get_image()가
-        # 항상 None을 반환했다 — 아래 picture 분기에서 실제 PNG bytes를 얻으려면
-        # 반드시 켜야 한다(그림 탭 표출 버그, 2026-07-25).
-        pipeline_options.generate_picture_images = True
-
-        converter = DocumentConverter(
-            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
-        )
-        result = converter.convert(str(file_path))
+        result = _get_converter().convert(str(file_path))
         doc = result.document
 
         pages_by_no: dict[int, RawPage] = {}

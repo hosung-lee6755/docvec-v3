@@ -139,6 +139,10 @@ def fake_docling_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "docling.datamodel.base_models", base_models_mod)
     monkeypatch.setitem(sys.modules, "docling.datamodel.pipeline_options", pipeline_options_mod)
     monkeypatch.setitem(sys.modules, "docling.document_converter", document_converter_mod)
+    # 변환기는 프로세스마다 한 번만 만들어 캐시한다. 테스트마다 새 가짜 변환기를 쓰도록 캐시를 비운다
+    from app.pipeline.adapters import docling_adapter
+
+    monkeypatch.setattr(docling_adapter, "_converter", None)
 
     return captured
 

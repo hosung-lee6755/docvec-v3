@@ -350,6 +350,30 @@ async def test_latest_version_reprocess_blocks_while_parent_run_is_running():
 
 
 @pytest.mark.asyncio
+async def test_latest_version_reprocess_is_allowed_after_a_cancelled_run():
+    # 취소한 실행이 문서의 최신 실행으로 남으면 예전에는 다시 처리할 방법이 없었다(2026-11-13).
+    # 처음부터 새로 처리하는 경로는 이전 단계를 복사하지 않으므로 취소된 실행도 끝난 것으로 본다.
+    parent = _run(status="CANCELLED")
+    parent.version_id = uuid4()
+    parent.skip_review = False
+    parent.collection_id = uuid4()
+    doc = _doc(active_run_id=parent.id)
+    entry = _block("file_validate")
+    entry.id = uuid4()
+    db = _entry_db([entry])
+
+    with patch("app.services.reprocess_service.find_preprocess_run", AsyncMock(return_value=None)), \
+         patch("app.services.reprocess_service.resolve_latest_version", AsyncMock(return_value=_version())), \
+         patch("app.services.reprocess_service.current_dictionary_version", AsyncMock(return_value=3)), \
+         patch("app.pipeline.tasks.workflow.run_workflow_step") as step:
+        db.get = AsyncMock(return_value=parent)
+        run = await start_reprocess_on_latest_version(db, doc, reason=None)
+
+    assert run.parent_run_id == parent.id
+    step.apply_async.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_latest_version_reprocess_requires_a_previous_run():
     with pytest.raises(ReprocessError):
         await start_reprocess_on_latest_version(AsyncMock(), _doc(active_run_id=None), reason=None)

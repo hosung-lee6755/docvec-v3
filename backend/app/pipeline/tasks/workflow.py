@@ -57,6 +57,10 @@ def step_queue_for_block(block) -> str:
     여러 워커 슬롯이 동시에 점유하며 서로 밀어내는 경합(CUDA launch failure)을 막는다."""
     if block.block_type in _GPU_BLOCK_TYPES:
         return "embed"
+    if block.block_type == "text_extract":
+        # Docling 레이아웃·표 모델과 EasyOCR이 GPU를 쓴다(문서 하나에 약 1.2GB). 임베딩·LLM과 같은
+        # 프로세스에 두면 긴 문서 추출 동안 채팅이 멈추므로 worker-extract로 따로 보낸다
+        return "extract"
     if block.block_type == "chunk_split" and (block.config or {}).get("strategy") == "semantic":
         return "embed"
     return "normal"
