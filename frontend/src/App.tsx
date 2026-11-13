@@ -26,6 +26,9 @@ import WorkflowRunsPage from './pages/WorkflowRunsPage'
 import ProcessingStatusPage from './pages/ProcessingStatusPage'
 import CleaningRulesPage from './pages/CleaningRulesPage'
 import AccessTokensPage from './pages/AccessTokensPage'
+import ReviewQueuePage from './pages/ReviewQueuePage'
+import FailureQueuePage from './pages/FailureQueuePage'
+import NotFoundPage from './pages/NotFoundPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -49,6 +52,8 @@ export default function App() {
         <Route path="documents" element={<DocumentsPage />} />
         <Route path="documents/:id" element={<DocumentDetailPage />} />
         <Route path="processing-status" element={<ProcessingStatusPage />} />
+        <Route path="review-queue" element={<ReviewQueuePage />} />
+        <Route path="failures" element={<FailureQueuePage />} />
         <Route path="projects" element={<ProjectsPage />}>
           <Route path=":projectId" element={<ProjectWorkspace />}>
             <Route index element={<Navigate to="collections" replace />} />
@@ -81,6 +86,8 @@ export default function App() {
         <Route path="usage" element={<UsageDashboardPage />} />
         <Route path="dictionary" element={<DictionaryPage />} />
         <Route path="cleaning-rules" element={<CleaningRulesPage />} />
+        {/* 없는 주소는 빈 화면 대신 안내를 보여 준다 */}
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   )

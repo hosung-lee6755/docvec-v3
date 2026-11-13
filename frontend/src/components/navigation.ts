@@ -31,8 +31,8 @@ export const NAV_GROUPS: NavGroup[] = [
     section: '문서 처리',
     items: [
       { to: '/documents', icon: FileText, label: '문서' },
-      { to: '/documents?status=WAITING_REVIEW', icon: AlertTriangle, label: '검토 대기', badge: 'waitingReview' },
-      { to: '/documents?status=FAILED', icon: XCircle, label: '실패', badge: 'failed' },
+      { to: '/review-queue', icon: AlertTriangle, label: '검토 대기', badge: 'waitingReview' },
+      { to: '/failures', icon: XCircle, label: '실패', badge: 'failed' },
       { to: '/processing-status', icon: Activity, label: '처리 현황' },
     ],
   },
@@ -81,5 +81,6 @@ export function isNavItemActive(pathname: string, search: string, to: string): b
   if (toPath === '/') return pathname === '/'
   if (pathname !== toPath && !pathname.startsWith(`${toPath}/`)) return false
   if (toQuery) return search === `?${toQuery}`
-  return search !== '?status=WAITING_REVIEW' && search !== '?status=FAILED'
+  // 검토 대기와 실패는 전용 화면(/review-queue, /failures)이라, 문서 목록은 어떤 필터든 '문서' 메뉴가 켜진다
+  return true
 }
