@@ -303,6 +303,11 @@ class ChunkUpdateRequest(BaseModel):
     disabled: bool | None = None
 
 
+class ChunkMergeRequest(BaseModel):
+    # 이 청크를 앞(prev) 청크 끝에 붙일지, 뒤(next) 청크 앞에 붙일지
+    direction: Literal["prev", "next"]
+
+
 class DocumentRevisionItem(BaseModel):
     id: UUID
     source: str
@@ -394,6 +399,17 @@ class NodeCorrectionRequest(BaseModel):
                 and self.font_size is None and self.font_name is None:
             raise ValueError("level 또는 node_type 중 하나를 지정해야 합니다.")
         return self
+
+
+# 구조 탭에서 여러 노드를 골라 유형이나 제목 레벨을 한 번에 바꾼다(2026-11-17 화면 검토 의견)
+NODE_BULK_CORRECTION_MAX = 500
+
+
+class NodeBulkCorrectionRequest(BaseModel):
+    node_ids: list[UUID] = Field(min_length=1, max_length=NODE_BULK_CORRECTION_MAX)
+    level: int | None = None
+    node_type: str | None = Field(None, max_length=50)
+    correction_notes: str | None = Field(None, max_length=2000)
 
 
 # Document.elements(JSON 컬럼, Docling 경로에서만 채워짐)를 그대로 노출한다.

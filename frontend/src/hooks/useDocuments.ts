@@ -335,6 +335,24 @@ export function useDeleteChunk() {
   })
 }
 
+// 짧은 청크를 앞(prev) 청크 끝이나 뒤(next) 청크 앞에 붙이고 이 청크는 지운다
+export function useMergeChunk() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ docId, chunkId, direction }: { docId: string; chunkId: string; direction: 'prev' | 'next' }) => {
+      const { data } = await apiClient.post<{ kept_chunk_id: string }>(
+        `/documents/${docId}/chunks/${chunkId}/merge`, { direction },
+      )
+      return data
+    },
+    onSettled: (_data, _err, { docId }) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', docId, 'chunks'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', docId, 'content'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', docId, 'quality'] })
+    },
+  })
+}
+
 export interface DocumentRevision {
   id: string
   source: string

@@ -3,6 +3,13 @@ import logging
 from uuid import UUID
 
 from app.api.v1.deps import get_current_user
+from app.api.v1.endpoints.documents.chunk_edits import (
+    REVIEW_STATUS,
+    is_review_draft,
+    load_chunk,
+    refresh_chunk_warnings,
+    relink_and_delete,
+)
 from app.api.v1.endpoints.documents.processing import _resolve_display_run_id
 from app.api.v1.endpoints.documents.upload import _start_workflow_or_mark_failed
 from app.api.v1.permissions import (
@@ -10,7 +17,11 @@ from app.api.v1.permissions import (
 )
 from app.core.config import settings
 from app.db.models.document import Document
-from app.db.models.document_revision import INTERNAL_REVISION_SOURCES, DocumentTextRevision
+from app.db.models.document_revision import (
+    INTERNAL_REVISION_SOURCES,
+    NORMALIZED_REVISION_SOURCE,
+    DocumentTextRevision,
+)
 from app.db.models.user import User
 from app.db.session import get_db
 from app.schemas.document import (
@@ -24,6 +35,24 @@ from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
+
+
+async def _review_draft_or_none(db: AsyncSession, doc: Document, document_id: UUID, chunk_id: str):
+    """검토 게이트에서 멈춘 문서의 아직 임베딩되지 않은 청크면 그 행을, 아니면 None을 돌려준다."""
+    if doc.status != REVIEW_STATUS:
+        return None
+    try:
+        chunk_uuid = UUID(chunk_id)
+    except (ValueError, TypeError):
+        return None
+    chunk = await load_chunk(db, document_id, chunk_uuid)
+    if chunk is None or chunk.chunk_tier != "child" or chunk.embedded:
+        return None
+    if not await is_review_draft(db, doc, chunk):
+        # 검토를 승인해 임베딩이 진행 중이다. 이때 고치면 rag_store가 읽어 간 청크와 어긋난다
+        raise HTTPException(status_code=409, detail="검토 승인 뒤 임베딩하는 중입니다. 끝난 뒤에 고쳐 주세요")
+    return chunk
+logger = logging.getLogger(__name__)
 
 HIGHLIGHT_PAGE_HEADER = "X-Highlight-Page"
 HIGHLIGHT_COUNT_HEADER = "X-Highlight-Count"
@@ -96,6 +125,51 @@ async def get_chunk_highlight(
             "Cache-Control": "private, no-store",
         },
     )
+
+
+@router.get("/{document_id}/chunks/{chunk_id}/context")
+async def get_chunk_context(
+    document_id: UUID,
+    chunk_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """쪽 그림을 그릴 수 없는 형식(TXT, MD, HTML, CSV 등)의 인용 위치 보기. 인용한 청크의 글과
+    앞뒤 문맥, 절 경로, 쪽 범위를 돌려준다. 글은 개인정보 마스킹을 거친 NORMALIZED 스냅샷에서만 자른다.
+    마스킹 전 parsed_text를 쓰면 인용이 가린 값이 둘레 글로 드러난다."""
+    from app.db.models.document_chunk import DocumentChunk
+    from app.services.audit import log_audit
+    from app.services.citation_context import build_context
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+    chunk = await db.scalar(
+        select(DocumentChunk).where(DocumentChunk.id == chunk_id, DocumentChunk.document_id == document_id)
+    )
+    if chunk is None:
+        raise HTTPException(status_code=404, detail="문서를 다시 처리해 이 인용의 위치 정보가 없습니다")
+    normalized = await db.scalar(
+        select(DocumentTextRevision.parsed_text)
+        .where(
+            DocumentTextRevision.document_id == document_id,
+            DocumentTextRevision.source == NORMALIZED_REVISION_SOURCE,
+        )
+        .order_by(desc(DocumentTextRevision.created_at))
+        .limit(1)
+    )
+    context = build_context(normalized, chunk)
+    # 원문의 일부를 내주므로 미리보기와 같은 조회 감사를 남긴다
+    log_audit(db, str(current_user.id), "document.preview", "document", str(doc.id))
+    await db.commit()
+    return {
+        "chunk_id": str(chunk.id),
+        **context,
+        "section_path": chunk.section_path,
+        "page_start": chunk.page_start,
+        "page_end": chunk.page_end,
+    }
 
 
 @router.get("/{document_id}/chunks", response_model=DocumentChunksResponse)
@@ -269,6 +343,18 @@ async def update_document_chunk(
     if body.text is not None and not body.text.strip():
         raise HTTPException(status_code=422, detail="청크 텍스트는 비어 있을 수 없습니다")
 
+    # 검토 대기 중인 문서의 청크는 아직 벡터 저장소에 없다. Postgres 청크만 고치면 승인 뒤 임베딩에 반영된다
+    draft = await _review_draft_or_none(db, doc, document_id, chunk_id)
+    if draft is not None:
+        if body.disabled is not None:
+            raise HTTPException(status_code=409, detail="검색 제외는 검토를 승인해 임베딩한 뒤에 할 수 있습니다")
+        draft.chunk_text = body.text
+        draft.char_count = len(body.text)
+        draft.edited = True
+        await refresh_chunk_warnings(db, doc, edited={str(draft.id): body.text})
+        await db.commit()
+        return {"message": "Chunk updated"}
+
     # Defect E: Wrap blocking I/O in asyncio.to_thread
     point = await asyncio.to_thread(
         qdrant_service.get_point, settings.qdrant_collection_name, chunk_id
@@ -323,6 +409,13 @@ async def delete_document_chunk(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="editor")
+
+    draft = await _review_draft_or_none(db, doc, document_id, chunk_id)
+    if draft is not None:
+        await refresh_chunk_warnings(db, doc, removed=(str(draft.id),))
+        await relink_and_delete(db, draft)
+        await db.commit()
+        return {"message": "Chunk deleted"}
 
     # Defect E: Wrap blocking I/O in asyncio.to_thread
     point = await asyncio.to_thread(

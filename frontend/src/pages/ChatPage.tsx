@@ -18,6 +18,7 @@ import { useAnswerStream } from '../hooks/useAnswerStream'
 import { DeepSearchProgress, DeepSearchSteps, DeepSearchToggle } from '../components/chat/DeepSearch'
 import { CitationEvidence, LowOcrBadge } from '../components/chat/CitationEvidence'
 import { CitationLocation } from '../components/chat/CitationLocation'
+import { formatCitationPlace } from '../components/chat/citationMeta'
 import { AnswerFeedback } from '../components/chat/AnswerFeedback'
 import { Alert, Badge, Button, ErrorAlert, ErrorText, IconButton, Input, Page, PageTitle, Select, buttonClass } from '../components/ui'
 import { explainFailure } from '../lib/apiError'
@@ -447,10 +448,10 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
                           <FileText size={12} />
                           {c.filename ?? '문서'}
                         </span>
-                        {c.page_number ? <span>{c.page_number}쪽</span> : null}
+                        {formatCitationPlace(c) ? <span>{formatCitationPlace(c)}</span> : null}
                         <LowOcrBadge evidence={c.evidence} />
                         <span className="user-chat__spacer" />
-                        {c.document_id && c.chunk_id && (
+                        {c.document_id && (
                           <CitationLocation
                             documentId={c.document_id}
                             chunkId={c.chunk_id}

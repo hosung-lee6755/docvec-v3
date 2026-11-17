@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { chunkWarningKind, type ChunkWarningKind } from '../../lib/qualityTargets'
 import ChunkWarningBar from './ChunkWarningBar'
-import type { TabKey } from './documentDetailHelpers'
-import type { DocumentChunksResult, useDeleteChunk, useUpdateChunk } from '../../hooks/useDocuments'
+import ChunkEditPanel from './ChunkEditPanel'
+import type { DocumentChunksResult, useDeleteChunk, useMergeChunk, useUpdateChunk } from '../../hooks/useDocuments'
 import { ErrorText } from '../ui'
 
 interface ChunksTabProps {
@@ -21,11 +21,15 @@ interface ChunksTabProps {
   warningKinds: Map<string, ChunkWarningKind> | null
   updateChunk: ReturnType<typeof useUpdateChunk>
   deleteChunk: ReturnType<typeof useDeleteChunk>
+  mergeChunk: ReturnType<typeof useMergeChunk>
+  // 품질 게이트에서 멈춘 문서. 청크가 아직 임베딩 전이라도 고치고 지우고 합칠 수 있다
+  isReviewDraft: boolean
+  // 원문 대조에 갔다가 돌아왔을 때 다시 보여 줄 청크
+  focusChunkId: string | null
   onChunkEditIdChange: (id: string | null) => void
   onChunkEditTextChange: (text: string) => void
   onExpandedParentChunkIdChange: (id: string | null) => void
-  onOriginalPageChange: (page: number) => void
-  onActivateTab: (tab: TabKey) => void
+  onViewInOriginal: (page: number, chunkId: string) => void
 }
 
 // Parent Retrieval의 뜻. 검색은 작은 청크로 정확하게 찾고, 답변을 만들 때만 같은 상위 절의 앞뒤 청크를 함께 넘긴다.
@@ -54,14 +58,16 @@ export default function ChunksTab({
   warningKinds,
   updateChunk,
   deleteChunk,
+  mergeChunk,
+  isReviewDraft,
+  focusChunkId,
   onChunkEditIdChange,
   onChunkEditTextChange,
   onExpandedParentChunkIdChange,
-  onOriginalPageChange,
-  onActivateTab,
+  onViewInOriginal,
 }: ChunksTabProps) {
   const [onlyFlagged, setOnlyFlagged] = useState(false)
-  const [pickedId, setPickedId] = useState<string | null>(null)
+  const [pickedId, setPickedId] = useState<string | null>(focusChunkId)
   const scrolledForRef = useRef<string[] | null>(null)
   const chunks = chunksResult?.chunks
   const flagged = (chunks ?? []).filter((chunk) => chunkWarningKind(chunk, warningKinds))
@@ -76,6 +82,12 @@ export default function ChunksTab({
     scrolledForRef.current = highlightChunkIds
     scrollToChunk(requestedId)
   }, [requestedId, highlightChunkIds])
+
+  // 원문 대조에서 돌아오면 보던 청크로 다시 스크롤한다
+  const isFocusLoaded = !!focusChunkId && !!chunks?.some((chunk) => chunk.id === focusChunkId)
+  useEffect(() => {
+    if (isFocusLoaded && focusChunkId) scrollToChunk(focusChunkId)
+  }, [isFocusLoaded, focusChunkId])
 
   const handleJump = (index: number) => {
     const target = flagged[index]
@@ -131,12 +143,18 @@ export default function ChunksTab({
       </p>
       {chunksResult.chunks.some((c) => !c.embedded) && (
         <p style={{ fontSize: 12, color: 'var(--color-warning)', margin: 0 }}>
-          아직 임베딩되지 않은 미리보기입니다(검토 승인 후 벡터 저장이 진행됩니다). 이 상태에서는
-          수정·검색 제외·삭제를 할 수 없고, 품질 경고에서 언급된 청크 길이를 확인하는 용도로만 쓸 수 있습니다.
-          아래 굵게 표시된 청크는 너무 짧거나(50자 미만) 너무 깁니다(2000자 초과).
+          {isReviewDraft
+            ? '아직 임베딩 전입니다. 검토를 승인하기 전에 청크 글을 고치거나, 지우거나, 짧은 청크를 앞뒤 청크와 합칠 수 있고, '
+              + '고친 내용은 승인 후 임베딩에 그대로 반영됩니다. 검색 제외는 승인 뒤에 할 수 있습니다. '
+            : '아직 임베딩되지 않은 미리보기입니다. 이 상태에서는 고칠 수 없습니다. '}
+          표시된 청크는 너무 짧거나(50자 미만) 너무 깁니다(2000자 초과).
         </p>
       )}
       {visibleChunks.map((chunk) => {
+        const order = chunksResult.chunks.findIndex((c) => c.id === chunk.id)
+        const prevChunk = order > 0 ? chunksResult.chunks[order - 1] : null
+        const nextChunk = order >= 0 ? chunksResult.chunks[order + 1] ?? null : null
+        const canEdit = chunk.embedded || isReviewDraft
         const warningKind = chunkWarningKind(chunk, warningKinds)
         const isTooShort = warningKind === 'short'
         const isTooLong = warningKind === 'long'
@@ -214,14 +232,14 @@ export default function ChunksTab({
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, whiteSpace: 'nowrap' }}>
               {chunk.page_number != null && (
                 <button
-                  onClick={() => { onOriginalPageChange(chunk.page_number as number); onActivateTab('original') }}
+                  onClick={() => onViewInOriginal(chunk.page_number as number, chunk.id)}
                   className="ds-btn ds-btn--ghost ds-btn--sm"
                   style={{ cursor: 'pointer' }}
                 >
                   원문 대조에서 보기
                 </button>
               )}
-              {chunk.embedded && chunkEditId !== chunk.id && (
+              {canEdit && chunkEditId !== chunk.id && (
                 <>
                   <button
                     onClick={() => { onChunkEditIdChange(chunk.id); onChunkEditTextChange(chunk.text) }}
@@ -230,17 +248,18 @@ export default function ChunksTab({
                   >
                     수정
                   </button>
-                  <button
+                  {chunk.embedded && <button
                     onClick={() => updateChunk.mutate({ docId: documentId, chunkId: chunk.id, disabled: !chunk.disabled })}
                     disabled={updateChunk.isPending}
                     className="ds-btn ds-btn--ghost ds-btn--sm"
                     style={{ cursor: 'pointer' }}
                   >
                     {chunk.disabled ? '검색 포함' : '검색 제외'}
-                  </button>
+                  </button>}
                   <button
                     onClick={() => {
-                      if (window.confirm(`청크 #${chunk.chunk_index + 1}을(를) 삭제하시겠습니까? 벡터DB에서 제거되며 되돌릴 수 없습니다.`)) {
+                      const where = chunk.embedded ? '벡터DB에서 제거되며 ' : ''
+                      if (window.confirm(`청크 #${chunk.chunk_index + 1}을(를) 삭제하시겠습니까? ${where}되돌릴 수 없습니다.`)) {
                         deleteChunk.mutate({ docId: documentId, chunkId: chunk.id })
                       }
                     }}
@@ -302,39 +321,17 @@ export default function ChunksTab({
               </div>
             )}
             {chunkEditId === chunk.id ? (
-              <div>
-                <textarea
-                  className="ds-input"
-                  value={chunkEditText}
-                  onChange={(e) => onChunkEditTextChange(e.target.value)}
-                  rows={8}
-                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, lineHeight: 1.6, fontFamily: 'inherit', resize: 'vertical' }}
-                />
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-                  <button
-                    onClick={() => onChunkEditIdChange(null)}
-                    disabled={updateChunk.isPending}
-                    className="ds-btn ds-btn--secondary ds-btn--sm"
-                    style={{ cursor: 'pointer' }}
-                  >
-                    취소
-                  </button>
-                  <button
-                    onClick={() =>
-                      updateChunk.mutate(
-                        { docId: documentId, chunkId: chunk.id, text: chunkEditText },
-                        { onSuccess: () => onChunkEditIdChange(null) }
-                      )
-                    }
-                    disabled={updateChunk.isPending || !chunkEditText.trim()}
-                    className="ds-btn ds-btn--primary ds-btn--sm"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-                  >
-                    {updateChunk.isPending && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />}
-                    저장 (재임베딩)
-                  </button>
-                </div>
-              </div>
+              <ChunkEditPanel
+                documentId={documentId}
+                chunk={chunk}
+                prevChunk={prevChunk}
+                nextChunk={nextChunk}
+                text={chunkEditText}
+                updateChunk={updateChunk}
+                mergeChunk={mergeChunk}
+                onTextChange={onChunkEditTextChange}
+                onClose={() => onChunkEditIdChange(null)}
+              />
             ) : (
               <pre style={{
                 fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',

@@ -14,6 +14,8 @@ from app.pipeline.adapters.base import (
     RawTableCandidate,
     RawTextBlock,
 )
+from app.pipeline.adapters.hwpx_structure import grid_from_cells
+from app.pipeline.adapters.sheet_adapter import MAX_COLUMNS
 from app.pipeline.adapters.simple_layout import PAGE_HEIGHT, PAGE_WIDTH, BlockCollector, failed
 
 _MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
@@ -103,14 +105,34 @@ def parse_plain_text(text: str, is_markdown: bool) -> tuple[list[RawTextBlock], 
     return blocks, tables, collector
 
 
-def _html_table_rows(table) -> list[list[str]]:
-    rows = []
-    for tr in table.find_all("tr"):
-        # 표 안의 표는 바깥 칸의 글로 합쳐진다. 안쪽 표의 행을 바깥 표의 행으로 세지 않는다
-        if tr.find_parent("table") is not table:
-            continue
-        rows.append([cell.get_text(" ", strip=True) for cell in tr.find_all(["th", "td"], recursive=False)])
-    return rows
+def _span_attr(cell, name: str) -> int:
+    """rowspan/colspan 값. 숫자가 아니거나 1보다 작으면 1로 본다."""
+    try:
+        return max(1, int(str(cell.get(name, "1")).strip()))
+    except ValueError:
+        return 1
+
+
+def _html_table_grid(table) -> tuple[list[list[str]], list[dict]]:
+    """rowspan/colspan을 지켜 열이 맞는 격자를 만든다. 세로 병합은 글을 아래 줄에도 적고, 가로 병합은 첫 칸에만
+    적는다(HWPX와 같은 규칙). 합친 칸의 위치와 크기는 spans로 따로 돌려준다."""
+    # 표 안의 표는 바깥 칸의 글로 합쳐진다. 안쪽 표의 행을 바깥 표의 행으로 세지 않는다
+    trs = [tr for tr in table.find_all("tr") if tr.find_parent("table") is table]
+    occupied: set[tuple[int, int]] = set()
+    cells: list[tuple[int, int, int, int, str]] = []
+    for row, tr in enumerate(trs):
+        col = 0
+        for cell in tr.find_all(["th", "td"], recursive=False):
+            while (row, col) in occupied:
+                col += 1
+            if col >= MAX_COLUMNS:
+                break
+            row_span = min(_span_attr(cell, "rowspan"), len(trs) - row)
+            col_span = min(_span_attr(cell, "colspan"), MAX_COLUMNS - col)
+            occupied.update((row + dr, col + dc) for dr in range(row_span) for dc in range(col_span))
+            cells.append((row, col, row_span, col_span, cell.get_text(" ", strip=True)))
+            col += col_span
+    return grid_from_cells(cells)
 
 
 def parse_html(html: str) -> tuple[list[RawTextBlock], list[RawTableCandidate], BlockCollector, str | None]:
@@ -140,7 +162,8 @@ def parse_html(html: str) -> tuple[list[RawTextBlock], list[RawTableCandidate], 
                 continue
             if name == "table":
                 flush()
-                collector.table(blocks, tables, _html_table_rows(child), 1)
+                rows, spans = _html_table_grid(child)
+                collector.table(blocks, tables, rows, 1, spans)
             elif name in _HTML_HEADINGS:
                 flush()
                 collector.text(blocks, child.get_text(" ", strip=True), 1, heading_level=_HTML_HEADINGS[name])

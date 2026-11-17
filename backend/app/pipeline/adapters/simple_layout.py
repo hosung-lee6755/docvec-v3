@@ -51,17 +51,31 @@ class BlockCollector:
 
     def table(
         self, blocks: list[RawTextBlock], tables: list[RawTableCandidate], rows: list[list[str]], page_number: int,
+        spans: list[dict] | None = None,
     ) -> None:
-        cleaned = [row for row in rows if any(cell for cell in row)]
-        if not cleaned:
+        """spans는 합친 칸({"row", "col", "row_span", "col_span"}, 0부터)이다. 빈 줄을 빼면 그만큼 당겨 적는다."""
+        kept = [index for index, row in enumerate(rows) if any(cell for cell in row)]
+        if not kept:
             return
+        cleaned = [rows[index] for index in kept]
+        remapped = _remap_spans(spans or [], kept)
         self._table_ordinal += 1
-        tables.append(RawTableCandidate(page_number=page_number, rows=cleaned))
+        tables.append(RawTableCandidate(page_number=page_number, rows=cleaned, spans=remapped or None))
         blocks.append(RawTextBlock(
             text=f"[표 {self._table_ordinal}]\n{rows_to_markdown(cleaned)}",
             page_number=page_number,
             block_type="table",
         ))
+
+
+def _remap_spans(spans: list[dict], kept: list[int]) -> list[dict]:
+    new_index = {old: new for new, old in enumerate(kept)}
+    adjusted: list[dict] = []
+    for span in spans:
+        covered = [new_index[r] for r in range(span["row"], span["row"] + span["row_span"]) if r in new_index]
+        if covered and (len(covered) > 1 or span["col_span"] > 1):
+            adjusted.append({**span, "row": covered[0], "row_span": len(covered)})
+    return adjusted
 
 
 def failed(format_id: str, message: str) -> RawParsedDocument:

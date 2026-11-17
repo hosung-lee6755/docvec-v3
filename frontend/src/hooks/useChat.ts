@@ -23,6 +23,9 @@ export interface ChatCitation {
   evidence?: RetrievalEvidence | null
   // 원문에서 근거 자리를 표시할 때 쓰는 청크 id. 예전 답변과 가린 인용에는 없다
   chunk_id?: string | null
+  // 절 경로(제목 목록)와 끝 쪽. 예전 답변과 가린 인용에는 없다
+  section_path?: string[] | null
+  page_end?: number | null
 }
 
 // v3 마일스톤 5 심층 검색 — 하위 질문별 검색 과정. 지금 볼 수 없는 문서는 서버가 가려서 보낸다.

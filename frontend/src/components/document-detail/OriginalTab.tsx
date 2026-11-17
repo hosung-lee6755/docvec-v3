@@ -1,4 +1,4 @@
-import { Loader2 } from 'lucide-react'
+import { ArrowLeft, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { usePdfBlobUrl } from '../../hooks/usePdfBlobUrl'
@@ -32,6 +32,9 @@ interface OriginalTabProps {
   showJson: boolean
   onOriginalPageChange: (page: number) => void
   onShowJsonChange: (v: boolean) => void
+  // 다른 탭에서 넘어왔을 때 그 탭 이름과 돌아가기 동작
+  returnLabel?: string
+  onReturn?: () => void
 }
 
 export default function OriginalTab({
@@ -48,6 +51,8 @@ export default function OriginalTab({
   showJson,
   onOriginalPageChange,
   onShowJsonChange,
+  returnLabel,
+  onReturn,
 }: OriginalTabProps) {
   const pages = pagesTextResult?.pages ?? []
   const isPdfPreview = previewResult?.kind === 'pdf'
@@ -70,6 +75,15 @@ export default function OriginalTab({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 'var(--space-2)' }}>
+      {onReturn && (
+        <div style={{ flexShrink: 0 }}>
+          <button type="button" className="ds-btn ds-btn--secondary ds-btn--sm" onClick={onReturn}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <ArrowLeft size={12} aria-hidden="true" />
+            {returnLabel ? `${returnLabel} 탭으로 돌아가기` : '이전 탭으로 돌아가기'}
+          </button>
+        </div>
+      )}
       {hasMultiplePages && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <button

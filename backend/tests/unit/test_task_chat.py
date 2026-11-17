@@ -598,6 +598,7 @@ def test_generate_answer_happy_path_persists_answer_citations_and_cache(chat_env
     assert stored.citations == [{
         "index": 1, "document_id": "d1", "collection_id": "c1", "collection_name": "Coll",
         "filename": "a.pdf", "page_number": 2, "text": "본문 발췌", "evidence": None, "chunk_id": None,
+        "section_path": None, "page_end": None,
     }]
     cache_args = chat_env.redis.setex.call_args_list[-1].args
     assert cache_args[0].startswith("rag_answer:v2:qwen2.5-3b:")
@@ -1029,3 +1030,65 @@ def test_verifier_stays_local_when_evidence_cannot_leave(monkeypatch):
     with patch.object(chat, "_find_api_key", return_value="sk-key") as find_key:
         assert chat._get_verifier_provider(MagicMock(), MagicMock(), gen, "local", [{"document_id": "d1"}]) is gen
     find_key.assert_not_called()
+
+
+# ------------------------------------------------ 인용의 절 경로·쪽 범위(2026-11-17)
+def _fake_location_db(rows):
+    db = MagicMock()
+    db.execute.return_value.all.return_value = rows
+    return db
+
+
+def test_chunk_locations_looks_up_all_chunks_in_one_query():
+    a, b, doc = uuid4(), uuid4(), uuid4()
+    db = _fake_location_db([
+        SimpleNamespace(id=a, document_id=doc, section_path=["2장", "2.1 백업"], page_end=4),
+        SimpleNamespace(id=b, document_id=doc, section_path=None, page_end=None),
+    ])
+    chunks = [
+        {"document_id": str(doc), "chunk_ref": str(a), "source_kind": "chunk"},
+        {"document_id": str(doc), "chunk_ref": str(b), "source_kind": "chunk"},
+        {"document_id": str(doc), "chunk_ref": "not-a-uuid", "source_kind": "chunk"},
+        {"document_id": str(doc), "chunk_ref": str(uuid4()), "source_kind": "table"},
+    ]
+
+    result = chat._chunk_locations(db, chunks)
+
+    assert db.execute.call_count == 1
+    assert result == {str(a): (["2장", "2.1 백업"], 4), str(b): (None, None)}
+
+
+def test_chunk_locations_skips_the_query_without_chunk_citations():
+    db = _fake_location_db([])
+
+    assert chat._chunk_locations(db, [{"document_id": "d", "source_kind": "summary"}]) == {}
+    db.execute.assert_not_called()
+
+
+def test_chunk_locations_ignores_a_chunk_of_another_document():
+    a = uuid4()
+    db = _fake_location_db([SimpleNamespace(id=a, document_id=uuid4(), section_path=["x"], page_end=2)])
+
+    assert chat._chunk_locations(db, [{"document_id": str(uuid4()), "chunk_ref": str(a)}]) == {}
+
+
+def test_chunk_locations_degrades_to_empty_when_the_lookup_fails():
+    db = MagicMock()
+    db.execute.side_effect = RuntimeError("db down")
+
+    assert chat._chunk_locations(db, [{"document_id": "d", "chunk_ref": str(uuid4())}]) == {}
+
+
+def test_generate_answer_stores_section_path_and_page_end_in_citations(chat_env):
+    _conv, msg = chat_env.build()
+    ref = str(uuid4())
+    chunk = {**CHUNK, "chunk_ref": ref, "source_kind": "chunk"}
+
+    with patch.object(chat, "_chunk_locations", return_value={ref: (["2장 운영", "2.1 백업"], 4)}):
+        chat_env.run(msg.id, ScriptedProvider(), retrieve=MagicMock(return_value=[chunk]))
+
+    stored, db = chat_env.reload(msg.id)
+    assert stored.citations[0]["chunk_id"] == ref
+    assert stored.citations[0]["section_path"] == ["2장 운영", "2.1 백업"]
+    assert stored.citations[0]["page_end"] == 4
+    db.close()

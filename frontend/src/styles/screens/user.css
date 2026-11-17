@@ -647,3 +647,20 @@
 .user-account-import__file { display: flex; flex-direction: column; gap: var(--space-2); }
 .user-account-import__problems { margin: var(--space-2) 0 0; padding-left: var(--space-5); }
 .user-account-import .ds-table-wrap { max-height: 50vh; overflow: auto; }
+/* 인용 위치 보기: 쪽 그림이 없는 형식의 앞뒤 글. 인용한 부분만 표시한다 */
+.user-chat__cite-context { display: flex; flex-direction: column; gap: 8px; }
+.user-chat__cite-context-path { margin: 0; font-size: var(--text-sm); color: var(--color-text-muted); }
+.user-chat__cite-context-body {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--color-border, #d6dbe1);
+  border-radius: 6px;
+  background: var(--color-surface-muted, #f4f5f7);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.user-chat__cite-context-body mark { background: #fff3a3; color: inherit; padding: 1px 0; }

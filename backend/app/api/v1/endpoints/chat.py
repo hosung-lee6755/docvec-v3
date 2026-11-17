@@ -43,6 +43,9 @@ class ChatCitation(BaseModel):
     evidence: dict | None = None
     # 원문 위치 표시에 쓰는 청크 id(2026-11-16). 예전 답변과 가린 인용에는 없다
     chunk_id: str | None = None
+    # 절 경로(제목 목록)와 끝 쪽(2026-11-17). 예전 답변과 가린 인용에는 없다
+    section_path: list[str] | None = None
+    page_end: int | None = None
 
 
 class ChatMessageResponse(BaseModel):
@@ -120,6 +123,7 @@ def _masked(citation: ChatCitation) -> ChatCitation:
     return citation.model_copy(update={
         "hidden": True, "document_id": None, "collection_id": None, "collection_name": None,
         "filename": None, "page_number": None, "text": "", "evidence": None, "chunk_id": None,
+        "section_path": None, "page_end": None,
     })
 
 

@@ -97,3 +97,28 @@ async def test_single_message_endpoint_masks_too(world):
     with patch.object(chat_api, "_partial_answer_for", return_value=None):
         message = await chat_api.get_chat_message(world["msg"].id, world["db"], world["reader"])
     _check(message.citations)
+
+
+async def test_masked_citation_does_not_leak_section_path_or_page_end(world):
+    # 절 경로와 쪽 범위는 본문에서 나온 정보라 가린 인용에는 남으면 안 된다
+    msg = world["msg"]
+    msg.citations = [
+        {**_citation(1, world["open_doc"], "공개 발췌"), "section_path": ["공개 장"], "page_end": 3},
+        {**_citation(2, None, "삭제된 문서 발췌"), "section_path": ["비밀 장"], "page_end": 9, "chunk_id": str(uuid4())},
+    ]
+    await world["db"].commit()
+
+    detail = await chat_api.get_conversation(world["conv"].id, world["db"], world["reader"])
+
+    visible, masked = detail.messages[0].citations
+    assert (visible.section_path, visible.page_end) == (["공개 장"], 3)
+    assert masked.hidden is True
+    assert (masked.section_path, masked.page_end, masked.chunk_id) == (None, None, None)
+    assert "비밀 장" not in detail.model_dump_json()
+
+
+async def test_old_stored_citations_without_the_new_fields_still_load(world):
+    detail = await chat_api.get_conversation(world["conv"].id, world["db"], world["reader"])
+
+    visible = detail.messages[0].citations[0]
+    assert visible.section_path is None and visible.page_end is None

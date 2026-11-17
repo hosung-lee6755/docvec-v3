@@ -11,6 +11,7 @@ from app.db.models.document_node import DocumentNode
 from app.db.models.document_revision import DocumentTextRevision
 from app.db.models.quality_report import QualityReport
 from app.schemas.document import (
+    NodeBulkCorrectionRequest,
     DocumentProceedRequest,
     DocumentReprocessRequest,
     ElementCorrectionRequest,
@@ -438,3 +439,35 @@ async def test_correct_element_404_for_unknown_element_document_and_403(db_sessi
     await assert_http_error(proc.correct_document_element(uuid4(), "e1", body, db_session, owner_user()), 404)
     await assert_http_error(proc.correct_document_element(doc.id, "e1", body, db_session, stranger_user()), 403)
     assert isinstance(doc, Document)
+
+
+# -------------------------------------------------------------- 여러 노드 한 번에 보정(2026-11-17 화면 검토 의견)
+async def test_bulk_correct_nodes_changes_type_and_level_together(db_session):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "p-node-bulk")
+    nodes = [await _node(db_session, doc, run) for _ in range(3)]
+    body = NodeBulkCorrectionRequest(node_ids=[nodes[0].id, nodes[2].id], node_type="HEADING", level=2)
+
+    result = await proc.bulk_correct_document_nodes(doc.id, body, db_session, owner_user())
+
+    assert result == {"updated": 2}
+    for node in nodes:
+        await db_session.refresh(node)
+    assert [(n.node_type, n.level, n.user_corrected) for n in (nodes[0], nodes[2])] == [("HEADING", 2, True)] * 2
+    assert nodes[0].correction_type == "node_type,level"
+    assert nodes[1].user_corrected is not True
+
+
+async def test_bulk_correct_rejects_foreign_nodes_unknown_types_and_empty_changes(db_session):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "p-node-bulk-bad")
+    node = await _node(db_session, doc, run)
+
+    await assert_http_error(proc.bulk_correct_document_nodes(
+        doc.id, NodeBulkCorrectionRequest(node_ids=[node.id, uuid4()], level=1), db_session, owner_user()), 404)
+    await assert_http_error(proc.bulk_correct_document_nodes(
+        doc.id, NodeBulkCorrectionRequest(node_ids=[node.id], node_type="BOGUS"), db_session, owner_user()), 422)
+    await assert_http_error(proc.bulk_correct_document_nodes(
+        doc.id, NodeBulkCorrectionRequest(node_ids=[node.id]), db_session, owner_user()), 422)
+    await assert_http_error(proc.bulk_correct_document_nodes(
+        doc.id, NodeBulkCorrectionRequest(node_ids=[node.id], level=1), db_session, stranger_user()), 403)
+    await db_session.refresh(node)
+    assert node.user_corrected is not True

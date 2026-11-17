@@ -10,6 +10,7 @@ from app.db.models.document_revision import DocumentTextRevision
 from app.db.models.user import User
 from app.db.session import get_db
 from app.schemas.document import (
+    NodeBulkCorrectionRequest,
     DocumentElementItem,
     DocumentElementsResponse,
     DocumentNodeItem,
@@ -469,6 +470,49 @@ async def correct_document_node(
     await db.commit()
     await db.refresh(node)
     return node
+
+
+@router.patch("/{document_id}/nodes")
+async def bulk_correct_document_nodes(
+    document_id: UUID,
+    body: NodeBulkCorrectionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """여러 노드의 유형이나 제목 레벨을 한 번에 보정한다. 한 노드라도 이 문서 것이 아니면 아무것도 바꾸지 않는다."""
+    from app.db.models.document_node import DocumentNode
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="editor")
+
+    if body.node_type is None and body.level is None:
+        raise HTTPException(status_code=422, detail="바꿀 노드 유형이나 제목 레벨을 지정하세요")
+    if body.node_type is not None and body.node_type not in DocumentNode.__table__.c.node_type.type.enums:
+        raise HTTPException(status_code=422, detail=f"허용되지 않는 node_type: {body.node_type}")
+
+    wanted = set(body.node_ids)
+    nodes = (
+        await db.scalars(
+            select(DocumentNode).where(DocumentNode.document_id == document_id, DocumentNode.id.in_(wanted))
+        )
+    ).all()
+    if len(nodes) != len(wanted):
+        raise HTTPException(status_code=404, detail=f"이 문서에 없는 노드가 {len(wanted) - len(nodes)}개 있습니다")
+
+    changed_fields = [name for name, value in (("node_type", body.node_type), ("level", body.level)) if value is not None]
+    for node in nodes:
+        if body.node_type is not None:
+            node.node_type = body.node_type
+        if body.level is not None:
+            node.level = body.level
+        node.user_corrected = True
+        node.correction_type = ",".join(changed_fields)
+        if body.correction_notes is not None:
+            node.correction_notes = body.correction_notes
+    await db.commit()
+    return {"updated": len(nodes)}
 
 
 @router.get("/{document_id}/elements", response_model=DocumentElementsResponse)

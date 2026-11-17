@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import {
-  useDocumentNode, useDocumentNodes, useUpdateDocumentNode, type DocumentNodeItem,
+  useBulkCorrectNodes, useDocumentNode, useDocumentNodes, useUpdateDocumentNode, type DocumentNodeItem,
 } from '../../hooks/useDocumentStructure'
+import OriginalPagePreview, { type PreviewResult } from './OriginalPagePreview'
 import { useDocumentRuns, useReprocessImpact } from '../../hooks/useDocumentRuns'
 import { useWorkflowRun } from '../../hooks/useWorkflows'
 import { ErrorText } from '../ui'
+import StructureBulkPanel from './StructureBulkPanel'
 
 const STRUCTURE_ANALYZE_BLOCK_TYPE = 'structure_analyze'
 const EMPTY_NODES: DocumentNodeItem[] = []
@@ -48,15 +50,29 @@ function buildTree(nodes: DocumentNodeItem[]): TreeNode[] {
 // 맨 위(문서) 노드만 펼쳐 두고, 나머지는 펼칠 때 자식을 그린다.
 const TOGGLE_WIDTH = 14
 
-function TreeRow({
-  node, depth, selectedId, onSelect,
-}: { node: TreeNode; depth: number; selectedId: string | null; onSelect: (n: TreeNode) => void }) {
+interface TreeRowProps {
+  node: TreeNode
+  depth: number
+  selectedId: string | null
+  checkedIds: Set<string>
+  onSelect: (n: TreeNode) => void
+  onToggleCheck: (id: string) => void
+}
+
+function TreeRow({ node, depth, selectedId, checkedIds, onSelect, onToggleCheck }: TreeRowProps) {
   const [isOpen, setIsOpen] = useState(depth === 0)
   const hasChildren = node.children.length > 0
   const isSelected = node.id === selectedId
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 4 + depth * 16 }}>
+        <input
+          type="checkbox"
+          aria-label={`${node.text?.slice(0, 30) || NODE_TYPE_LABELS[node.node_type] || node.node_type} 선택`}
+          checked={checkedIds.has(node.id)}
+          onChange={() => onToggleCheck(node.id)}
+          style={{ flexShrink: 0, margin: '0 4px 0 0' }}
+        />
         {hasChildren ? (
           <button
             type="button"
@@ -77,14 +93,14 @@ function TreeRow({
           type="button"
           onClick={() => onSelect(node)}
           style={{
-            display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0, textAlign: 'left',
+            display: 'flex', alignItems: 'center', gap: 6, flex: '1 0 auto', textAlign: 'left', whiteSpace: 'nowrap',
             padding: '4px 8px 4px 2px', fontSize: 12, border: 'none',
             background: isSelected ? 'var(--color-primary-subtle)' : 'transparent', cursor: 'pointer',
             color: isSelected ? 'var(--color-accent)' : 'inherit',
           }}
         >
           <span style={{ color: 'var(--color-text-subtle)', flexShrink: 0 }}>{NODE_TYPE_ICONS[node.node_type] ?? '·'}</span>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ whiteSpace: 'nowrap' }}>
             {node.text?.slice(0, 60) || NODE_TYPE_LABELS[node.node_type] || node.node_type}
           </span>
           {!isOpen && hasChildren && (
@@ -94,7 +110,8 @@ function TreeRow({
         </button>
       </div>
       {isOpen && node.children.map((child) => (
-        <TreeRow key={child.id} node={child} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />
+        <TreeRow key={child.id} node={child} depth={depth + 1} selectedId={selectedId} checkedIds={checkedIds}
+          onSelect={onSelect} onToggleCheck={onToggleCheck} />
       ))}
     </div>
   )
@@ -102,13 +119,25 @@ function TreeRow({
 
 interface StructureTabProps {
   documentId: string
+  previewResult?: PreviewResult
+  isPreviewError?: boolean
   onViewInOriginal?: (pageNumber: number) => void
   onReprocessFromStructure?: (blockInstanceId: string) => void
 }
 
-export default function StructureTab({ documentId, onViewInOriginal, onReprocessFromStructure }: StructureTabProps) {
+export default function StructureTab({
+  documentId, previewResult, isPreviewError = false, onViewInOriginal, onReprocessFromStructure,
+}: StructureTabProps) {
   const { data, isLoading, isError, error } = useDocumentNodes(documentId)
   const updateNode = useUpdateDocumentNode()
+  const bulkCorrect = useBulkCorrectNodes()
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set())
+  const toggleCheck = (id: string) => setCheckedIds((prev) => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
   const [selected, setSelected] = useState<DocumentNodeItem | null>(null)
   const [levelInput, setLevelInput] = useState('')
   const [typeInput, setTypeInput] = useState('')
@@ -192,12 +221,57 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 'var(--space-3)' }}>
       <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '260px 1fr', gap: 'var(--space-4)' }}>
-        <div style={{ overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
-          {tree.map((root) => (
-            <TreeRow key={root.id} node={root} depth={0} selectedId={selected?.id ?? null} onSelect={handleSelect} />
-          ))}
+        {/* 깊은 노드나 긴 글이 잘리지 않게 목록은 가로로도 스크롤한다 */}
+        <div style={{ overflow: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
+          <div style={{ minWidth: '100%', width: 'max-content' }}>
+            {tree.map((root) => (
+              <TreeRow key={root.id} node={root} depth={0} selectedId={selected?.id ?? null} checkedIds={checkedIds}
+                onSelect={handleSelect} onToggleCheck={toggleCheck} />
+            ))}
+          </div>
         </div>
-        <div style={{ overflowY: 'auto' }}>
+        <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          {checkedIds.size > 0 && (
+            <StructureBulkPanel
+              count={checkedIds.size}
+              nodeTypes={NODE_TYPES}
+              nodeTypeLabels={NODE_TYPE_LABELS}
+              isPending={bulkCorrect.isPending}
+              error={bulkCorrect.isError ? bulkCorrect.error : null}
+              onClear={() => setCheckedIds(new Set())}
+              onApply={(changes) => bulkCorrect.mutate(
+                { documentId, nodeIds: [...checkedIds], ...changes },
+                { onSuccess: () => { setCheckedIds(new Set()); setShowReprocessBanner(true) } },
+              )}
+            />
+          )}
+          {showReprocessBanner && impact && (
+            <div style={{
+              fontSize: 12, color: 'var(--color-warning)', background: 'var(--color-warning-bg)',
+              border: '1px solid var(--color-warning-border)', borderRadius: 'var(--radius-sm)',
+              padding: 'var(--space-2)', display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <span>구조 변경이 청크 {impact.affectedChunkCount}개에 영향 —</span>
+              {structureStep && onReprocessFromStructure && (
+                <button
+                  type="button"
+                  onClick={() => onReprocessFromStructure(structureStep.block_instance_id)}
+                  className="ds-btn ds-btn--ghost ds-btn--sm"
+                  style={{ cursor: 'pointer', fontSize: 12, padding: 0, color: 'var(--color-warning)', textDecoration: 'underline' }}
+                >
+                  지금 재처리
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowReprocessBanner(false)}
+                className="ds-btn ds-btn--ghost ds-btn--sm"
+                style={{ cursor: 'pointer', fontSize: 12, padding: 0, color: 'var(--color-warning)' }}
+              >
+                나중에
+              </button>
+            </div>
+          )}
           {!selected && (
             <p style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>왼쪽에서 노드를 선택하세요.</p>
           )}
@@ -277,46 +351,28 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
                 </label>
               </div>
               {selected.span_start != null && (
-                <div style={{ fontSize: 11, color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span>원문 위치 span {selected.span_start}–{selected.span_end}</span>
-                  {onViewInOriginal && selected.page_number != null && (
-                    <button
-                      type="button"
-                      onClick={() => onViewInOriginal(selected.page_number as number)}
-                      className="ds-btn ds-btn--ghost ds-btn--sm"
-                      style={{ cursor: 'pointer', fontSize: 11, padding: 0 }}
-                    >
-                      원문 대조에서 보기
-                    </button>
-                  )}
-                </div>
-              )}
-              {showReprocessBanner && impact && (
-                <div style={{
-                  fontSize: 12, color: 'var(--color-warning)', background: 'var(--color-warning-bg)',
-                  border: '1px solid var(--color-warning-border)', borderRadius: 'var(--radius-sm)',
-                  padding: 'var(--space-2)', display: 'flex', alignItems: 'center', gap: 8,
-                }}>
-                  <span>구조 변경이 청크 {impact.affectedChunkCount}개에 영향 —</span>
-                  {structureStep && onReprocessFromStructure && (
-                    <button
-                      type="button"
-                      onClick={() => onReprocessFromStructure(structureStep.block_instance_id)}
-                      className="ds-btn ds-btn--ghost ds-btn--sm"
-                      style={{ cursor: 'pointer', fontSize: 12, padding: 0, color: 'var(--color-warning)', textDecoration: 'underline' }}
-                    >
-                      지금 재처리
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setShowReprocessBanner(false)}
-                    className="ds-btn ds-btn--ghost ds-btn--sm"
-                    style={{ cursor: 'pointer', fontSize: 12, padding: 0, color: 'var(--color-warning)' }}
-                  >
-                    나중에
-                  </button>
-                </div>
+                <section aria-label="원문" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontSize: 11, color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>
+                      원문{selected.page_number != null ? ` ${selected.page_number}쪽` : ''} · 위치 {selected.span_start}–{selected.span_end}
+                    </span>
+                    {onViewInOriginal && selected.page_number != null && (
+                      <button
+                        type="button"
+                        onClick={() => onViewInOriginal(selected.page_number as number)}
+                        className="ds-btn ds-btn--ghost ds-btn--sm"
+                        style={{ cursor: 'pointer', fontSize: 11, padding: 0 }}
+                      >
+                        원문 대조 탭에서 크게 보기
+                      </button>
+                    )}
+                  </div>
+                  <OriginalPagePreview
+                    previewResult={previewResult}
+                    isPreviewError={isPreviewError}
+                    pageNumber={selected.page_number}
+                  />
+                </section>
               )}
               {updateNode.isError && <ErrorText error={updateNode.error} message="구조 보정을 저장하지 못했습니다." />}
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

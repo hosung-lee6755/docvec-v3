@@ -193,6 +193,41 @@ def _with_parent_context(db, chunks: list[dict], collection_id: str | None) -> l
     return attach_parent_context(db, chunks)
 
 
+def _chunk_locations(db, chunks: list[dict]) -> dict[str, tuple[list | None, int | None]]:
+    """인용한 청크의 (절 경로, 끝 쪽)을 청크 id로 한 번에 읽는다. 벡터 DB 페이로드에는 이 값이 없어
+    색인을 다시 만들지 않고 document_chunks에서 가져온다. 읽지 못해도 인용 자체는 만든다."""
+    from uuid import UUID
+
+    from sqlalchemy import select
+
+    from app.db.models.document_chunk import DocumentChunk
+
+    owner_by_ref: dict[str, str | None] = {}
+    for c in chunks:
+        ref = c.get("chunk_ref")
+        if not ref or c.get("source_kind", "chunk") != "chunk":
+            continue
+        try:
+            owner_by_ref[str(UUID(str(ref)))] = c.get("document_id")
+        except ValueError:
+            continue
+    if not owner_by_ref:
+        return {}
+    try:
+        rows = db.execute(
+            select(DocumentChunk.id, DocumentChunk.document_id, DocumentChunk.section_path, DocumentChunk.page_end)
+            .where(DocumentChunk.id.in_([UUID(r) for r in owner_by_ref]))
+        ).all()
+    except Exception:  # noqa: BLE001
+        logger.exception("citation location lookup failed; citations will carry the page only")
+        return {}
+    return {
+        str(r.id): (r.section_path or None, r.page_end)
+        for r in rows
+        if str(r.document_id) == str(owner_by_ref.get(str(r.id)))
+    }
+
+
 def _build_context(chunks: list[dict]) -> str:
     citation_lines = []
     for i, c in enumerate(chunks, start=1):
@@ -854,6 +889,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
                 )
             )
 
+        locations = _chunk_locations(db, chunks)
         msg.answer = answer
         msg.citations = [
             {
@@ -867,6 +903,9 @@ def generate_answer(self, chat_message_id: str) -> dict:
                 "evidence": c.get("evidence"),
                 # 원문에서 근거 자리를 표시할 때 쓴다(전체 점검 1-7). 예전 답변에는 없다
                 "chunk_id": c.get("chunk_ref") if c.get("source_kind", "chunk") == "chunk" else None,
+                # 절 경로와 끝 쪽(2026-11-17): 쪽 번호만으로는 문서 안의 자리를 알 수 없다
+                "section_path": locations.get(str(c.get("chunk_ref")), (None, None))[0],
+                "page_end": locations.get(str(c.get("chunk_ref")), (None, None))[1],
             }
             for i, c in enumerate(chunks)
         ]

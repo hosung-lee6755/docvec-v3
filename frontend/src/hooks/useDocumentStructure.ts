@@ -73,6 +73,26 @@ export function useUpdateDocumentNode() {
   })
 }
 
+// 구조 탭에서 고른 여러 노드의 유형이나 제목 레벨을 한 번에 바꾼다
+export function useBulkCorrectNodes() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ documentId, nodeIds, level, nodeType }: {
+      documentId: string; nodeIds: string[]; level?: number; nodeType?: string
+    }) => {
+      const { data } = await apiClient.patch<{ updated: number }>(`/documents/${documentId}/nodes`, {
+        node_ids: nodeIds,
+        level: level ?? null,
+        node_type: nodeType ?? null,
+      })
+      return data
+    },
+    onSuccess: (_data, { documentId }) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', documentId, 'nodes'] })
+    },
+  })
+}
+
 export interface CleaningChangeItem {
   id: string
   rule_id: string | null

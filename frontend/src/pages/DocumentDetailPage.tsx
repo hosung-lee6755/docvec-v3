@@ -4,7 +4,7 @@ import QualityWarningList from '../components/document-detail/QualityWarningList
 import StructureWarningNotice from '../components/document-detail/StructureWarningNotice'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Download, Loader2, Save, X } from 'lucide-react'
-import { useAcceptTagSuggestion, useDeleteChunk, useDismissTagSuggestion, useDocument, useDocumentChunks, useDocumentContent, useDocumentImages, useDocumentPagesText, useDocumentPreview, useDocumentRevisions, useDocumentTables, useDownloadDocument, useProceedDocument, useReprocessDocument, useRestoreRevision, useRetryDocument, useUpdateChunk, useUpdateDocumentTags } from '../hooks/useDocuments'
+import { useAcceptTagSuggestion, useDeleteChunk, useDismissTagSuggestion, useMergeChunk, useDocument, useDocumentChunks, useDocumentContent, useDocumentImages, useDocumentPagesText, useDocumentPreview, useDocumentRevisions, useDocumentTables, useDownloadDocument, useProceedDocument, useReprocessDocument, useRestoreRevision, useRetryDocument, useUpdateChunk, useUpdateDocumentTags } from '../hooks/useDocuments'
 import { useDocumentQuality, useDocumentRuns } from '../hooks/useDocumentRuns'
 import { useCancelRun, useResumeRun, useWorkflowRun } from '../hooks/useWorkflows'
 import StepTimeline from '../components/workflow/StepTimeline'
@@ -60,6 +60,12 @@ const PROCESSING_STATUSES = new Set([
 
 const TAB_ID_PREFIX = 'doc-detail'
 
+interface OriginalReturn {
+  tab: TabKey
+  label: string
+  chunkId?: string
+}
+
 export default function DocumentDetailPage() {
   const { id = '', projectId } = useParams<{ id: string; projectId?: string }>()
   const backTo = projectId ? `/projects/${projectId}/documents` : '/documents'
@@ -82,9 +88,24 @@ export default function DocumentDetailPage() {
   // 포함 — 검토 게이트에 걸린 문서도 chunk_split이 이미 만든(아직 미임베딩) 청크를
   // 패널에서 바로 보여줘야 한다.
   const { data: chunksResult, isLoading: isChunksLoading, isError: isChunksError, error: chunksError } = useDocumentChunks(id, activeTab === 'chunks' || doc?.status === 'INDEXED' || doc?.status === 'WAITING_REVIEW')
-  const { data: previewResult, isError: isPreviewError, error: previewError } = useDocumentPreview(id, activeTab === 'original')
+  const { data: previewResult, isError: isPreviewError, error: previewError } = useDocumentPreview(id, activeTab === 'original' || activeTab === 'structure')
   const { data: pagesTextResult } = useDocumentPagesText(id, activeTab === 'original')
   const [originalPage, setOriginalPage] = useState(1)
+  // 다른 탭에서 "원문 대조에서 보기"로 넘어왔을 때 돌아갈 곳. 탭을 직접 바꾸면 지운다
+  const [originalReturn, setOriginalReturn] = useState<OriginalReturn | null>(null)
+  const viewInOriginal = (page: number, from: OriginalReturn) => {
+    setOriginalPage(page)
+    setOriginalReturn(from)
+    setActiveTab('original')
+  }
+  const changeTab = (tab: TabKey) => {
+    setOriginalReturn(null)
+    setActiveTab(tab)
+  }
+  const returnFromOriginal = () => {
+    if (!originalReturn) return
+    setActiveTab(originalReturn.tab)
+  }
   const { data: revisionsResult } = useDocumentRevisions(id, activeTab === 'edit')
   const { data: editNodesResult } = useDocumentNodes(id, activeTab === 'edit')
   const download = useDownloadDocument()
@@ -92,6 +113,7 @@ export default function DocumentDetailPage() {
   const reprocess = useReprocessDocument()
   const updateChunk = useUpdateChunk()
   const deleteChunk = useDeleteChunk()
+  const mergeChunk = useMergeChunk()
   const restoreRevision = useRestoreRevision()
   const retryDoc = useRetryDocument()
   const updateTags = useUpdateDocumentTags()
@@ -119,6 +141,7 @@ export default function DocumentDetailPage() {
     setReviewTextOverride(null)
     setSelectedRunId(null)
     setHighlightChunkIds([])
+    setOriginalReturn(null)
     setShowJson(false)
     setTagInput('')
   }, [id])
@@ -292,7 +315,7 @@ export default function DocumentDetailPage() {
                       <QualityWarningList
                         report={qualityReport}
                         onHighlightChunkIdsChange={setHighlightChunkIds}
-                        onActivateTab={setActiveTab}
+                        onActivateTab={changeTab}
                       />
                     </div>
                   )}
@@ -403,7 +426,7 @@ export default function DocumentDetailPage() {
                 <Tabs
                   items={visibleTabs.map((t) => ({ value: t.key, label: t.label }))}
                   value={activeTab}
-                  onChange={setActiveTab}
+                  onChange={changeTab}
                   label="문서 상세 탭"
                   idPrefix={TAB_ID_PREFIX}
                 />
@@ -431,7 +454,7 @@ export default function DocumentDetailPage() {
                       restoreRevision={restoreRevision}
                       onEditedContentChange={setEditedContent}
                       onShowJsonChange={setShowJson}
-                      onActivateTab={setActiveTab}
+                      onActivateTab={changeTab}
                     />
                   )}
 
@@ -469,11 +492,13 @@ export default function DocumentDetailPage() {
                       warningKinds={chunkWarningKinds(qualityReport)}
                       updateChunk={updateChunk}
                       deleteChunk={deleteChunk}
+                      mergeChunk={mergeChunk}
+                      isReviewDraft={isWaitingReview}
+                      focusChunkId={originalReturn?.tab === 'chunks' ? originalReturn.chunkId ?? null : null}
                       onChunkEditIdChange={setChunkEditId}
                       onChunkEditTextChange={setChunkEditText}
                       onExpandedParentChunkIdChange={setExpandedParentChunkId}
-                      onOriginalPageChange={setOriginalPage}
-                      onActivateTab={setActiveTab}
+                      onViewInOriginal={(page, chunkId) => viewInOriginal(page, { tab: 'chunks', label: '청크', chunkId })}
                     />
                   )}
                   {activeTab === 'original' && (
@@ -491,6 +516,8 @@ export default function DocumentDetailPage() {
                       showJson={showJson}
                       onOriginalPageChange={setOriginalPage}
                       onShowJsonChange={setShowJson}
+                      returnLabel={originalReturn?.label}
+                      onReturn={originalReturn ? returnFromOriginal : undefined}
                     />
                   )}
 
@@ -498,11 +525,13 @@ export default function DocumentDetailPage() {
                     <>
                       <StructureWarningNotice
                         report={qualityReport}
-                        onViewPage={(pageNumber) => { setOriginalPage(pageNumber); setActiveTab('original') }}
+                        onViewPage={(pageNumber) => viewInOriginal(pageNumber, { tab: 'structure', label: '구조' })}
                       />
                       <StructureTab
                         documentId={id}
-                        onViewInOriginal={(pageNumber) => { setOriginalPage(pageNumber); setActiveTab('original') }}
+                        previewResult={previewResult}
+                        isPreviewError={isPreviewError}
+                        onViewInOriginal={(pageNumber) => viewInOriginal(pageNumber, { tab: 'structure', label: '구조' })}
                         onReprocessFromStructure={(blockInstanceId) => setReprocessModal({ blockInstanceId })}
                       />
                     </>
@@ -526,7 +555,7 @@ export default function DocumentDetailPage() {
                         cancelRun={cancelRun}
                         resumeRun={resumeRun}
                         onHighlightChunkIdsChange={setHighlightChunkIds}
-                        onActivateTab={setActiveTab}
+                        onActivateTab={changeTab}
                       />
                       <OcrConfidencePanel documentId={id} />
                     </div>

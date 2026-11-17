@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { ErrorText } from '../ui'
 import {
@@ -31,7 +32,7 @@ interface EntrySummary {
   count: number
 }
 
-// 사전 항목별로 묶어 "이 문서에서 끄기"를 한 번에 할 수 있게 한다(v3 마일스톤 6)
+// 사전 항목별로 묶어 "이 문서에 적용 취소"를 한 번에 할 수 있게 한다(v3 마일스톤 6)
 function summarizeEntries(applications: DictionaryApplicationItem[]): EntrySummary[] {
   const byEntry = new Map<string, EntrySummary>()
   for (const app of applications) {
@@ -68,6 +69,9 @@ export default function DictionaryApplicationsTab({
   const revert = useRevertDictionaryApplication()
   const toggle = useToggleDictionaryExclusion()
   const { data: exclusions } = useDictionaryExclusions(documentId)
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  const [isBulkRunning, setIsBulkRunning] = useState(false)
+  const [bulkError, setBulkError] = useState<unknown>(null)
 
   if (isLoading) {
     return (
@@ -95,6 +99,34 @@ export default function DictionaryApplicationsTab({
   // 끈 항목 중 아직 이 처리 결과에 남아 있는 것만 재처리가 필요하다
   const pendingExclusions = applied.filter((e) => excluded.has(e.entryId)).length
   const needsReprocess = (data?.pending_revert_count ?? 0) > 0 || pendingExclusions > 0
+  // 고른 항목 가운데 지금 켜져 있는 것만 취소 대상이 된다
+  const selectable = entries.filter((e) => !excluded.has(e.entryId))
+  const selectedOn = selectable.filter((e) => selected.has(e.entryId))
+  const isAllSelected = selectable.length > 0 && selectedOn.length === selectable.length
+
+  const toggleSelected = (entryId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(entryId)) next.delete(entryId)
+      else next.add(entryId)
+      return next
+    })
+  }
+
+  const cancelSelected = async () => {
+    setIsBulkRunning(true)
+    setBulkError(null)
+    try {
+      for (const e of selectedOn) {
+        await toggle.mutateAsync({ documentId, entryId: e.entryId, exclude: true })
+      }
+      setSelected(new Set())
+    } catch (err) {
+      setBulkError(err)
+    } finally {
+      setIsBulkRunning(false)
+    }
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
@@ -104,7 +136,29 @@ export default function DictionaryApplicationsTab({
 
       {entries.length > 0 && (
         <section aria-label="이 문서에 적용된 사전 항목">
-          <h3 style={{ fontSize: 13, margin: '0 0 var(--space-2)' }}>이 문서에 적용된 사전 항목</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', margin: '0 0 var(--space-2)' }}>
+            <h3 style={{ fontSize: 13, margin: 0, flex: 1 }}>이 문서에 적용된 사전 항목</h3>
+            {selectable.length > 0 && (
+              <>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={isAllSelected}
+                    onChange={() => setSelected(isAllSelected ? new Set() : new Set(selectable.map((e) => e.entryId)))}
+                  />
+                  전체 선택
+                </label>
+                <button
+                  type="button"
+                  className="ds-btn ds-btn--secondary ds-btn--sm"
+                  disabled={!selectedOn.length || isBulkRunning}
+                  onClick={cancelSelected}
+                >
+                  {selectedOn.length ? `선택한 ${selectedOn.length}개 적용 취소` : '선택한 항목 적용 취소'}
+                </button>
+              </>
+            )}
+          </div>
           <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
             {entries.map((e) => {
               const isOff = excluded.has(e.entryId)
@@ -113,19 +167,32 @@ export default function DictionaryApplicationsTab({
                   display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '4px 8px',
                   border: '1px solid var(--color-border)', borderRadius: 999, opacity: isOff ? 0.6 : 1,
                 }}>
+                  {!isOff && (
+                    <input
+                      type="checkbox"
+                      aria-label={`${e.term} 선택`}
+                      checked={selected.has(e.entryId)}
+                      onChange={() => toggleSelected(e.entryId)}
+                    />
+                  )}
                   <span className="ds-badge ds-badge--neutral">{e.kind}</span>
                   <span style={{ textDecoration: isOff ? 'line-through' : 'none' }}>{e.term}</span>
                   <span style={{ color: 'var(--color-text-muted)' }}>{e.count ? `${e.count}건` : '적용 안 됨'}</span>
                   <button type="button" className="ds-btn ds-btn--ghost ds-btn--sm" disabled={toggle.isPending}
                     onClick={() => toggle.mutate({ documentId, entryId: e.entryId, exclude: !isOff })}>
-                    {isOff ? '다시 적용' : '이 문서에서 끄기'}
+                    {isOff ? '다시 적용' : '이 문서에 적용 취소'}
                   </button>
                 </li>
               )
             })}
           </ul>
           {revert.isError && <ErrorText error={revert.error} message="적용을 취소하지 못했습니다." />}
-          {toggle.isError && (
+          {!!bulkError && (
+            <p style={{ margin: 'var(--space-1) 0 0' }}>
+              <ErrorText error={bulkError} message="선택한 항목 가운데 일부를 적용 취소하지 못했습니다. 목록을 확인하고 다시 시도하세요." />
+            </p>
+          )}
+          {toggle.isError && !bulkError && (
             <p style={{ margin: 'var(--space-1) 0 0' }}>
               <ErrorText error={toggle.error} message="사전 적용 여부를 바꾸지 못했습니다." />
             </p>
@@ -158,9 +225,9 @@ export default function DictionaryApplicationsTab({
                       onClick={() => revert.mutate({ documentId, appId: app.id })}
                       disabled={revert.isPending}
                       className="ds-btn ds-btn--ghost ds-btn--sm"
-                      title="이 문서에서 같은 표현은 다음 처리부터 바꾸지 않습니다"
+                      title={`이 문서에서 '${app.original_text}' 표현만 다음 처리부터 바꾸지 않습니다. 항목 전체를 빼려면 위의 '이 문서에 적용 취소'를 쓰세요`}
                     >
-                      적용 취소
+                      이 표현만 취소
                     </button>
                   )}
                 </td>
@@ -180,7 +247,7 @@ export default function DictionaryApplicationsTab({
           <span style={{ flex: 1 }}>
             {(data?.pending_revert_count ?? 0) > 0 && `적용 취소 ${data?.pending_revert_count}건`}
             {(data?.pending_revert_count ?? 0) > 0 && pendingExclusions > 0 && ', '}
-            {pendingExclusions > 0 && `이 문서에서 끈 항목 ${pendingExclusions}개`}
+            {pendingExclusions > 0 && `이 문서에 적용 취소한 항목 ${pendingExclusions}개`}
             {'. 사전 블록부터 다시 처리해야 본문에 반영됩니다.'}
           </span>
           <button
