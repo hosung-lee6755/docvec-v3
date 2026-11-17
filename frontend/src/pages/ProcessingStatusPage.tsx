@@ -62,65 +62,67 @@ export default function ProcessingStatusPage() {
         <Stat label="큐 대기" value={formatSeconds(data?.avg_queue_seconds ?? null)} />
       </StatStrip>
 
-      <div className="documents-grid-2">
-        <Card title="블록별 성능">
-          {!data?.block_stats.length ? (
-            <p className="documents-note">기간 내 실행된 블록이 없습니다.</p>
-          ) : (
-            <div className="ds-table-wrap">
-              <table className="ds-table ds-table--compact">
-                <thead>
-                  <tr>
-                    <th scope="col">블록</th>
-                    <th scope="col" className="ds-cell-num">실행</th>
-                    <th scope="col" className="ds-cell-num">실패율</th>
-                    <th scope="col" className="ds-cell-num">평균시간</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.block_stats.map((b) => {
-                    const isWarn = b.failure_rate > FAILURE_RATE_WARNING_THRESHOLD
-                    return (
-                      <tr key={b.block_type} className={isWarn ? 'is-warning' : undefined}>
-                        <td>{getBlockMeta(b.block_type).label}</td>
-                        <td className="ds-cell-num">{b.execution_count}</td>
-                        <td className="ds-cell-num">
-                          {isWarn && <AlertTriangle size={11} aria-hidden="true" style={{ marginRight: 4, verticalAlign: 'text-bottom' }} />}
-                          {formatPercent(b.failure_rate)}
-                        </td>
-                        <td className="ds-cell-num">{formatSeconds(b.avg_duration_seconds)}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-
-        <Card title="최근 실패">
-          {!data?.recent_failures.length ? (
-            <p className="documents-note">최근 실패한 처리가 없습니다.</p>
-          ) : (
-            <div className="documents-stack">
-              {data.recent_failures.map((f) => (
-                <div key={`${f.document_id}-${f.created_at}`} className="documents-row-fail">
-                  <button
-                    type="button"
-                    className="documents-link documents-ellipsis"
-                    onClick={() => navigate(`/documents/${f.document_id}`)}
-                  >
-                    {f.filename}
-                  </button>
-                  <span className="documents-text-danger" style={{ fontSize: 'var(--text-xs)' }}>
-                    {explainFailure(f.error_message)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-      </div>
+      <PageBody>
+        <div className="documents-grid-2">
+          <Card title="블록별 성능">
+            {!data?.block_stats.length ? (
+              <p className="documents-note">기간 내 실행된 블록이 없습니다.</p>
+            ) : (
+              <div className="ds-table-wrap">
+                <table className="ds-table ds-table--compact">
+                  <thead>
+                    <tr>
+                      <th scope="col">블록</th>
+                      <th scope="col" className="ds-cell-num">실행</th>
+                      <th scope="col" className="ds-cell-num">실패율</th>
+                      <th scope="col" className="ds-cell-num">평균시간</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.block_stats.map((b) => {
+                      const isWarn = b.failure_rate > FAILURE_RATE_WARNING_THRESHOLD
+                      return (
+                        <tr key={b.block_type} className={isWarn ? 'is-warning' : undefined}>
+                          <td>{getBlockMeta(b.block_type).label}</td>
+                          <td className="ds-cell-num">{b.execution_count}</td>
+                          <td className="ds-cell-num">
+                            {isWarn && <AlertTriangle size={11} aria-hidden="true" style={{ marginRight: 4, verticalAlign: 'text-bottom' }} />}
+                            {formatPercent(b.failure_rate)}
+                          </td>
+                          <td className="ds-cell-num">{formatSeconds(b.avg_duration_seconds)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+  
+          <Card title="최근 실패">
+            {!data?.recent_failures.length ? (
+              <p className="documents-note">최근 실패한 처리가 없습니다.</p>
+            ) : (
+              <div className="documents-stack">
+                {data.recent_failures.map((f) => (
+                  <div key={`${f.document_id}-${f.created_at}`} className="documents-row-fail">
+                    <button
+                      type="button"
+                      className="documents-link documents-ellipsis"
+                      onClick={() => navigate(`/documents/${f.document_id}`)}
+                    >
+                      {f.filename}
+                    </button>
+                    <span className="documents-text-danger" style={{ fontSize: 'var(--text-xs)' }}>
+                      {explainFailure(f.error_message)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      </PageBody>
     </Page>
   )
 }

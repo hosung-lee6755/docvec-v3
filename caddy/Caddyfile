@@ -72,3 +72,11 @@
 		reverse_proxy frontend:80
 	}
 }
+
+# HTTP(컨테이너 80, 호스트 13080)로 들어온 요청을 HTTPS로 넘긴다. Caddy가 자동으로 만드는
+# 리다이렉트는 컨테이너 안의 443을 기준으로 해서 포트가 빠진 https://<IP>/ 로 보냈다. 이 스택의
+# HTTPS는 호스트 13443이므로 그 포트를 붙여 넘긴다(2026-11-17). 공유기에서 다른 바깥 포트로
+# 포워딩하면 CADDY_PUBLIC_HTTPS_PORT로 바꾼다. {host}는 포트를 뺀 접속 주소다.
+http://192.168.0.3, http://192.168.0.90, http://49.168.97.107 {
+	redir https://{host}:{$CADDY_PUBLIC_HTTPS_PORT:13443}{uri} 308
+}
