@@ -126,7 +126,15 @@ export default function DashboardPage() {
               새 컬렉션
             </Button>
             <Button
-              variant="primary"
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate('/projects')}
+              icon={<FolderKanban size={14} />}
+            >
+              새 프로젝트
+            </Button>
+            <Button
+              variant="secondary"
               size="sm"
               onClick={() => navigate('/documents', { state: { openUpload: true } })}
               icon={<Upload size={14} />}

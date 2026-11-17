@@ -118,6 +118,38 @@
   border-style: dashed;
 }
 
+/* 파일을 끌어다 놓는 영역. 끌고 들어오면 테두리와 바탕으로 놓을 자리임을 보여 준다 */
+.documents-drop-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px dashed transparent;
+  border-radius: var(--radius-md, 8px);
+  transition: background-color var(--duration-fast, 150ms) ease, border-color var(--duration-fast, 150ms) ease;
+}
+
+.documents-drop-area.is-dragging {
+  border-color: var(--color-accent, currentColor);
+  background: color-mix(in srgb, var(--color-accent, #3b82f6) 8%, transparent);
+}
+
+.documents-drop-area.is-dragging .documents-dropzone {
+  pointer-events: none;
+}
+
+.documents-drop-hint {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted, inherit);
+}
+
+.documents-drop-notice {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
 .documents-file-list {
   display: flex;
   flex-direction: column;

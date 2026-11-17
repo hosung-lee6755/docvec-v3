@@ -1,5 +1,7 @@
 import { useRef, useState } from 'react'
-import { Upload, X } from 'lucide-react'
+import { X } from 'lucide-react'
+import { FileDropzone } from './FileDropzone'
+import { DOCUMENT_EXTENSIONS, ZIP_EXTENSIONS } from '../../lib/uploadFormats'
 import { useUploadDocument, useUploadZip, type BulkUploadResponse } from '../../hooks/useDocuments'
 import { useCollections } from '../../hooks/useCollections'
 import { useWorkflows, useWorkflowVersions } from '../../hooks/useWorkflows'
@@ -33,6 +35,9 @@ const ZIP_STATUS_TONE: Record<string, BadgeTone> = {
 const versionNoticeFor = (version: number | null | undefined) =>
   version && version > 1 ? `기존 문서의 ${version}번째 버전으로 올렸습니다.` : null
 
+const rejectedNotice = (rejected: File[]) =>
+  rejected.length ? `올릴 수 없는 파일이라 뺐습니다: ${rejected.map((f) => f.name).join(', ')}` : null
+
 const FILES_FORM_ID = 'upload-files-form'
 const ZIP_FORM_ID = 'upload-zip-form'
 
@@ -54,6 +59,7 @@ export function UploadModal({
   const [zipFile, setZipFile] = useState<File | null>(null)
   const [zipResult, setZipResult] = useState<BulkUploadResponse | null>(null)
   const [newDocument, setNewDocument] = useState(false)
+  const [dropNotice, setDropNotice] = useState<string | null>(null)
 
   const upload = useUploadDocument()
   const uploadZip = useUploadZip()
@@ -86,6 +92,7 @@ export function UploadModal({
     setZipFile(null)
     setZipResult(null)
     setNewDocument(false)
+    setDropNotice(null)
     if (fileRef.current) fileRef.current.value = ''
     if (zipFileRef.current) zipFileRef.current.value = ''
   }
@@ -236,20 +243,25 @@ export function UploadModal({
 
             <div className="ds-field">
               <span className="ds-field__label">파일 <span className="documents-text-danger">*</span></span>
-              <Button
-                    variant="secondary"
-                    className="documents-dropzone"
-                    icon={<Upload size={16} />}
+              <FileDropzone
+                    testId="upload-dropzone"
+                    extensions={DOCUMENT_EXTENSIONS}
+                    isMultiple
                     onClick={() => fileRef.current?.click()}
+                    onFiles={(accepted, rejected) => {
+                      setSelectedFiles((prev) => [...prev, ...accepted])
+                      setDropNotice(rejectedNotice(rejected))
+                    }}
                   >
-                    {selectedFiles.length > 0 ? `${selectedFiles.length}개 파일 선택됨 (추가 선택)` : '파일 선택 (PDF, HWP, HWPX, DOCX, XLSX, PPTX, TXT, MD, HTML, 이미지)'}
-                  </Button>
+                    {selectedFiles.length > 0 ? `${selectedFiles.length}개 파일 선택됨 (추가 선택)` : '파일 선택 (PDF, HWP, HWPX, DOCX, XLSX, CSV, PPTX, TXT, MD, HTML, 이미지)'}
+                  </FileDropzone>
+                  {dropNotice && <p role="status" className="documents-text-danger documents-drop-notice">{dropNotice}</p>}
                   <input
                     ref={fileRef}
                     type="file"
                     hidden
                     multiple
-                    accept=".pdf,.hwp,.hwpx,.docx,.xlsx,.pptx,.txt,.md,.html,.htm,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
+                    accept={DOCUMENT_EXTENSIONS.join(',')}
                     aria-label="업로드할 파일"
                     onChange={(e) => {
                       const newFiles = Array.from(e.target.files ?? [])
@@ -349,14 +361,21 @@ export function UploadModal({
 
             <div className="ds-field">
               <span className="ds-field__label">ZIP 파일 <span className="documents-text-danger">*</span></span>
-              <Button
-                    variant="secondary"
-                    className="documents-dropzone"
-                    icon={<Upload size={16} />}
+              <FileDropzone
+                    testId="upload-zip-dropzone"
+                    extensions={ZIP_EXTENSIONS}
                     onClick={() => zipFileRef.current?.click()}
+                    onFiles={(accepted, rejected) => {
+                      if (accepted[0]) {
+                        setZipFile(accepted[0])
+                        setZipResult(null)
+                      }
+                      setDropNotice(rejectedNotice(rejected))
+                    }}
                   >
                     {zipFile ? zipFile.name : 'ZIP 파일 선택 (.zip)'}
-                  </Button>
+                  </FileDropzone>
+                  {dropNotice && <p role="status" className="documents-text-danger documents-drop-notice">{dropNotice}</p>}
                   <input
                     ref={zipFileRef}
                     type="file"
@@ -369,7 +388,7 @@ export function UploadModal({
                     }}
                   />
                   <p className="documents-note">
-                    ZIP 안의 PDF/HWP/HWPX/DOCX 파일을 자동으로 추출해 개별 문서로 등록합니다.
+                    ZIP 안에서 개별 업로드와 같은 형식(PDF, HWP, DOCX, XLSX, CSV 등)의 파일을 꺼내 각각 문서로 등록합니다.
                     지원하지 않는 형식이나 중복 파일은 건너뜁니다.
                   </p>
             </div>
