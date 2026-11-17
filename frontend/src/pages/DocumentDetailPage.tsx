@@ -4,7 +4,7 @@ import QualityWarningList from '../components/document-detail/QualityWarningList
 import StructureWarningNotice from '../components/document-detail/StructureWarningNotice'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Download, Loader2, Save, X } from 'lucide-react'
-import { useAcceptTagSuggestion, useDeleteChunk, useDismissTagSuggestion, useMergeChunk, useDocument, useDocumentChunks, useDocumentContent, useDocumentImages, useDocumentPagesText, useDocumentPreview, useDocumentRevisions, useDocumentTables, useDownloadDocument, useProceedDocument, useReprocessDocument, useRestoreRevision, useRetryDocument, useUpdateChunk, useUpdateDocumentTags } from '../hooks/useDocuments'
+import { useAcceptTagSuggestion, useBatchMoveDocuments, summarizeMoveResults, useDeleteChunk, useDismissTagSuggestion, useMergeChunk, useDocument, useDocumentChunks, useDocumentContent, useDocumentImages, useDocumentPagesText, useDocumentPreview, useDocumentRevisions, useDocumentTables, useDownloadDocument, useProceedDocument, useReprocessDocument, useRestoreRevision, useRetryDocument, useUpdateChunk, useUpdateDocumentTags } from '../hooks/useDocuments'
 import { useDocumentQuality, useDocumentRuns } from '../hooks/useDocumentRuns'
 import { useCancelRun, useResumeRun, useWorkflowRun } from '../hooks/useWorkflows'
 import StepTimeline from '../components/workflow/StepTimeline'
@@ -29,6 +29,8 @@ import { ViewModeToggle } from '../components/document-detail/documentDetailPart
 import { toBlocksJson, type TabKey } from '../components/document-detail/documentDetailHelpers'
 import OcrConfidencePanel from '../components/document-detail/OcrConfidencePanel'
 import VersionHistoryPanel from '../components/document-detail/VersionHistoryPanel'
+import MoveCollectionControl from '../components/documents/MoveCollectionControl'
+import { useCollections } from '../hooks/useCollections'
 import { SECURITY_LEVEL_LABELS } from '../hooks/useAccess'
 import { Alert, Button, ErrorAlert, IconButton, Page, PageHeader, SecurityLevelBadge, Split, StatusBadge, Tabs, Textarea, buttonClass } from '../components/ui'
 import { errorCause, explainFailure } from '../lib/apiError'
@@ -109,6 +111,9 @@ export default function DocumentDetailPage() {
   const { data: revisionsResult } = useDocumentRevisions(id, activeTab === 'edit')
   const { data: editNodesResult } = useDocumentNodes(id, activeTab === 'edit')
   const download = useDownloadDocument()
+  const moveDoc = useBatchMoveDocuments()
+  const [moveSummary, setMoveSummary] = useState<{ text: string; isError: boolean } | null>(null)
+  const { data: collectionsData } = useCollections()
   const proceed = useProceedDocument()
   const reprocess = useReprocessDocument()
   const updateChunk = useUpdateChunk()
@@ -257,6 +262,15 @@ export default function DocumentDetailPage() {
                   : <Download size={16} />}
               </IconButton>
             )}
+            <MoveCollectionControl
+              collections={collectionsData?.items ?? []}
+              currentCollectionId={doc.collection_id}
+              isPending={moveDoc.isPending}
+              buttonClassName="ds-btn ds-btn--secondary ds-btn--sm"
+              onMove={(collectionId) => moveDoc.mutate({ ids: [id], collectionId }, {
+                onSuccess: (result) => setMoveSummary(summarizeMoveResults(result.results)),
+              })}
+            />
             {isReady && (
               <Button variant="secondary" size="sm" onClick={() => setReprocessModal({ blockInstanceId: null })}>
                 재처리
@@ -265,6 +279,10 @@ export default function DocumentDetailPage() {
           </>
         )}
       />
+
+      {moveSummary && (
+        <Alert tone={moveSummary.isError ? 'warning' : 'success'}>{moveSummary.text}</Alert>
+      )}
 
       {isError && (
         <Alert tone="warning">
@@ -284,6 +302,7 @@ export default function DocumentDetailPage() {
           { label: '청크 삭제', mutation: deleteChunk },
           { label: '재시도 요청', mutation: retryDoc },
           { label: '원본 내려받기', mutation: download },
+          { label: '컬렉션 이동', mutation: moveDoc },
         ]
           .filter(({ mutation }) => mutation.isError)
           .map(({ label, mutation }) => ({ label, error: mutation.error, onDismiss: () => mutation.reset() }))}

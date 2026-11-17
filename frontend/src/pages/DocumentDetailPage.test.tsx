@@ -10,6 +10,10 @@ vi.mock('../hooks/useDocumentRuns')
 vi.mock('../hooks/useWorkflows')
 vi.mock('../hooks/useDocumentMetadata')
 vi.mock('../hooks/useDocumentStructure')
+vi.mock('../hooks/useCollections', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../hooks/useCollections')>()),
+  useCollections: () => ({ data: { items: [] } }),
+}))
 vi.mock('../components/document-detail/StructureTab', () => ({
   default: () => <div data-testid="structure-tab">StructureTab</div>,
 }))
@@ -111,6 +115,11 @@ describe('DocumentDetailPage', () => {
     mockHook(useDocumentsModule.useDownloadDocument, {
       mutate: vi.fn(),
       isPending: false,
+    })
+    mockHook(useDocumentsModule.useBatchMoveDocuments, {
+      mutate: vi.fn(),
+      isPending: false,
+      isError: false,
     })
     mockHook(useDocumentsModule.useProceedDocument, {
       mutate: vi.fn(),

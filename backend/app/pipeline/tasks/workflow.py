@@ -751,6 +751,18 @@ def _maybe_complete_run(db, run_id: str) -> None:
     _maybe_trigger_analysis(db, run)
 
 
+def _restore_review_status(db, run) -> None:
+    """승인 API가 문서를 처리 대기(QUEUED)로 바꿔 둔 뒤 이어 갈 블록을 못 찾으면 검토 대기로 되돌린다."""
+    from app.db.models.document import Document
+
+    if not run.document_id:
+        return
+    doc = db.get(Document, run.document_id)
+    if doc is not None and doc.status == "QUEUED":
+        doc.status = "WAITING_REVIEW"
+        db.commit()
+
+
 @celery_app.task(name="tasks.resume_workflow_run", queue="normal", bind=True)
 def resume_workflow_run(self, run_id: str) -> dict:
     """Resumes a WAITING_REVIEW run from the block it paused at (통합 설계서
@@ -768,6 +780,7 @@ def resume_workflow_run(self, run_id: str) -> dict:
             return {"status": "SKIPPED"}
         step = _find_paused_step(db, run_id)
         if step is None:
+            _restore_review_status(db, run)
             return {"status": "NOT_FOUND"}
         block = db.get(WorkflowBlockInstance, step.block_instance_id)
         run.status = "RUNNING"

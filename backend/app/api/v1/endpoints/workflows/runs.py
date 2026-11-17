@@ -296,6 +296,15 @@ async def resume_run(
     if run.status != "WAITING_REVIEW":
         raise HTTPException(status_code=409, detail="검토 대기 상태가 아닙니다")
 
+    # 실행은 워커가 이어 가고, 문서 상태는 다음 블록(대개 임베딩)이 시작될 때 바뀐다. embed 큐가
+    # 밀려 있으면 몇 분 동안 검토 대기 목록에 남아 있으므로, 승인한 시점에 처리 대기로 바꿔 둔다.
+    # 이어 갈 블록을 못 찾으면 작업이 검토 대기로 되돌린다(resume_workflow_run)
+    if run.document_id:
+        doc = await db.get(Document, run.document_id)
+        if doc is not None and doc.status == "WAITING_REVIEW":
+            doc.status = "QUEUED"
+            await db.commit()
+
     from app.pipeline.tasks.workflow import resume_workflow_run
 
     resume_workflow_run.delay(str(run_id))

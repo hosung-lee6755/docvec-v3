@@ -569,7 +569,9 @@ class TextExtractBlock(BaseBlock):
         # XLSX, PPTX, TXT, MD, HTML, 이미지 형식을 받는다.
         # 1.26.0: 구형 HWP도 병합 칸 격자와 문단 서식(line_layout)을 채운다
         # 1.27.0: HTML 표의 rowspan/colspan을 지켜 열을 맞추고 합친 칸(spans)을 남긴다(이전엔 값이 엉뚱한 열로 밀렸다)
-        return "1.27.0"
+        # 1.28.0: Docling PDF 표 자리에 선으로 그린 표가 있으면 선 그대로 읽는다(안쪽 표 분리, 빠진 테두리 보충).
+        # Docling 표는 합친 칸의 글을 열마다 복사하지 않는다(2026-11-17, 기계설비기술기준매뉴얼 실측).
+        return "1.28.0"
 
     @property
     def category(self) -> str:
@@ -739,6 +741,7 @@ class TextExtractBlock(BaseBlock):
                     "id": table.id, "confidence": table.confidence,
                     "detected_as": table.detected_as,
                     **({"spans": table.spans} if getattr(table, "spans", None) else {}),
+                    **({"title": table.title} if getattr(table, "title", None) else {}),
                 }
                 for page in parsed.pages
                 for table in page.table_candidates

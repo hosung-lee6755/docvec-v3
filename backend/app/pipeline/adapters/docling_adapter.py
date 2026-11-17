@@ -27,6 +27,8 @@ from app.pipeline.adapters.base import (
     RawTableCandidate,
     RawTextBlock,
 )
+from app.pipeline.adapters.hwpx_structure import grid_from_cells
+from app.pipeline.adapters.ruled_tables import RuledTable, find_ruled_tables, match_ruled_table
 from app.pipeline.blocks.table_markdown import rows_to_markdown
 
 # Docling DocItemLabel 값 -> 우리 쪽 block_type/요소 type 매핑. 매핑에 없는
@@ -81,6 +83,170 @@ def _table_rows(table_item) -> list[list[str]]:
     if header == [str(i) for i in range(len(header))]:
         return body
     return [header, *body]
+
+
+def _table_grid(table_item) -> tuple[list[list[str]], list[dict] | None]:
+    """표 칸 목록으로 격자를 만든다. 합친 칸의 글은 HWP·HTML 표와 같은 규칙으로 둔다.
+
+    export_to_dataframe()은 여러 열에 걸친 칸의 글을 열마다 복사해, 실측한 문서에서 같은 글이 한 행에
+    일곱 번 들어갔다(2026-11-17). 세로로 합친 칸만 행마다 글을 두고 가로로 합친 칸은 첫 열에만 둔다.
+    칸 정보가 없으면 예전처럼 DataFrame으로 만든다.
+
+    머리 행이 여러 줄이면("냉방" 아래 "건구온도", "습구온도") 열마다 한 줄로 합친다. 큰 표를 나눌 때는
+    첫 행만 조각마다 되풀이하므로, 두 줄로 두면 둘째 줄 열 이름이 둘째 조각부터 사라진다.
+    """
+    cells = getattr(getattr(table_item, "data", None), "table_cells", None)
+    if not cells:
+        return _table_rows(table_item), None
+    header_count = _header_row_count(cells)
+    if header_count < 2:
+        rows, spans = grid_from_cells([_cell_tuple(c) for c in cells])
+        return rows, spans or None
+    body = [c for c in cells if c.start_row_offset_idx >= header_count]
+    body_rows, body_spans = grid_from_cells([_cell_tuple(c, row_shift=header_count) for c in body])
+    header = _merged_header([c for c in cells if c.start_row_offset_idx < header_count])
+    width = max(len(header), *(len(r) for r in body_rows)) if body_rows else len(header)
+    rows = [header + [""] * (width - len(header)), *(r + [""] * (width - len(r)) for r in body_rows)]
+    spans = [{**s, "row": s["row"] + 1} for s in body_spans]
+    return rows, spans or None
+
+
+# 이보다 많은 줄을 머리 행으로 보지 않는다(본문 전체가 머리 행으로 표시된 표를 막는다)
+_MAX_HEADER_ROWS = 3
+
+
+def _cell_tuple(cell, row_shift: int = 0) -> tuple[int, int, int, int, str]:
+    return (
+        cell.start_row_offset_idx - row_shift, cell.start_col_offset_idx,
+        max(cell.row_span, 1), max(cell.col_span, 1), (cell.text or "").strip(),
+    )
+
+
+def _header_row_count(cells) -> int:
+    """맨 위에서부터 칸이 모두 열 머리(column_header)인 줄 수."""
+    by_row: dict[int, list] = {}
+    for cell in cells:
+        by_row.setdefault(cell.start_row_offset_idx, []).append(cell)
+    count = 0
+    while count < _MAX_HEADER_ROWS and by_row.get(count) and all(
+        getattr(c, "column_header", False) for c in by_row[count]
+    ):
+        count += 1
+    return count
+
+
+def _merged_header(header_cells) -> list[str]:
+    """여러 줄 머리 행을 열마다 위에서 아래 순서로 이어 붙인 한 줄로 만든다. 같은 글은 한 번만 쓴다."""
+    width = max(c.start_col_offset_idx + max(c.col_span, 1) for c in header_cells)
+    parts: list[list[str]] = [[] for _ in range(width)]
+    for cell in sorted(header_cells, key=lambda c: (c.start_row_offset_idx, c.start_col_offset_idx)):
+        text = (cell.text or "").strip()
+        for col in range(cell.start_col_offset_idx, cell.start_col_offset_idx + max(cell.col_span, 1)):
+            if text and text not in parts[col]:
+                parts[col].append(text)
+    return [" ".join(p) for p in parts]
+
+
+def _top_left_bbox(item, page_height: float) -> tuple[float, float, float, float] | None:
+    """Docling 좌표(아래쪽 원점일 수 있다)를 pdfplumber와 같은 위쪽 원점 좌표로 바꾼다."""
+    prov = getattr(item, "prov", None) or []
+    if not prov or not page_height:
+        return None
+    try:
+        box = prov[0].bbox.to_top_left_origin(page_height=page_height)
+        return (float(box.l), float(box.t), float(box.r), float(box.b))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+class _RuledTableSource:
+    """Docling 표 자리에 선으로 그린 표가 있으면 그것을 돌려준다. 쪽마다 한 번만 읽는다."""
+
+    def __init__(self, file_path: Path, warnings: list[str]) -> None:
+        self._path = file_path
+        self._warnings = warnings
+        self._pdf = None
+        self._pages: dict[int, list[RuledTable]] = {}
+        self._used: set[int] = set()
+        self._open_failed = False
+
+    def _tables(self, page_no: int) -> list[RuledTable]:
+        if page_no in self._pages:
+            return self._pages[page_no]
+        self._pages[page_no] = []
+        if self._open_failed:
+            return []
+        try:
+            if self._pdf is None:
+                import pdfplumber
+
+                self._pdf = pdfplumber.open(self._path)
+        except Exception as exc:  # noqa: BLE001 - 암호화나 손상 PDF. 한 번만 알리고 Docling 결과를 쓴다
+            self._open_failed = True
+            self._warnings.append(f"ruled table reader could not open the PDF: {exc}")
+            return []
+        page = None
+        try:
+            page = self._pdf.pages[page_no - 1]
+            self._pages[page_no] = find_ruled_tables(page)
+        except Exception as exc:  # noqa: BLE001 - 선 표를 못 읽으면 Docling 결과를 그대로 쓴다
+            self._warnings.append(f"page {page_no} ruled table read failed: {exc}")
+        finally:
+            if page is not None:
+                page.close()  # 쪽마다 캐시한 문자와 선을 바로 놓는다(큰 문서의 메모리)
+        return self._pages[page_no]
+
+    def lookup(self, page_no: int, bbox) -> tuple[RuledTable | None, bool]:
+        """(쓸 선 표, 이미 낸 선 표와 같은 자리인가)."""
+        if self._path.suffix.lower() != ".pdf":
+            return None, False
+        match = match_ruled_table(self._tables(page_no), bbox)
+        if match is None:
+            return None, False
+        if id(match) in self._used:
+            return None, True
+        self._used.add(id(match))
+        return match, False
+
+    def close(self) -> None:
+        if self._pdf is not None:
+            self._pdf.close()
+
+
+def _table_caption(item, doc) -> str | None:
+    try:
+        caption = item.caption_text(doc)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    caption = " ".join((caption or "").split())
+    return caption or None
+
+
+def _emit_table(page: RawPage, elements: list[dict], section_path: list[str], rows: list[list[str]],
+                spans: list[dict] | None, bbox, detected_as: str, title: str | None = None) -> None:
+    """표 하나를 표 후보, 본문 블록, 요소로 남긴다. 제목이 있으면 표 글 맨 위에 한 줄로 둔다."""
+    table_id = str(uuid4())
+    page.table_candidates.append(
+        RawTableCandidate(page_number=page.page_number, rows=rows, bbox=bbox, id=table_id, spans=spans, title=title)
+    )
+    markdown = rows_to_markdown(rows)
+    if title:
+        markdown = f"{title}\n{markdown}"
+    # 표도 다른 요소처럼 text_blocks에 한 항목을 남겨야 element_spans가 맞는다(Phase 1 검증 중 발견).
+    page.text_blocks.append(
+        RawTextBlock(text=markdown, page_number=page.page_number, bbox=bbox, block_type="table", element_id=table_id)
+    )
+    elements.append({
+        "id": table_id, "page": page.page_number, "type": "table", "bbox": bbox,
+        "content": {"text": markdown, "markdown": markdown},
+        "metadata": {
+            "section_path": list(section_path), "is_header": False,
+            "is_footer": False, "confidence": 1.0, "detected_as": detected_as,
+            "order": len(elements), "is_caption": False,
+            "table_rows": len(rows), "table_cols": len(rows[0]) if rows else 0,
+            "style": None,
+        },
+    })
 
 
 def _page_native_text(page: RawPage) -> str:
@@ -276,6 +442,7 @@ class DoclingAdapter(BaseAdapter):
         section_path: list[str] = []
         warnings: list[str] = []
         table_ordinal = 0
+        ruled_source = _RuledTableSource(file_path, warnings)
 
         def page_for(page_no: int) -> RawPage:
             if page_no not in pages_by_no:
@@ -294,39 +461,22 @@ class DoclingAdapter(BaseAdapter):
             page = page_for(page_no)
 
             if label in _TABLE_LABELS:
-                table_ordinal += 1
-                rows = _table_rows(item)
-                table_id = str(uuid4())
-                page.table_candidates.append(
-                    RawTableCandidate(page_number=page_no, rows=rows, bbox=bbox, id=table_id)
-                )
-                markdown = rows_to_markdown(rows)
-                # 표는 지금까지 parsed_text/full_text에 전혀 나타나지 않아
-                # TextExtractBlock이 계산할 element_spans에서도 누락되는
-                # 실제 갭이었다(Phase 1 검증 중 발견) — Phase 2는 elements의
-                # span_start/span_end를 span 계산 루프와 element_id로 맞춰야
-                # 하므로, 표도 다른 요소처럼 text_blocks에 한 항목을 남겨야
-                # 한다. block_type="table"이라 parsed_text 조립 로직(기존
-                # 정규식 구조분석의 [표 N] 마커 관례)과도 호환된다.
-                page.text_blocks.append(
-                    RawTextBlock(
-                        text=markdown, page_number=page_no, bbox=bbox,
-                        block_type="table", element_id=table_id,
-                    )
-                )
-                elements.append({
-                    "id": table_id, "page": page_no, "type": "table", "bbox": bbox,
-                    "content": {"text": markdown, "markdown": markdown},
-                    "metadata": {
-                        "section_path": list(section_path), "is_header": False,
-                        "is_footer": False, "confidence": 1.0, "detected_as": "docling_table",
-                        # 메타 정보 생성 설계서(2026-07-23) Phase 3 — rows는 이미
-                        # 위에서 계산돼 있어 재계산 없이 그대로 재사용.
-                        "order": len(elements), "is_caption": False,
-                        "table_rows": len(rows), "table_cols": len(rows[0]) if rows else 0,
-                        "style": None,
-                    },
-                })
+                ruled, is_covered = ruled_source.lookup(page_no, _top_left_bbox(item, page.height))
+                if is_covered:
+                    continue  # 앞의 Docling 표와 같은 선 표다. 이미 그 결과로 냈다
+                if ruled is not None:
+                    # 선으로 그린 표는 선 그대로 읽은 결과를 쓴다. 칸 안의 작은 표는 바로 뒤에 따로 낸다
+                    caption = _table_caption(item, doc)
+                    tables = [
+                        (t.rows, None, "ruled_lines", t.title or (caption if t is ruled else None))
+                        for t in (ruled, *ruled.nested)
+                    ]
+                else:
+                    rows, spans = _table_grid(item)
+                    tables = [(rows, spans, "docling_table", _table_caption(item, doc))]
+                for rows, spans, detected_as, title in tables:
+                    table_ordinal += 1
+                    _emit_table(page, elements, section_path, rows, spans, bbox, detected_as, title)
                 continue
 
             if label in _PICTURE_LABELS:
@@ -403,6 +553,7 @@ class DoclingAdapter(BaseAdapter):
         # 있을 때만 저-커버리지 페이지를 escalate한다(_resolve_vision_credentials,
         # process.py) — 키가 없으면 vision_backend/vision_api_key가 빈 값이라
         # 이 블록 자체가 스킵되고 기존 EasyOCR-only 동작과 동일하다.
+        ruled_source.close()
         _attach_native_text_to_pictures(file_path, pages_by_no, warnings)
 
         vision_backend = options.get("vision_backend")

@@ -235,6 +235,8 @@ class DocumentTableItem(BaseModel):
     rows: list[list[str]]
     # 합친 칸의 위치와 크기(0부터). 합친 칸이 없거나 모르는 형식이면 없다(전체 점검 2-2)
     spans: list[DocumentTableSpan] | None = None
+    # 표 제목(캡션이나 표 맨 위 제목 줄). 없으면 없다(2026-11-17 표 인식 고도화)
+    title: str | None = None
 
 
 class DocumentTablesResponse(BaseModel):

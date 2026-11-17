@@ -135,7 +135,9 @@ class ChunkSplitBlock(BaseBlock):
         # 같아야 묶여, 세부 절이 많은 문서에서 parent가 child와 1:1이었다(2026-11-13).
         #
         # 1.7.0: 청크 본문에서 구간 안의 머리말·꼬리말·목차 노드 글자를 지운다(strip_ranges, 2026-11-13).
-        return "1.7.0"
+        # 1.8.0: 표의 행 하나가 max_chars보다 길면 셀 글을 문장 경계에서 나눠 여러 청크로 만든다
+        # (2026-11-17, 표 조각만 2000자를 넘던 문제). 표 제목이 있으면 조각마다 "[표 N] 제목 (부분 i/k)"로 붙인다.
+        return "1.8.0"
 
     @property
     def category(self) -> str:

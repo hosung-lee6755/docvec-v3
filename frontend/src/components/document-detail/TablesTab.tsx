@@ -46,6 +46,7 @@ export default function TablesTab({
         <div key={i}>
           <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 'var(--space-2)' }}>
             표 {i + 1}{isPdfDoc ? ` · ${table.page_number}쪽` : ''}
+            {table.title && <strong style={{ marginLeft: 8, color: 'var(--color-text)' }}>{table.title}</strong>}
           </div>
           <div style={{ overflowX: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
             <table style={{ borderCollapse: 'collapse', fontSize: 13, whiteSpace: 'nowrap' }}>

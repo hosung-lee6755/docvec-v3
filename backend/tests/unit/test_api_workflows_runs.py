@@ -460,3 +460,18 @@ async def test_run_whose_document_was_deleted_is_admin_only_and_hidden_from_othe
     with pytest.raises(HTTPException) as exc:
         await check_run_access(w["db"], w["workflow"], run, w["owner"], "viewer")
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_resume_run_takes_the_document_off_the_review_queue_right_away(world, dispatched):
+    # 실행은 워커가 이어 가므로, 승인 직후 다시 받은 검토 대기 목록에서 바로 빠지도록 문서 상태를 먼저 바꾼다
+    db = world["db"]
+    doc = await make_document(db, world["owner"], world["collection"])
+    doc.status = "WAITING_REVIEW"
+    run = await _make_run(db, world["version"], "WAITING_REVIEW", document_id=str(doc.id))
+
+    await runs_api.resume_run(U(run.id), db, world["owner"])
+
+    await db.refresh(doc)
+    assert doc.status == "QUEUED"
+    dispatched.delay.assert_called_once_with(str(U(run.id)))

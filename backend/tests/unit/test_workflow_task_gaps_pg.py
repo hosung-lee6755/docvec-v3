@@ -482,3 +482,15 @@ def test_find_paused_step_ignores_steps_whose_targets_already_exist(env, monkeyp
 
     assert wf._find_paused_step(s, str(run.id)) is None
     s.close()
+
+
+def test_resume_puts_the_document_back_in_review_when_no_paused_step_exists(env):
+    # 승인 API가 문서를 처리 대기로 바꿔 둔 뒤 이어 갈 블록이 없으면 검토 대기 목록에 다시 보여야 한다
+    run = env.add_run(status="WAITING_REVIEW")
+    s = env.factory()
+    s.execute(Document.__table__.update().where(Document.id == env.document.id).values(status="QUEUED"))
+    s.commit()
+    s.close()
+
+    assert _resume(env, run.id) == {"status": "NOT_FOUND"}
+    assert env.reload(Document, env.document.id).status == "WAITING_REVIEW"

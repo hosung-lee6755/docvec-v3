@@ -25,6 +25,7 @@ from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
 from app.pipeline.blocks.content_blocks import _carry, _upstream_text
 from app.pipeline.blocks.structure_refine import refine_element_blocks
 from app.pipeline.blocks.title_box import shifted_level, starts_with_roman, title_box_heading
+from app.pipeline.blocks.toc_detection import titled_toc_indices
 from app.pipeline.blocks.title_resolver import LeadLine, _is_chapter_heading, resolve_title
 
 _HEADING_NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*)[.\)]?\s+\S")
@@ -49,7 +50,8 @@ _TABLE_MARKER_NUMBER_RE = re.compile(r"^\[표\s*(\d+)\]")
 # 블록으로 본다 — 번호 매김이 붙은 항목("1. 서론 ... 3")은 원래 정규식으로도
 # HEADING처럼 보였을 것이므로, 목차로 확정되면 그 판단을 덮어써 문서 구조
 # 트리에 가짜 제목이 섞이지 않게 한다.
-_TOC_ENTRY_RE = re.compile(r".{2,}[.…\s]{3,}\d{1,4}\s*$")
+# 리더는 점(.), 줄임표(…), 가운뎃점(·, ㆍ, ‥), 밑줄과 하이픈, 공백(탭 포함)을 받는다
+_TOC_ENTRY_RE = re.compile(r".{2,}[.…·ㆍ‥_\-\s]{3,}\d{1,4}\s*$")
 _TOC_MIN_RUN = 3
 _TOC_SEARCH_WINDOW = 60
 # 정렬 오차 허용 폭 — extraction_layout은 pdfplumber 문자 클러스터링으로,
@@ -64,6 +66,27 @@ _HEADING_LEVEL1_RATIO = 1.3
 
 
 def _detect_toc_line_offsets(text: str) -> set[int]:
+    """목차 줄의 시작 오프셋. 두 규칙을 합친다.
+
+    - 문서 앞부분에서 "제목 ..... 3" 꼴이 연속 _TOC_MIN_RUN줄 이상 나타나는 경우
+    - "목차"/"차례" 제목 뒤 항목이 본문에 다시 나오는 경우(쪽 번호 없는 목차, toc_detection 참고)
+    """
+    return _leader_toc_offsets(text) | _titled_toc_offsets(text)
+
+
+def _titled_toc_offsets(text: str) -> set[int]:
+    offsets: list[int] = []
+    lines: list[str] = []
+    offset = 0
+    for line in text.split("\n"):
+        if line.strip():
+            offsets.append(offset)
+            lines.append(line)
+        offset += len(line) + 1
+    return {offsets[i] for i in titled_toc_indices(lines)}
+
+
+def _leader_toc_offsets(text: str) -> set[int]:
     """문서 앞부분(첫 _TOC_SEARCH_WINDOW개 비어있지 않은 줄 이내)에서 목차
     패턴이 연속 _TOC_MIN_RUN줄 이상 나타나면 그 줄들의 시작 오프셋 집합을
     반환한다. 못 찾으면 빈 집합(목차 없음으로 안전하게 처리)."""
@@ -576,7 +599,9 @@ class StructureAnalyzeBlock(BaseBlock):
         #
         # 1.15.0: 번호로 시작하는 한 줄짜리 표(제목 상자)를 제목으로 올리고 그 아래 줄 제목의 수준을 내린다
         # (title_box.py). 글자를 한 자씩 띄운 번호 제목("1. 목    적")도 제목으로 받는다(2026-11-17).
-        return "1.15.0"
+        # 1.16.0: "목차"/"차례" 제목 뒤 항목이 본문에 다시 나오면 쪽 번호가 없어도 목차로 본다.
+        # 가운뎃점 리더("······ 3")도 목차 줄로 받는다(toc_detection.py, 2026-11-17).
+        return "1.16.0"
 
     @property
     def category(self) -> str:

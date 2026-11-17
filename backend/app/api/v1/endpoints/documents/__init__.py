@@ -12,6 +12,7 @@ from app.api.v1.endpoints.documents import (
     lifecycle,
     listing,
     metadata,
+    move,
     processing,
     queues,
     structure,
@@ -19,7 +20,7 @@ from app.api.v1.endpoints.documents import (
 )
 
 router = APIRouter()
-for _module in (upload, queues, listing, processing, structure, chunks, chunk_edits, acl, metadata, lifecycle):
+for _module in (upload, queues, listing, move, processing, structure, chunks, chunk_edits, acl, metadata, lifecycle):
     # include_router는 경로가 ""인 목록 라우트를 거부하므로 선언 순서 그대로 라우트를 이어붙인다.
     router.routes.extend(_module.router.routes)
 

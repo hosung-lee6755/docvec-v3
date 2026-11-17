@@ -1,12 +1,13 @@
 ﻿import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Upload, Trash2, X, RefreshCw } from 'lucide-react'
-import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, type DocumentLifecycleFilter, type DocumentQualityFilter, type DocumentSortBy, type SortOrder } from '../hooks/useDocuments'
+import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, useBatchMoveDocuments, summarizeMoveResults, type DocumentLifecycleFilter, type DocumentQualityFilter, type DocumentSortBy, type SortOrder } from '../hooks/useDocuments'
 import { useCollections } from '../hooks/useCollections'
 import { PROCESSING_STATUSES, STATUS_FILTER_OPTIONS, statusFilterValue } from '../lib/documentStatus'
 import { LIFECYCLE_FILTER_LABELS } from '../lib/documentLifecycle'
 import { DocumentsTable } from '../components/documents/DocumentsTable'
 import { UploadModal } from '../components/documents/UploadModal'
+import MoveCollectionControl from '../components/documents/MoveCollectionControl'
 import { Alert, BulkActionBar, Button, Card, EmptyState, ErrorAlert, IconButton, Page, PageHeader, SearchInput, Select, Spinner, Stat, StatStrip, Toolbar } from '../components/ui'
 import '../styles/screens/documents.css'
 
@@ -89,6 +90,8 @@ export default function DocumentsPage() {
   const deleteDoc = useDeleteDocument()
   const batchDelete = useBatchDeleteDocuments()
   const batchReprocess = useBatchReprocessDocuments()
+  const batchMove = useBatchMoveDocuments()
+  const [moveSummary, setMoveSummary] = useState<{ text: string; isError: boolean } | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
@@ -166,6 +169,15 @@ export default function DocumentsPage() {
           (skipped ? `, 건너뜀 ${skipped}건(실패 상태 아님)` : '') +
           (failed ? `, 실패 ${failed}건` : ''),
         )
+        setSelectedIds(new Set())
+      },
+    })
+  }
+
+  const handleBulkMove = (collectionId: string) => {
+    batchMove.mutate({ ids: [...selectedIds], collectionId }, {
+      onSuccess: (result) => {
+        setMoveSummary(summarizeMoveResults(result.results))
         setSelectedIds(new Set())
       },
     })
@@ -302,6 +314,11 @@ export default function DocumentsPage() {
             <button type="button" disabled={batchReprocess.isPending} onClick={handleBulkReprocess}>
               <RefreshCw size={12} aria-hidden="true" /> {batchReprocess.isPending ? '재처리 요청 중...' : '선택 재처리'}
             </button>
+            <MoveCollectionControl
+              collections={collectionsData?.items ?? []}
+              isPending={batchMove.isPending}
+              onMove={handleBulkMove}
+            />
             <button type="button" className="is-danger" onClick={() => setConfirmBulkDelete(true)}>
               <Trash2 size={12} aria-hidden="true" /> 선택 삭제
             </button>
@@ -323,6 +340,18 @@ export default function DocumentsPage() {
       {batchReprocess.isError && <ErrorAlert error={batchReprocess.error} message="선택한 문서를 재처리하지 못했습니다." />}
       {batchDelete.isError && <ErrorAlert error={batchDelete.error} message="선택한 문서를 삭제하지 못했습니다." />}
       {deleteDoc.isError && <ErrorAlert error={deleteDoc.error} message="문서를 삭제하지 못했습니다." />}
+
+      {batchMove.isError && <ErrorAlert error={batchMove.error} message="선택한 문서를 옮기지 못했습니다." />}
+      {moveSummary && (
+        <Alert tone={moveSummary.isError ? 'warning' : 'success'}>
+          <div className="documents-notice">
+            <span>{moveSummary.text}</span>
+            <IconButton label="닫기" onClick={() => setMoveSummary(null)}>
+              <X size={14} />
+            </IconButton>
+          </div>
+        </Alert>
+      )}
 
       {reprocessSummary && (
         <Alert tone="success">

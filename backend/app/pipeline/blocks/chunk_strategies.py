@@ -174,21 +174,78 @@ def _table_rows_and_ordinal(
     return None, None
 
 
+def _table_title(source_table_id: str | None, tables: list[dict] | None) -> str | None:
+    """`Document.tables`에 남은 표 제목(캡션이나 맨 위 제목 줄). 없으면 None."""
+    for table in tables or []:
+        if source_table_id and table.get("id") == source_table_id:
+            return table.get("title") or None
+    return None
+
+
+# 머리 행과 첫 열만으로 예산을 거의 다 쓰는 표에서도 셀 글을 담을 최소 자리
+_MIN_ROW_TEXT_BUDGET = 100
+
+
+def _row_segments(text: str, budget: int) -> list[str]:
+    """셀 글을 문장 단위로 자르고, 문장 하나가 예산보다 길면 글자 수로 자른다."""
+    sentences = [text[s:e].strip() for s, e in _sentence_spans(text)] or [text]
+    pieces: list[str] = []
+    for sentence in sentences:
+        pieces.extend(sentence[i:i + budget] for i in range(0, len(sentence), budget))
+    return [p for p in pieces if p]
+
+
+def _split_long_row(header: list[str], row: list[str], max_chars: int) -> list[list[str]]:
+    """머리 행과 함께 렌더링했을 때 `max_chars`를 넘는 행을 여러 행으로 나눈다.
+
+    나뉜 행마다 첫 열(행 이름)을 그대로 두어 어느 행의 이어지는 글인지 알 수 있게 한다.
+    나머지 열의 글은 순서대로 문장 단위로 채우고, 넘치면 다음 행으로 넘긴다.
+    """
+    width = max(len(header), len(row))
+    padded = list(row) + [""] * (width - len(row))
+    if len(rows_to_markdown([header, padded])) <= max_chars or width < 2:
+        return [list(row)]
+
+    label = padded[0]
+    empty = [label] + [""] * (width - 1)
+    budget = max(max_chars - len(rows_to_markdown([header, empty])), _MIN_ROW_TEXT_BUDGET)
+    pieces: list[list[str]] = []
+    current = empty
+    for col in range(1, width):
+        for segment in _row_segments(padded[col], budget):
+            joined = f"{current[col]} {segment}" if current[col] else segment
+            candidate = [*current[:col], joined, *current[col + 1:]]
+            if current != empty and len(rows_to_markdown([header, candidate])) > max_chars:
+                pieces.append(current)
+                candidate = [*empty[:col], segment, *empty[col + 1:]]
+            current = candidate
+    if current != empty:
+        pieces.append(current)
+    return pieces
+
+
 def _split_table_rows(
     rows: list[list[str]],
     ordinal: int | None,
     max_chars: int,
     max_rows: int | None,
+    title: str | None = None,
 ) -> list[str]:
     """첫 행(헤더)을 고정하고 나머지 행을 그룹화해 각 그룹을 헤더 반복 포함
     markdown으로 렌더링한다. `max_rows`가 주어지면 그 행 수 기준, 없으면
     `max_chars`(헤더 포함 렌더링 결과 길이) 기준 그리디 그룹화 — 사용자가
-    제안한 "매 청크마다 헤더를 함께 포함"을 그대로 구현한다."""
+    제안한 "매 청크마다 헤더를 함께 포함"을 그대로 구현한다.
+
+    표 제목이 있으면 조각마다 "[표 N] 제목 (부분 i/k)"로 붙인다. 둘째 조각부터는 제목이 없어
+    표 주제로 검색해도 잡히지 않았다(2026-11-17 표 검색 점검)."""
     if not rows:
         return []
     header, body = rows[0], rows[1:]
     if not body:
         return [rows_to_markdown(rows)]
+    # 행 하나가 예산보다 길면 행 단위로는 더 나눌 수 없어 큰 청크가 남는다. 그런 행은 미리
+    # 셀 글을 문장 경계에서 여러 행으로 나눠 둔다
+    body = [piece for row in body for piece in _split_long_row(header, row, max_chars)]
 
     groups: list[list[list[str]]] = []
     if max_rows:
@@ -211,6 +268,8 @@ def _split_table_rows(
     for i, group in enumerate(groups, start=1):
         md = rows_to_markdown([header, *group])
         label = f"[표 {ordinal}] " if ordinal else ""
+        if title:
+            label = f"{label}{title} "
         rendered.append(f"{label}(부분 {i}/{total})\n{md}")
     return rendered
 
@@ -293,7 +352,8 @@ def _tree_based_chunks(
                 # 반복 삽입되므로) — 따라서 각 조각의 span은 원본 TABLE 노드
                 # 전체 span을 그대로 공유한다(어느 조각이든 원문 출처는 이
                 # 표 전체이므로 정확함).
-                for part_text in _split_table_rows(rows, ordinal, max_chars, table_chunk_max_rows):
+                title = _table_title(getattr(node, "source_table_id", None), tables)
+                for part_text in _split_table_rows(rows, ordinal, max_chars, table_chunk_max_rows, title):
                     chunks.append(ChunkSpan(
                         with_prefix(part_text, section_path),
                         node.span_start, node.span_end, section_path, [str(node.id)],

@@ -39,3 +39,18 @@ class BulkUploadResponse(BaseModel):
 
 
 
+
+
+class BatchMoveRequest(BaseModel):
+    ids: list[UUID] = Field(min_items=1, max_items=100)
+    collection_id: UUID
+
+
+class BatchMoveItemResult(BaseModel):
+    id: UUID
+    status: Literal["moved", "skipped", "failed"]
+    detail: str | None = None
+
+
+class BatchMoveResponse(BaseModel):
+    results: list[BatchMoveItemResult]

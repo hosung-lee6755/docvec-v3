@@ -68,6 +68,8 @@ class RawTableCandidate:
     # 합친 칸 목록({"row", "col", "row_span", "col_span"}, 0부터). rows는 이미 열이 맞는 격자이고,
     # 이 값은 화면이 원래 모양(합쳐진 칸)으로 그릴 때만 쓴다. 합친 칸이 없거나 모르면 None(전체 점검 2-2)
     spans: list[dict] | None = None
+    # 표 제목(캡션이나 표 맨 위의 제목 줄). 큰 표를 나눈 조각마다 붙여 검색에서 표 주제로도 찾게 한다(2026-11-17)
+    title: str | None = None
 
 
 @dataclass

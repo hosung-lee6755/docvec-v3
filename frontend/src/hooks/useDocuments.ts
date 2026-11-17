@@ -193,6 +193,8 @@ export interface DocumentTable {
   page_number: number
   rows: string[][]
   spans?: TableSpan[] | null
+  // 표 제목(캡션이나 표 맨 위 제목 줄)
+  title?: string | null
 }
 
 export interface DocumentTablesResult {
@@ -698,4 +700,36 @@ export function useBatchReprocessDocuments() {
       queryClient.invalidateQueries({ queryKey: ['documents'] })
     },
   })
+}
+
+export interface BatchMoveItemResult {
+  id: string
+  status: 'moved' | 'skipped' | 'failed'
+  detail: string | null
+}
+
+// 선택한 문서를 다른 컬렉션으로 옮긴다. 같은 계보의 다른 버전도 함께 옮겨진다
+export function useBatchMoveDocuments() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ ids, collectionId }: { ids: string[]; collectionId: string }) => {
+      const { data } = await apiClient.post<{ results: BatchMoveItemResult[] }>(
+        '/documents/batch-move', { ids, collection_id: collectionId },
+      )
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['collections'] })
+    },
+  })
+}
+
+/** 이동 결과를 한 줄로 요약한다. 건너뛰거나 실패한 문서는 첫 사유를 함께 보여 준다. */
+export function summarizeMoveResults(results: BatchMoveItemResult[]): { text: string; isError: boolean } {
+  const moved = results.filter((r) => r.status === 'moved').length
+  const problems = results.filter((r) => r.status !== 'moved')
+  const parts = [`옮김 ${moved}건`]
+  if (problems.length) parts.push(`옮기지 못함 ${problems.length}건(${problems[0].detail ?? '사유 없음'})`)
+  return { text: parts.join(', '), isError: moved === 0 }
 }

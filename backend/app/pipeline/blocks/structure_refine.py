@@ -15,6 +15,8 @@ Docling은 제목(section_header)의 레벨을 모두 1로 주고, 목차 쪽의
 import re
 from collections import defaultdict
 
+from app.pipeline.blocks.toc_detection import titled_toc_indices
+
 Block = tuple  # (node_type, level, span_start, span_end, text, layout)
 
 # 글자 크기 추정값이 이 비율 안에 있으면 같은 층으로 본다
@@ -107,6 +109,10 @@ def _refine_levels(blocks: list[list], sizes: list[float | None], max_level: int
 
 
 def _mark_toc_entries(blocks: list[list], elements: list[dict]) -> None:
+    # Docling이 목차 요소를 내지 않아도 "목차"/"차례" 제목 뒤 항목이 본문에 다시 나오면 목차다(2026-11-17)
+    for index in titled_toc_indices([block[4] for block in blocks]):
+        if blocks[index][0] in _TOC_CANDIDATE_TYPES:
+            blocks[index][0], blocks[index][1] = "TOC", None
     toc_pages = {el.get("page") for el in elements if el.get("type") == "document_index"}
     if not toc_pages:
         return
