@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { chunkWarningKinds } from '../lib/qualityTargets'
+import QualityWarningList from '../components/document-detail/QualityWarningList'
+import StructureWarningNotice from '../components/document-detail/StructureWarningNotice'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Download, Loader2, Save, X } from 'lucide-react'
 import { useAcceptTagSuggestion, useDeleteChunk, useDismissTagSuggestion, useDocument, useDocumentChunks, useDocumentContent, useDocumentImages, useDocumentPagesText, useDocumentPreview, useDocumentRevisions, useDocumentTables, useDownloadDocument, useProceedDocument, useReprocessDocument, useRestoreRevision, useRetryDocument, useUpdateChunk, useUpdateDocumentTags } from '../hooks/useDocuments'
@@ -127,24 +130,17 @@ export default function DocumentDetailPage() {
     }
   }, [activeTab, content, editBaseline])
 
-  // 품질 경고 클릭으로 청크 탭에 들어왔을 때 실제 문제 청크로 스크롤한다 — 청크
-  // 탭으로만 이동시키면 결국 사용자가 목록을 훑어 찾아야 하는 문제가 그대로다.
-  // 스크롤 후 highlightChunkIds를 비워서 같은 청크를 반복으로 스크롤하지 않도록 한다.
-  useEffect(() => {
-    if (activeTab !== 'chunks' || !highlightChunkIds?.length || !chunksResult) return
-    const targetId = highlightChunkIds.find((cid) => chunksResult.chunks.some((c) => c.id === cid))
-    if (!targetId) return
-    const el = document.getElementById(`chunk-row-${targetId}`)
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    // Clear after scroll to prevent re-firing on chunk refetch
-    setHighlightChunkIds([])
-  }, [activeTab, highlightChunkIds, chunksResult])
+  // 품질 경고를 눌러 청크 탭에 들어왔을 때의 스크롤과 표시는 ChunksTab이 맡는다. 예전에는 여기서 스크롤한 뒤
+  // 대상 목록을 비워 버려서, 탭에 들어가도 어느 청크인지 표시가 남지 않았다(2026-11-17).
 
+  // 검토 대기 문서는 처음 열 때만 품질 탭을 보여 준다. 예전에는 원문 대조 탭으로 갈 때마다 품질 탭으로
+  // 되돌려서, 구조 경고의 빈 쪽을 원문에서 확인할 수 없었다(2026-11-17).
+  const reviewDefaultAppliedRef = useRef<string | null>(null)
   useEffect(() => {
-    if (doc?.status === 'WAITING_REVIEW' && activeTab === 'original') {
-      setActiveTab('quality')
-    }
-  }, [doc?.status, activeTab])
+    if (doc?.status !== 'WAITING_REVIEW' || reviewDefaultAppliedRef.current === id) return
+    reviewDefaultAppliedRef.current = id
+    if (activeTab === 'original' && !searchParams.get('tab')) setActiveTab('quality')
+  }, [doc?.status, activeTab, id, searchParams])
 
   const isProcessing = doc && PROCESSING_STATUSES.has(doc.status)
   // "전처리 단계" 패널의 데이터 소스 — ProcessingJob은 13개 블록 중 text_extract만
@@ -203,6 +199,8 @@ export default function DocumentDetailPage() {
 
   const visibleTabs = TABS.filter((t) => {
     if (WORKFLOW_TAB_KEYS.includes(t.key)) return true
+    // 검토 대기 중에도 원문 대조는 연다. 경고가 가리키는 쪽을 원문에서 확인해야 승인 여부를 정할 수 있다
+    if (t.key === 'original' && isWaitingReview) return true
     return isReady && (!t.pdfOnly || isPdfDoc)
   })
   const securityLabel = doc.security_level
@@ -289,6 +287,15 @@ export default function DocumentDetailPage() {
                       ? '이 워크플로우의 검토 정책상 모든 문서가 검토 대상입니다(발견된 품질 경고는 없습니다). 품질 탭에서 점수 근거를 확인하고 승인 또는 반려하세요.'
                       : '품질 검사에서 경고가 발견되어 자동 진행이 중단되었습니다. 품질 탭에서 결과를 확인하고 승인 또는 반려하세요.'}
                   </p>
+                  {qualityReport && !!qualityReport.warnings?.length && (
+                    <div style={{ marginBottom: 'var(--space-2)' }}>
+                      <QualityWarningList
+                        report={qualityReport}
+                        onHighlightChunkIdsChange={setHighlightChunkIds}
+                        onActivateTab={setActiveTab}
+                      />
+                    </div>
+                  )}
                   <Button variant="primary" size="sm" onClick={() => setActiveTab('quality')}>
                     품질 탭으로 이동
                   </Button>
@@ -452,6 +459,7 @@ export default function DocumentDetailPage() {
                       chunkEditText={chunkEditText}
                       expandedParentChunkId={expandedParentChunkId}
                       highlightChunkIds={highlightChunkIds}
+                      warningKinds={chunkWarningKinds(qualityReport)}
                       updateChunk={updateChunk}
                       deleteChunk={deleteChunk}
                       onChunkEditIdChange={setChunkEditId}
@@ -480,11 +488,17 @@ export default function DocumentDetailPage() {
                   )}
 
                   {activeTab === 'structure' && (
-                    <StructureTab
-                      documentId={id}
-                      onViewInOriginal={(pageNumber) => { setOriginalPage(pageNumber); setActiveTab('original') }}
-                      onReprocessFromStructure={(blockInstanceId) => setReprocessModal({ blockInstanceId })}
-                    />
+                    <>
+                      <StructureWarningNotice
+                        report={qualityReport}
+                        onViewPage={(pageNumber) => { setOriginalPage(pageNumber); setActiveTab('original') }}
+                      />
+                      <StructureTab
+                        documentId={id}
+                        onViewInOriginal={(pageNumber) => { setOriginalPage(pageNumber); setActiveTab('original') }}
+                        onReprocessFromStructure={(blockInstanceId) => setReprocessModal({ blockInstanceId })}
+                      />
+                    </>
                   )}
                   {activeTab === 'elements' && <ElementsTab documentId={id} />}
                   {activeTab === 'cleaning' && <CleaningChangesTab documentId={id} />}

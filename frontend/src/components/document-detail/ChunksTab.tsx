@@ -1,4 +1,7 @@
+import { useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
+import { chunkWarningKind, type ChunkWarningKind } from '../../lib/qualityTargets'
+import ChunkWarningBar from './ChunkWarningBar'
 import type { TabKey } from './documentDetailHelpers'
 import type { DocumentChunksResult, useDeleteChunk, useUpdateChunk } from '../../hooks/useDocuments'
 import { ErrorText } from '../ui'
@@ -14,6 +17,8 @@ interface ChunksTabProps {
   chunkEditText: string
   expandedParentChunkId: string | null
   highlightChunkIds: string[] | null
+  // 품질 보고서가 짚은 청크 id → 경고 종류. 보고서가 없으면 null이고 글자 수로 판단한다
+  warningKinds: Map<string, ChunkWarningKind> | null
   updateChunk: ReturnType<typeof useUpdateChunk>
   deleteChunk: ReturnType<typeof useDeleteChunk>
   onChunkEditIdChange: (id: string | null) => void
@@ -29,6 +34,12 @@ const PARENT_RETRIEVAL_HINT =
   '같은 상위 절의 앞뒤 청크(검색 제외된 청크는 빼고, 근거마다 약 1,200자 안)를 함께 넘겨 문맥을 보완합니다. ' +
   '컬렉션 검색 설정에서 끌 수 있습니다.'
 
+function scrollToChunk(id: string) {
+  requestAnimationFrame(() => {
+    document.getElementById(`chunk-row-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  })
+}
+
 export default function ChunksTab({
   documentId,
   isLoading,
@@ -40,6 +51,7 @@ export default function ChunksTab({
   chunkEditText,
   expandedParentChunkId,
   highlightChunkIds,
+  warningKinds,
   updateChunk,
   deleteChunk,
   onChunkEditIdChange,
@@ -48,6 +60,30 @@ export default function ChunksTab({
   onOriginalPageChange,
   onActivateTab,
 }: ChunksTabProps) {
+  const [onlyFlagged, setOnlyFlagged] = useState(false)
+  const [pickedId, setPickedId] = useState<string | null>(null)
+  const scrolledForRef = useRef<string[] | null>(null)
+  const chunks = chunksResult?.chunks
+  const flagged = (chunks ?? []).filter((chunk) => chunkWarningKind(chunk, warningKinds))
+  // 품질 탭이나 검토 안내에서 경고를 눌러 들어오면 그 경고의 첫 대상을 가리킨다
+  // 보고서의 id 순서가 아니라 문서 순서로 첫 대상을 고른다
+  const requestedId = (highlightChunkIds && chunks?.find((chunk) => highlightChunkIds.includes(chunk.id))?.id) ?? null
+  const activeId = pickedId ?? requestedId
+
+  // 같은 요청으로 두 번 스크롤하지 않는다(청크 목록을 다시 받아와도 화면이 튀지 않게)
+  useEffect(() => {
+    if (!requestedId || !highlightChunkIds || scrolledForRef.current === highlightChunkIds) return
+    scrolledForRef.current = highlightChunkIds
+    scrollToChunk(requestedId)
+  }, [requestedId, highlightChunkIds])
+
+  const handleJump = (index: number) => {
+    const target = flagged[index]
+    if (!target) return
+    setPickedId(target.id)
+    scrollToChunk(target.id)
+  }
+
   if (isLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6)' }}>
@@ -70,8 +106,18 @@ export default function ChunksTab({
     )
   }
 
+  const visibleChunks = onlyFlagged && flagged.length ? flagged : chunksResult.chunks
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+      <ChunkWarningBar
+        shortCount={flagged.filter((chunk) => chunkWarningKind(chunk, warningKinds) === 'short').length}
+        longCount={flagged.filter((chunk) => chunkWarningKind(chunk, warningKinds) === 'long').length}
+        currentIndex={flagged.findIndex((chunk) => chunk.id === activeId)}
+        onlyFlagged={onlyFlagged}
+        onJump={handleJump}
+        onOnlyFlaggedChange={setOnlyFlagged}
+      />
       <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>
         총 {chunksResult.chunks.length}개 청크
         {(() => {
@@ -90,10 +136,11 @@ export default function ChunksTab({
           아래 굵게 표시된 청크는 너무 짧거나(50자 미만) 너무 깁니다(2000자 초과).
         </p>
       )}
-      {chunksResult.chunks.map((chunk) => {
-        const isTooShort = chunk.text.length < 50
-        const isTooLong = chunk.text.length > 2000
-        const isJumpTarget = !!highlightChunkIds?.includes(chunk.id)
+      {visibleChunks.map((chunk) => {
+        const warningKind = chunkWarningKind(chunk, warningKinds)
+        const isTooShort = warningKind === 'short'
+        const isTooLong = warningKind === 'long'
+        const isJumpTarget = chunk.id === activeId
         return (
           <div
             key={chunk.id}
@@ -116,6 +163,7 @@ export default function ChunksTab({
               <span style={{ fontSize: 11, color: (isTooShort || isTooLong) ? 'var(--color-warning)' : 'var(--color-text-muted)' }}>
                 {chunk.text.length}자{isTooShort ? ' · 너무 짧음' : isTooLong ? ' · 너무 김' : ''}
               </span>
+              {warningKind && <span className="ds-badge ds-badge--warning">품질 경고 대상</span>}
               {!chunk.embedded && <span className="ds-badge ds-badge--warning">임베딩 전 미리보기</span>}
               {chunk.edited && <span className="ds-badge ds-badge--info">수정됨</span>}
               {chunk.disabled && <span className="ds-badge ds-badge--neutral">검색 제외</span>}

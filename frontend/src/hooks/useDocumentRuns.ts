@@ -48,6 +48,9 @@ export interface QualityMetrics {
   // 스크롤할 수 있게 한다.
   short_chunk_ids?: string[]
   long_chunk_ids?: string[]
+  // 구조 경고의 대상. 빈 쪽 번호와, 제목으로 확인되지 않은 목차 항목(품질 검사 1.7.0부터 남는다)
+  empty_pages?: number[]
+  toc_unmatched?: string[]
   textExtraction?: number
   ocr?: number
   structure?: number

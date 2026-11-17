@@ -10,6 +10,7 @@ from app.pipeline.adapters.base import (
     RawTableCandidate,
     RawTextBlock,
 )
+from app.pipeline.adapters.hwp5_structure import hwp_paragraph_layout, hwp_table_grid, load_hwp_styles
 from app.pipeline.adapters.hwpx_structure import HwpxStyles, load_styles, paragraph_layout, table_grid
 
 HWPX_HEADER = "Contents/header.xml"
@@ -169,28 +170,22 @@ def _hwp_collect_text(elem) -> str:
     return "".join(texts)
 
 
+def _hwp_cell_text(cell) -> str:
+    parts = [
+        _hwp_collect_text(p).strip()
+        for p in cell
+        if p.tag == "Paragraph" and _hwp_collect_text(p).strip()
+    ]
+    return CELL_PARAGRAPH_SEP.join(parts)
+
+
 def _hwp_table_rows(table_body_elem) -> list[list[str]]:
-    rows = []
-    for row in table_body_elem:
-        if row.tag != "TableRow":
-            continue
-        cells = []
-        for cell in row:
-            if cell.tag != "TableCell":
-                continue
-            parts = [
-                _hwp_collect_text(p).strip()
-                for p in cell
-                if p.tag == "Paragraph" and _hwp_collect_text(p).strip()
-            ]
-            cells.append(CELL_PARAGRAPH_SEP.join(parts))
-        if any(cells):
-            rows.append(cells)
-    return rows
+    return hwp_table_grid(table_body_elem, _hwp_cell_text)[0]
 
 
 def _walk_hwp_body(
     elem, paragraphs: list[str], tables: list[list[list[str]]], order: list | None = None,
+    ctx: "_HwpxContext | None" = None,
 ) -> None:
     """Walks pyhwp's nested XML model of a binary .hwp document. A table is
     anchored inline inside its host paragraph's LineSeg (Paragraph > LineSeg >
@@ -208,11 +203,13 @@ def _walk_hwp_body(
             elif child.tag == "TableCaption":
                 caption = child
         if caption is not None:
-            _walk_hwp_body(caption, paragraphs, tables, order)
+            _walk_hwp_body(caption, paragraphs, tables, order, ctx)
         if table_body is not None:
-            rows = _hwp_table_rows(table_body)
+            rows, spans = hwp_table_grid(table_body, _hwp_cell_text)
             if rows:
                 tables.append(rows)
+                if ctx is not None and spans:
+                    ctx.spans[len(tables) - 1] = spans
                 _record(order, "t", len(tables) - 1)
         return
     if tag == "GShapeObjectControl":
@@ -221,12 +218,14 @@ def _walk_hwp_body(
         text = _hwp_collect_text(elem).strip()
         if text:
             paragraphs.append(text)
+            if ctx is not None:
+                ctx.layout.append(hwp_paragraph_layout(elem, text, ctx.styles))
             _record(order, "p", len(paragraphs) - 1)
         for child in elem:
-            _walk_hwp_body(child, paragraphs, tables, order)
+            _walk_hwp_body(child, paragraphs, tables, order, ctx)
         return
     for child in elem:
-        _walk_hwp_body(child, paragraphs, tables, order)
+        _walk_hwp_body(child, paragraphs, tables, order, ctx)
 
 
 def _walk_hwpx(
@@ -303,9 +302,8 @@ class HWPAdapter(BaseAdapter):
         }
 
     def extract(self, file_path: Path, options: dict) -> RawParsedDocument:
-        # HWP(구형 바이너리)는 metadata["line_layout"]을 채우지 않는다. pyhwp가 글자 크기와 굵기를
-        # 안정적으로 내주지 않기 때문이다. 줄 정보가 없으면 structure_blocks.py는 정규식만으로 판정한다.
-        # HWPX는 XML에서 글자 모양과 개요 스타일을 직접 읽어 채운다(전체 점검 2-12, hwpx_structure.py).
+        # 두 형식 모두 metadata["line_layout"]에 문단별 글자 크기, 굵기, 개요 수준을 채운다. HWPX는 XML에서
+        # 직접 읽고(hwpx_structure.py), 구형 HWP는 pyhwp가 만든 XML에서 읽는다(hwp5_structure.py, 2026-11-17).
         suffix = file_path.suffix.lower()
         if suffix == ".hwpx":
             return self._extract_hwpx(file_path)
@@ -330,13 +328,15 @@ class HWPAdapter(BaseAdapter):
         paragraphs: list[str] = []
         raw_tables: list[list[list[str]]] = []
         order: list[tuple[str, int]] = []
+        ctx = _HwpxContext()
         try:
             buf = BytesIO()
             Hwp5File(str(file_path)).xmlevents(embedbin=False).dump(buf, xml_declaration=True)
             root = parse_xml_bytes(buf.getvalue())
             body = root.find("BodyText")
             if body is not None:
-                _walk_hwp_body(body, paragraphs, raw_tables, order)
+                ctx.styles = load_hwp_styles(root)
+                _walk_hwp_body(body, paragraphs, raw_tables, order, ctx)
         except Exception as exc:
             return RawParsedDocument(
                 format_id="hwp",
@@ -351,7 +351,7 @@ class HWPAdapter(BaseAdapter):
         # can match each paragraph against the rendered preview PDF's per-page
         # text and assign it a real page number — see hwp_adapter.py's
         # page_number=1 placeholders below, which that pass overwrites.
-        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order)
+        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order, ctx.spans)
 
         warnings: list[str] = []
         image_regions: list[RawImageRegion] = []
@@ -372,7 +372,7 @@ class HWPAdapter(BaseAdapter):
             image_regions=image_regions,
         )
         return RawParsedDocument(
-            format_id="hwp", page_count=1, pages=[page], metadata={}, warnings=warnings
+            format_id="hwp", page_count=1, pages=[page], metadata={"line_layout": ctx.layout}, warnings=warnings
         )
 
     def _extract_hwpx(self, file_path: Path) -> RawParsedDocument:

@@ -697,22 +697,25 @@ def generate_answer(self, chat_message_id: str) -> dict:
         else:
             intent = _classify_intent(provider, msg.query)
             trace["intent"] = intent
-            retrieval_fn = {
-                "table_query": _retrieve_table_chunks,
-                "summary_lookup": _retrieve_summary_chunks,
-            }.get(intent, _retrieve_chunks)
+            # 표 질문도 청크 검색을 먼저 쓴다. 표는 표 청크로도 색인되어 있어서 하이브리드 검색과 재순위를
+            # 거쳐 찾을 수 있다. 예전에는 표 목록을 키워드 점수만으로 골라, 분류기가 사실 질문을 표 질문으로
+            # 잘못 고르면 엉뚱한 표가 근거가 됐고 인용에 청크 id가 없어 원문 위치도 보여 줄 수 없었다
+            # (2026-11-17 실측: 7B 분류기는 골든 질의 7개를 모두 표 질문으로 골랐다).
+            retrieval_fn = _retrieve_summary_chunks if intent == "summary_lookup" else _retrieve_chunks
+            fallback_fn = _retrieve_table_chunks if intent == "table_query" else _retrieve_chunks
 
             chunks = retrieval_fn(
                 db, str(conversation.user_id), msg.query, collection_id_str, project_id=project_id_str
             )
-            if not chunks and retrieval_fn is not _retrieve_chunks:
-                # 요약이나 표가 없는 문서에서 근거 0건으로 답을 지어내지 않도록 일반 검색으로 다시 찾는다.
-                # 분류기가 사실 질문을 요약 조회로 잘못 고를 때도 이 길로 구제된다.
+            if not chunks and fallback_fn is not retrieval_fn:
+                # 요약이 없는 문서에서 근거 0건으로 답을 지어내지 않도록 일반 검색으로 다시 찾는다. 분류기가
+                # 사실 질문을 요약 조회로 잘못 고를 때도 이 길로 구제된다. 표 질문은 청크 검색이 비었을 때
+                # 표 목록에서 한 번 더 찾는다.
                 logger.info(
-                    "generate_answer: intent retrieval found nothing, falling back to chunk search",
+                    "generate_answer: intent retrieval found nothing, trying the fallback retrieval",
                     extra={"chat_message_id": chat_message_id, "intent": intent},
                 )
-                retrieval_fn = _retrieve_chunks
+                retrieval_fn = fallback_fn
                 chunks = retrieval_fn(
                     db, str(conversation.user_id), msg.query, collection_id_str, project_id=project_id_str
                 )

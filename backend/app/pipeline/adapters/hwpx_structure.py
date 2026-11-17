@@ -34,6 +34,15 @@ def _int_attr(elem, name: str, default: int) -> int:
         return default
 
 
+def outline_level(*names: str) -> int | None:
+    """스타일 이름 가운데 "개요 N"이나 "Outline N"이 있으면 그 수준을 돌려준다."""
+    for name in names:
+        match = _OUTLINE_NAME_RE.match((name or "").strip())
+        if match:
+            return min(int(match.group(1)), MAX_HEADING_LEVEL)
+    return None
+
+
 @dataclass(frozen=True)
 class CharShape:
     font_size: float
@@ -66,9 +75,9 @@ def load_styles(header_root) -> HwpxStyles:
         elif tag == "style" and elem.get("id") is not None:
             name = (elem.get("name") or elem.get("engName") or "").strip()
             style_names[elem.get("id")] = name
-            match = _OUTLINE_NAME_RE.match(name) or _OUTLINE_NAME_RE.match((elem.get("engName") or "").strip())
-            if match:
-                outline_levels[elem.get("id")] = min(int(match.group(1)), MAX_HEADING_LEVEL)
+            level = outline_level(name, elem.get("engName") or "")
+            if level:
+                outline_levels[elem.get("id")] = level
     return HwpxStyles(char_shapes=char_shapes, outline_levels=outline_levels, style_names=style_names)
 
 
@@ -135,6 +144,11 @@ def table_grid(table, cell_text) -> tuple[list[list[str]], list[dict]]:
             if row < 0 or col < 0:
                 continue
             cells.append((row, col, row_span, col_span, cell_text(tc)))
+    return grid_from_cells(cells)
+
+
+def grid_from_cells(cells: list[tuple[int, int, int, int, str]]) -> tuple[list[list[str]], list[dict]]:
+    """(줄, 열, 줄 수, 열 수, 글) 목록으로 격자와 합친 칸 목록을 만든다. HWPX와 구형 HWP가 함께 쓴다."""
     if not cells:
         return [], []
     height = max(row + row_span for row, _, row_span, _, _ in cells)

@@ -6,10 +6,11 @@ import os
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 from app.pipeline.adapters.base import RawImageRegion, RawPage, RawParsedDocument, RawTextBlock
 from app.pipeline.tasks import process as proc
-from app.services.llm import LLMServerProvider
+from app.services.llm import LLMServerError, LLMServerProvider
 
 LONG_TEXT = "그림에 담긴 충분히 긴 설명"
 
@@ -93,6 +94,66 @@ def test_local_vision_failure_falls_back_quietly(monkeypatch):
     monkeypatch.setattr(proc, "_local_vision_providers", {"vision-model": provider})
 
     assert proc._describe_figure_locally(b"png") == ""
+
+
+def test_local_vision_failure_releases_the_model_so_the_next_figure_starts_clean(monkeypatch):
+    monkeypatch.setattr(proc.settings, "local_vision_model", "vision-model")
+    provider = MagicMock()
+    provider.generate_vision.side_effect = RuntimeError("prediction aborted, token repeat limit reached")
+    monkeypatch.setattr(proc, "_local_vision_providers", {"vision-model": provider})
+
+    assert proc._describe_figure_locally(b"png") == ""
+    provider.release.assert_called_once()
+
+
+def test_local_vision_degenerate_output_is_dropped_and_the_model_released(monkeypatch):
+    monkeypatch.setattr(proc.settings, "local_vision_model", "vision-model")
+    provider = MagicMock()
+    provider.generate_vision.return_value = "G" * 100
+    monkeypatch.setattr(proc, "_local_vision_providers", {"vision-model": provider})
+
+    assert proc._describe_figure_locally(b"png") == ""
+    provider.release.assert_called_once()
+
+
+def test_local_vision_normal_output_keeps_the_model_loaded(monkeypatch):
+    monkeypatch.setattr(proc.settings, "local_vision_model", "vision-model")
+    provider = MagicMock()
+    provider.generate_vision.return_value = "행정안전부 로고"
+    monkeypatch.setattr(proc, "_local_vision_providers", {"vision-model": provider})
+
+    assert proc._describe_figure_locally(b"png") == "행정안전부 로고"
+    provider.release.assert_not_called()
+
+
+def test_server_provider_release_unloads_the_model():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={})
+
+    LLMServerProvider("vision-model", transport=httpx.MockTransport(handler)).release()
+
+    assert seen == {"path": "/api/generate", "model": "vision-model", "keep_alive": 0}
+
+
+def test_server_provider_release_does_not_raise_when_the_server_is_down():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    LLMServerProvider("vision-model", transport=httpx.MockTransport(handler)).release()
+
+
+def test_server_provider_error_message_carries_the_server_reason():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": "prediction aborted, token repeat limit reached"})
+
+    provider = LLMServerProvider("vision-model", transport=httpx.MockTransport(handler))
+
+    with pytest.raises(LLMServerError, match="token repeat limit"):
+        provider.generate_vision("", b"png", "image/png", "설명")
 
 
 def test_local_vision_result_is_used_before_ocr(monkeypatch):

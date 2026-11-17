@@ -277,7 +277,7 @@ def test_run_carries_upstream_output():
 def test_block_metadata():
     block = qb.QualityCheckBlock()
     assert block.block_type == "quality_check"
-    assert block.block_version == "1.6.0"
+    assert block.block_version == "1.7.0"
     assert block.category == "품질·제어"
     assert block.config_schema is qb.QualityCheckConfig
     with pytest.raises(Exception):
@@ -406,3 +406,19 @@ def test_run_scattered_ocr_text_lowers_ocr_score_and_warns_despite_high_confiden
     assert result.metrics["ocr_single_char_ratio"] > 0.25
     assert result.metrics["ocr"] < 70
     assert any("글자 사이가 벌어" in w for w in result.warnings)
+
+
+def test_empty_pages_lists_the_pages_without_text():
+    from app.pipeline.blocks.quality_blocks import _empty_pages
+
+    assert _empty_pages({1, 2, 5}, 6) == [3, 4, 6]
+    assert _empty_pages(set(), 0) == []
+
+
+def test_unmatched_toc_entries_are_listed():
+    from app.pipeline.blocks.quality_blocks import _unmatched_toc_entries
+
+    toc = ["1. 사업 개요 ..... 3", "2. 추진 일정 ..... 7"]
+
+    assert _unmatched_toc_entries(toc, ["1. 사업 개요"]) == ["2. 추진 일정 ..... 7"]
+    assert _unmatched_toc_entries([], ["1. 사업 개요"]) == []

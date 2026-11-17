@@ -1,7 +1,10 @@
+import logging
 from abc import ABC, abstractmethod
 from typing import TypedDict
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class LLMProvider(ABC):
@@ -35,6 +38,18 @@ _TEMPLATE_LEAK_MARKERS = ("<tool_call>", "<|im_start|>", "<|im_end|>", "<|endoft
 def _cut_template_leak(text: str) -> str:
     positions = [i for i in (text.find(m) for m in _TEMPLATE_LEAK_MARKERS) if i >= 0]
     return text[: min(positions)].rstrip() if positions else text
+
+
+_MAX_REASON_CHARS = 200
+
+
+def _server_reason(response) -> str:
+    """추론 서버가 오류 본문에 적은 사유("error")를 꺼낸다. 없거나 JSON이 아니면 ""."""
+    try:
+        reason = response.json().get("error") or ""
+    except (ValueError, AttributeError):
+        return ""
+    return str(reason)[:_MAX_REASON_CHARS]
 
 
 class LLMServerError(RuntimeError):
@@ -85,7 +100,20 @@ class LLMServerProvider(LLMProvider):
                 f"관리자가 `docker compose exec llm ollama pull {self._model_tag}`로 받아야 합니다."
             )
         if response.status_code >= 400:
-            raise LLMServerError(f"추론 서버가 오류를 돌려주었습니다(HTTP {response.status_code}).")
+            reason = _server_reason(response)
+            suffix = f": {reason}" if reason else ""
+            raise LLMServerError(f"추론 서버가 오류를 돌려주었습니다(HTTP {response.status_code}){suffix}.")
+
+    def release(self) -> None:
+        """이 모델을 추론 서버에서 내린다. 다음 요청은 모델을 새로 올려 깨끗한 상태에서 시작한다.
+        qwen2.5vl:3b(Ollama 0.40.12)는 어떤 그림에서 깨진 글자만 내고, 그 뒤로는 모델을 다시 올릴
+        때까지 모든 그림에서 깨졌다(2026-11-17). 실패한 뒤 내리지 않으면 이어지는 그림이 모두 실패한다."""
+        import httpx
+
+        try:
+            self._client.post("/api/generate", json={"model": self._model_tag, "keep_alive": 0})
+        except httpx.HTTPError:
+            logger.warning("could not unload model %s from the inference server", self._model_tag)
 
     def _unreachable(self) -> LLMServerError:
         return LLMServerError(f"추론 서버에 연결하지 못했습니다({settings.llm_server_url}).")

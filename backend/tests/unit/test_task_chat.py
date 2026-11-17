@@ -678,29 +678,52 @@ def test_generate_answer_truncates_long_error_message(chat_env):
     db.close()
 
 
-@pytest.mark.parametrize(
-    "intent,expected_fn", [("TABLE_QUERY", "table"), ("SUMMARY_LOOKUP", "summary")]
-)
-def test_generate_answer_routes_to_intent_specific_retrieval(chat_env, intent, expected_fn):
+def test_generate_answer_routes_summary_questions_to_summaries(chat_env):
     _conv, msg = chat_env.build()
     table, summary = MagicMock(return_value=[CHUNK]), MagicMock(return_value=[CHUNK])
 
     _result, chunk_search = chat_env.run(
-        msg.id, ScriptedProvider(intent=intent), table=table, summary=summary
+        msg.id, ScriptedProvider(intent="SUMMARY_LOOKUP"), table=table, summary=summary
     )
 
-    called = {"table": table, "summary": summary}[expected_fn]
-    called.assert_called_once()
+    summary.assert_called_once()
     chunk_search.assert_not_called()
+    table.assert_not_called()
 
 
-@pytest.mark.parametrize("intent", ["TABLE_QUERY", "SUMMARY_LOOKUP"])
-def test_generate_answer_falls_back_to_chunk_search_when_intent_retrieval_is_empty(chat_env, intent):
+def test_generate_answer_answers_table_questions_from_chunk_search_first(chat_env):
+    # 표는 표 청크로도 색인되어 있다. 표 목록을 키워드 점수만으로 고르면 하이브리드 검색과 재순위를
+    # 건너뛰고, 인용에 청크 id가 없어 원문 위치도 보여 줄 수 없었다(2026-11-17 실측)
+    _conv, msg = chat_env.build()
+    table = MagicMock(return_value=[CHUNK])
+
+    _result, chunk_search = chat_env.run(msg.id, ScriptedProvider(intent="TABLE_QUERY"), table=table)
+
+    chunk_search.assert_called_once()
+    table.assert_not_called()
+
+
+def test_generate_answer_uses_table_rows_when_chunk_search_finds_nothing_for_a_table_question(chat_env):
+    _conv, msg = chat_env.build()
+    table = MagicMock(return_value=[CHUNK])
+
+    _result, chunk_search = chat_env.run(
+        msg.id, ScriptedProvider(intent="TABLE_QUERY"), retrieve=MagicMock(return_value=[]), table=table,
+    )
+
+    chunk_search.assert_called_once()
+    table.assert_called_once()
+    stored, db = chat_env.reload(msg.id)
+    assert stored.citations
+    db.close()
+
+
+def test_generate_answer_falls_back_to_chunk_search_when_summary_retrieval_is_empty(chat_env):
     # 요약이 없는 문서에 "요약 조회"로 잘못 분류되면 근거 0건으로 답을 지어냈다(2026-11-12 실측)
     _conv, msg = chat_env.build()
     empty = MagicMock(return_value=[])
 
-    _result, chunk_search = chat_env.run(msg.id, ScriptedProvider(intent=intent), table=empty, summary=empty)
+    _result, chunk_search = chat_env.run(msg.id, ScriptedProvider(intent="SUMMARY_LOOKUP"), summary=empty)
 
     empty.assert_called_once()
     assert chunk_search.called

@@ -567,7 +567,8 @@ class TextExtractBlock(BaseBlock):
         # 9·96으로 읽은 값을 고치고, 잡음뿐인 그림 인식 결과를 본문에서 뺀다 — 이전 캐시는 이 모두가 달랐다.
         # 1.23.0: (2026-11-16 전체 점검) 스캔 PDF의 표와 그림을 따로 찾아 덧붙인다(scan_layout).
         # XLSX, PPTX, TXT, MD, HTML, 이미지 형식을 받는다.
-        return "1.25.0"
+        # 1.26.0: 구형 HWP도 병합 칸 격자와 문단 서식(line_layout)을 채운다
+        return "1.26.0"
 
     @property
     def category(self) -> str:

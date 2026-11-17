@@ -253,16 +253,43 @@ def _describe_figure_locally(png_bytes: bytes) -> str:
     tag = settings.local_vision_model.strip()
     if not tag:
         return ""
+    provider = None
     try:
         from app.services.llm import LLMServerProvider
 
         if tag not in _local_vision_providers:
             _local_vision_providers[tag] = LLMServerProvider(tag)
-        text = _local_vision_providers[tag].generate_vision("", png_bytes, "image/png", _FIGURE_VISION_PROMPT)
-        return (text or "").strip()
+        provider = _local_vision_providers[tag]
+        text = (provider.generate_vision("", png_bytes, "image/png", _FIGURE_VISION_PROMPT) or "").strip()
     except Exception:
         logger.exception("local figure description failed; falling back to Tesseract")
+        _release_vision_model(provider)
         return ""
+    if _is_degenerate(text):
+        logger.warning("local figure description was degenerate (%r...); falling back to Tesseract", text[:20])
+        _release_vision_model(provider)
+        return ""
+    return text
+
+
+# 깨진 출력은 "GGGG…"나 "????…"처럼 한두 글자만 되풀이한다(2026-11-17 qwen2.5vl:3b 실측).
+_DEGENERATE_MIN_CHARS = 16
+_DEGENERATE_MAX_DISTINCT = 3
+
+
+def _is_degenerate(text: str) -> bool:
+    visible = "".join(text.split())
+    return len(visible) >= _DEGENERATE_MIN_CHARS and len(set(visible)) <= _DEGENERATE_MAX_DISTINCT
+
+
+def _release_vision_model(provider) -> None:
+    """실패한 뒤에는 그림 모델을 내린다. 한 번 깨지면 다시 올릴 때까지 모든 그림에서 깨졌다."""
+    if provider is None:
+        return
+    try:
+        provider.release()
+    except Exception:
+        logger.exception("could not release the local vision model")
 
 
 def _has_position(bbox) -> bool:

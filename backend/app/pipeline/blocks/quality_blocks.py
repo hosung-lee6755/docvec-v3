@@ -92,6 +92,22 @@ def _toc_heading_match_ratio(toc_texts: list[str], heading_texts: list[str]) -> 
     return matched / len(toc_texts)
 
 
+# 경고가 가리키는 대상을 화면이 짚어 줄 수 있게 품질 보고서에 함께 남기는 목록의 상한
+MAX_EMPTY_PAGES_LISTED = 200
+MAX_TOC_UNMATCHED_LISTED = 30
+
+
+def _unmatched_toc_entries(toc_texts: list[str], heading_texts: list[str]) -> list[str]:
+    """제목으로 확인되지 않은 목차 항목. "목차-제목 일치율" 경고가 어느 항목 때문인지 보여 주는 데 쓴다."""
+    normalized_headings = {_normalize_heading_like(h) for h in heading_texts}
+    return [t.strip() for t in toc_texts if _normalize_heading_like(t) not in normalized_headings]
+
+
+def _empty_pages(page_numbers: set[int], max_page: int) -> list[int]:
+    """글이 한 줄도 없는 쪽 번호. "빈 페이지 비율" 경고가 어느 쪽 때문인지 보여 주는 데 쓴다."""
+    return [page for page in range(1, max_page + 1) if page not in page_numbers]
+
+
 _MAX_LINEAGE_DEPTH = 8
 
 
@@ -228,7 +244,10 @@ class QualityCheckBlock(BaseBlock):
         # 종합점수가 부풀려져 있어 재사용하면 안 된다.
         # 1.6.0: 쪽당 실질 글자 수 미달(스캔본이 빈 텍스트로 추출)은 평균과 무관하게 FAILURE, OCR 글자
         # 벌어짐(한 글자 토큰 비율)을 측정해 ocr 점수에 반영한다. 캐시된 1.5.0 이하 결과에는 없다.
-        return "1.6.0"
+        #
+        # 1.7.0: 경고 대상을 화면이 짚을 수 있게 빈 쪽 번호(empty_pages)와 제목으로 확인되지 않은 목차
+        # 항목(toc_unmatched)을 metrics에 남긴다(2026-11-17).
+        return "1.7.0"
 
     @property
     def category(self) -> str:
@@ -350,6 +369,7 @@ class QualityCheckBlock(BaseBlock):
             page_numbers = {entry[1] for entry in page_map}
             max_page = max(page_numbers) if page_numbers else 0
             empty_page_ratio = ((max_page - len(page_numbers)) / max_page) if max_page else 0.0
+            empty_pages = _empty_pages(page_numbers, max_page)
             if empty_page_ratio > cfg.max_empty_page_ratio:
                 add_warning("structure", f"빈 페이지 비율이 기준을 초과했습니다({empty_page_ratio:.1%} > {cfg.max_empty_page_ratio:.1%}).")
 
@@ -392,10 +412,10 @@ class QualityCheckBlock(BaseBlock):
                     add_warning("structure", "제목이 하나도 탐지되지 않았습니다.")
             scores["structure"] = round(structure_score, 1)
 
-            toc_match_ratio = _toc_heading_match_ratio(
-                [n.text for n in nodes if n.node_type == "TOC" and n.text],
-                [n.text for n in nodes if n.node_type == "HEADING" and n.text],
-            )
+            toc_texts = [n.text for n in nodes if n.node_type == "TOC" and n.text]
+            heading_texts = [n.text for n in nodes if n.node_type == "HEADING" and n.text]
+            toc_match_ratio = _toc_heading_match_ratio(toc_texts, heading_texts)
+            toc_unmatched = _unmatched_toc_entries(toc_texts, heading_texts)
             if toc_match_ratio is not None and toc_match_ratio < cfg.min_toc_heading_match_ratio:
                 add_warning(
                     "structure",
@@ -489,6 +509,8 @@ class QualityCheckBlock(BaseBlock):
                 ),
                 "broken_char_ratio": round(broken_ratio, 4),
                 "empty_page_ratio": round(empty_page_ratio, 4),
+                "empty_pages": empty_pages[:MAX_EMPTY_PAGES_LISTED],
+                "toc_unmatched": toc_unmatched[:MAX_TOC_UNMATCHED_LISTED],
                 "node_count": len(nodes),
                 "dictionary_application_count": dict_application_count,
                 "chunk_count": len(chunks),

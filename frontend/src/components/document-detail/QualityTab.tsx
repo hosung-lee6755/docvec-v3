@@ -1,10 +1,11 @@
 import { ErrorText, toneFromKrdsClass } from '../ui'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import type { TabKey } from './documentDetailHelpers'
+import QualityWarningList from './QualityWarningList'
 import type { QualityReport } from '../../hooks/useDocumentRuns'
 import type { useCancelRun, useResumeRun } from '../../hooks/useWorkflows'
 import { QUALITY_CRITERIA, QUALITY_DISCLAIMER, QUALITY_OVERALL_RULES, sourceRecallSkipReason } from './qualityCriteria'
-import { qualityStatusDisplay, QUALITY_CATEGORY_LABELS, qualityEvidenceText, QUALITY_WARNING_TAB } from './documentDetailHelpers'
+import { qualityStatusDisplay, QUALITY_CATEGORY_LABELS, qualityEvidenceText } from './documentDetailHelpers'
 
 interface QualityTabProps {
   qualityReport: QualityReport | null | undefined
@@ -15,21 +16,6 @@ interface QualityTabProps {
   onHighlightChunkIdsChange: (ids: string[] | null) => void
   onActivateTab: (tab: TabKey) => void
 }
-
-const TABS: { key: string; label: string }[] = [
-  { key: 'original', label: '원문 대조' },
-  { key: 'structure', label: '구조' },
-  { key: 'elements', label: '요소' },
-  { key: 'cleaning', label: '정제 비교' },
-  { key: 'dictionary', label: '사전 적용' },
-  { key: 'pii', label: '민감정보' },
-  { key: 'chunks', label: '청크' },
-  { key: 'tables', label: '표' },
-  { key: 'images', label: '그림' },
-  { key: 'edit', label: 'RAG 데이터 수정' },
-  { key: 'quality', label: '품질' },
-  { key: 'history', label: '처리 이력' },
-]
 
 export default function QualityTab({
   qualityReport,
@@ -112,41 +98,11 @@ export default function QualityTab({
       {!!qualityReport.warnings?.length && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
           <strong style={{ fontSize: 13 }}>경고</strong>
-          {qualityReport.warnings.map((w, i) => {
-            const category = qualityReport.warning_categories?.[i]
-            const targetTab = category ? QUALITY_WARNING_TAB[category] : undefined
-            const targetChunkIds =
-              category === 'chunking_short' ? qualityReport.metrics?.short_chunk_ids
-              : category === 'chunking_long' ? qualityReport.metrics?.long_chunk_ids
-              : undefined
-            return (
-              <button
-                key={i}
-                type="button"
-                onClick={() => {
-                  if (!targetTab) return
-                  onHighlightChunkIdsChange(targetChunkIds?.length ? targetChunkIds : null)
-                  onActivateTab(targetTab)
-                }}
-                disabled={!targetTab}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--color-warning)',
-                  background: 'none', border: 'none', padding: 0, textAlign: 'left', width: '100%',
-                  cursor: targetTab ? 'pointer' : 'default',
-                }}
-              >
-                <AlertTriangle size={13} style={{ flexShrink: 0 }} />
-                <span style={{ flex: 1 }}>{String(w)}</span>
-                {targetTab && (
-                  <span style={{ fontSize: 11, textDecoration: 'underline', flexShrink: 0 }}>
-                    {targetChunkIds?.length
-                      ? '문제 청크로 이동 →'
-                      : `${TABS.find((t) => t.key === targetTab)?.label ?? targetTab} 탭에서 확인 →`}
-                  </span>
-                )}
-              </button>
-            )
-          })}
+          <QualityWarningList
+            report={qualityReport}
+            onHighlightChunkIdsChange={onHighlightChunkIdsChange}
+            onActivateTab={onActivateTab}
+          />
         </div>
       )}
       {qualityReport.review_note && (

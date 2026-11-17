@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
 from app.pipeline.blocks.content_blocks import _carry, _upstream_text
 from app.pipeline.blocks.structure_refine import refine_element_blocks
+from app.pipeline.blocks.title_box import shifted_level, starts_with_roman, title_box_heading
 from app.pipeline.blocks.title_resolver import LeadLine, _is_chapter_heading, resolve_title
 
 _HEADING_NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*)[.\)]?\s+\S")
@@ -161,9 +162,16 @@ _PAGE_EDGE_LINES = 2
 _NON_KEY_RE = re.compile(r"[\d\s]+")
 
 
+def _is_letter_spaced(stripped: str) -> bool:
+    """"1. 목    적"처럼 번호 뒤의 글자를 한 자씩 띄워 쓴 제목인지. 넓은 간격이 있어도 표의 줄이 아니다."""
+    tokens = stripped.split()
+    return len(tokens) >= 3 and all(len(token) == 1 for token in tokens[1:])
+
+
 def _plausible_numbered_heading(line: str, number: str) -> bool:
     stripped = line.strip()
-    if len(stripped) > _HEADING_MAX_CHARS or _WIDE_GAP_RE.search(stripped) or _CITATION_YEAR_RE.search(stripped):
+    has_wide_gap = bool(_WIDE_GAP_RE.search(stripped)) and not _is_letter_spaced(stripped)
+    if len(stripped) > _HEADING_MAX_CHARS or has_wide_gap or _CITATION_YEAR_RE.search(stripped):
         return False
     if int(number.split(".")[0]) > _HEADING_MAX_LEADING_NUMBER:
         return False
@@ -265,6 +273,7 @@ def _build_blocks(
     layout_entries: list[dict] | None = None,
     toc_offsets: set[int] | None = None,
     page_map: list | None = None,
+    max_level: int | None = None,
 ) -> list[tuple[str, int | None, int, int, str, dict | None]]:
     """줄 단위로 훑어 (node_type, level, span_start, span_end, block_text,
     layout) 튜플 목록을 만든다. HEADING/LIST_ITEM/TABLE(마커)/FOOTNOTE/TOC
@@ -283,10 +292,16 @@ def _build_blocks(
     body_font_size = _body_font_size(layout_entries) if layout_entries else None
     cursor = _LineLayoutCursor(layout_entries or [])
     header_offsets = _running_header_offsets(text, page_map)
+    # 마지막 제목 상자의 수준. 그 뒤의 줄 제목은 이만큼 아래로 내린다(title_box.py)
+    box_shift = 0
 
     def flush() -> None:
-        nonlocal buf_type, buf_start, buf_end, buf_lines
-        if buf_lines:
+        nonlocal buf_type, buf_start, buf_end, buf_lines, box_shift
+        box = title_box_heading(buf_lines, _HEADING_MAX_CHARS) if buf_type == "TABLE" else None
+        if box:
+            blocks.append(("HEADING", box[1], buf_start, buf_end, box[0], None))
+            box_shift = box[1]
+        elif buf_lines:
             blocks.append((buf_type, None, buf_start, buf_end, "\n".join(buf_lines), None))
         buf_type, buf_start, buf_end, buf_lines = None, None, None, []
 
@@ -325,6 +340,13 @@ def _build_blocks(
             continue
 
         node_type, level = _classify(line, layout, body_font_size)
+        if box_shift and starts_with_roman(line) and len(line.strip()) <= _HEADING_MAX_CHARS:
+            # 제목 상자를 쓰는 문서에서 로마 숫자로 시작하는 짧은 줄은 장 제목이다. 굵기 신호가 없어도 받는다
+            if node_type in ("HEADING", "PARAGRAPH"):
+                flush()
+                node_type, level, box_shift = "HEADING", 1, 0
+        elif node_type == "HEADING" and box_shift:
+            level = shifted_level(level, box_shift, max_level)
         if node_type in ("HEADING", "LIST_ITEM", "TABLE", "FOOTNOTE"):
             flush()
             if node_type == "TABLE":
@@ -551,7 +573,10 @@ class StructureAnalyzeBlock(BaseBlock):
         # 1.13.0: 요소에 쪽 정보가 없는 경로의 노드 쪽 번호를 page_map으로 채운다(2026-11-16).
         # 같은 날 legacy 경로의 번호 제목 판정을 좁히고(_plausible_numbered_heading), 여러 번 반복되는 짧은 줄을
         # 쪽 가장자리에서 여러 쪽에 반복되는 짧은 줄을 머리말(HEADER)로 표시한다(_running_header_offsets).
-        return "1.14.0"
+        #
+        # 1.15.0: 번호로 시작하는 한 줄짜리 표(제목 상자)를 제목으로 올리고 그 아래 줄 제목의 수준을 내린다
+        # (title_box.py). 글자를 한 자씩 띄운 번호 제목("1. 목    적")도 제목으로 받는다(2026-11-17).
+        return "1.15.0"
 
     @property
     def category(self) -> str:
@@ -613,7 +638,9 @@ class StructureAnalyzeBlock(BaseBlock):
                     _build_blocks_from_elements(doc.elements), doc.elements, cfg.heading_max_level
                 )
                 if doc.elements
-                else _build_blocks(text, layout_entries, toc_offsets, _page_map_for_text(doc, text))
+                else _build_blocks(
+                    text, layout_entries, toc_offsets, _page_map_for_text(doc, text), cfg.heading_max_level,
+                )
             )
 
             page_locator = _node_page_locator(doc, text)
