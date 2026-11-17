@@ -105,3 +105,37 @@ def test_analysis_run_is_persisted_before_document_points_to_it(session_factory,
         check.close()
     assert task.apply_async.call_count == 1
     assert task.apply_async.call_args.kwargs["args"] == [str(analysis_runs[0].id), str(scenario["entry"].id)]
+
+
+def test_collection_without_analysis_workflow_dispatches_summary_and_metadata(session_factory, scenario):
+    """기본 분석 워크플로우가 없는 컬렉션은 전처리가 끝나면 요약과 메타데이터 작업을 직접 보낸다
+    (2026-11-16 점검: 워크플로우 경로에서는 둘 다 실행되지 않아 문서 25개 중 24개가 대기였다)."""
+    setup = session_factory()
+    setup.query(Collection).filter(Collection.id == scenario["document"].collection_id).update(
+        {"default_analysis_workflow_id": None, "default_analysis_workflow_version": None})
+    setup.commit()
+    setup.close()
+
+    with patch("app.pipeline.tasks.summary.generate_summary") as summary, \
+            patch("app.pipeline.tasks.metadata.extract_metadata") as metadata, \
+            patch("app.pipeline.tasks.workflow.run_workflow_step") as step:
+        db = session_factory()
+        _maybe_trigger_analysis(db, scenario["pre_run"])
+        db.close()
+
+    document_id = str(scenario["document"].id)
+    summary.delay.assert_called_once_with(document_id)
+    metadata.delay.assert_called_once_with(document_id)
+    step.apply_async.assert_not_called()
+
+
+def test_analysis_workflow_collection_does_not_dispatch_default_tasks(session_factory, scenario):
+    with patch("app.pipeline.tasks.summary.generate_summary") as summary, \
+            patch("app.pipeline.tasks.metadata.extract_metadata") as metadata, \
+            patch("app.pipeline.tasks.workflow.run_workflow_step"):
+        db = session_factory()
+        _maybe_trigger_analysis(db, scenario["pre_run"])
+        db.close()
+
+    summary.delay.assert_not_called()
+    metadata.delay.assert_not_called()

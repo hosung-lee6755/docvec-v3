@@ -223,9 +223,18 @@ class DocumentDownloadResponse(BaseModel):
     url: str
 
 
+class DocumentTableSpan(BaseModel):
+    row: int
+    col: int
+    row_span: int
+    col_span: int
+
+
 class DocumentTableItem(BaseModel):
     page_number: int
     rows: list[list[str]]
+    # 합친 칸의 위치와 크기(0부터). 합친 칸이 없거나 모르는 형식이면 없다(전체 점검 2-2)
+    spans: list[DocumentTableSpan] | None = None
 
 
 class DocumentTablesResponse(BaseModel):
@@ -355,6 +364,8 @@ class DocumentNodeItem(BaseModel):
     user_corrected: bool
     correction_type: str | None = None
     correction_notes: str | None = None
+    # compact 목록에서만 채운다. text를 잘라 보냈을 때 원래 길이(상세는 GET /nodes/{id}).
+    text_length: int | None = None
 
 
 class DocumentNodesResponse(BaseModel):
@@ -405,6 +416,10 @@ class DocumentElementItem(BaseModel):
 class DocumentElementsResponse(BaseModel):
     document_id: str
     elements: list[DocumentElementItem]
+    # offset/limit으로 나눠 받을 때 화면이 전체 개수와 보정 개수를 알 수 있게 함께 보낸다.
+    total: int = 0
+    offset: int = 0
+    corrected_count: int = 0
 
 
 class ElementCorrectionRequest(BaseModel):

@@ -19,11 +19,84 @@ from app.schemas.document import (
     DocumentRevisionsResponse,
 )
 from app.services.document_state import claim_document_status as _claim_document_status
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
+
+HIGHLIGHT_PAGE_HEADER = "X-Highlight-Page"
+HIGHLIGHT_COUNT_HEADER = "X-Highlight-Count"
+
+
+def _highlight_pdf_bytes(document_id: str, filename: str, minio_key: str) -> bytes | None:
+    """위치를 그릴 PDF. PDF 원본은 그대로 쓰고, 다른 형식은 미리보기 PDF를 쓴다(없으면 만든다).
+    미리보기가 PDF로 만들어지지 않는 형식(TXT, HTML 등)은 None이다."""
+    from app.services.preview_service import preview_url_for
+    from app.services.storage import storage_service
+
+    if filename.lower().endswith(".pdf"):
+        return storage_service.download_file(settings.minio_bucket_originals, minio_key)
+    _url, kind, _approximate = preview_url_for(document_id, filename, minio_key)
+    if kind != "pdf":
+        return None
+    return storage_service.download_file(settings.minio_bucket_artifacts, f"preview/{document_id}.pdf")
+
+
+@router.get("/{document_id}/chunks/{chunk_id}/highlight")
+async def get_chunk_highlight(
+    document_id: UUID,
+    chunk_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """인용한 청크가 원문의 어느 자리인지 그 쪽을 그림(PNG)으로 돌려준다(전체 점검 1-7).
+    근거 영역에 색을 입히고, 그린 쪽 번호와 표시한 영역 수를 응답 헤더에 싣는다."""
+    from app.db.models.document_chunk import DocumentChunk
+    from app.db.models.document_node import DocumentNode
+    from app.services.audit import log_audit
+    from app.services.citation_highlight import build_target, render_highlight
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+    chunk = await db.scalar(
+        select(DocumentChunk).where(DocumentChunk.id == chunk_id, DocumentChunk.document_id == document_id)
+    )
+    if chunk is None:
+        raise HTTPException(status_code=404, detail="문서를 다시 처리해 이 인용의 위치 정보가 없습니다")
+
+    node_ids = [i for i in (chunk.source_node_ids or []) if i]
+    element_ids: list[str] = []
+    if node_ids:
+        element_ids = [
+            e for e in (
+                await db.scalars(select(DocumentNode.element_id).where(DocumentNode.id.in_(node_ids)))
+            ).all() if e
+        ]
+    target = build_target(chunk, element_ids, doc.elements if isinstance(doc.elements, list) else None)
+
+    pdf_bytes = await asyncio.to_thread(_highlight_pdf_bytes, str(doc.id), doc.original_filename, doc.minio_key)
+    if pdf_bytes is None:
+        raise HTTPException(status_code=422, detail="이 형식은 쪽 단위 위치 표시를 지원하지 않습니다")
+    try:
+        png, page_number, count = await asyncio.to_thread(render_highlight, pdf_bytes, target)
+    except Exception as exc:  # noqa: BLE001 - 깨진 PDF 등
+        logger.exception("citation highlight failed: document=%s chunk=%s", document_id, chunk_id)
+        raise HTTPException(status_code=422, detail="원문 쪽을 그리지 못했습니다") from exc
+
+    # 원문의 한 쪽을 그대로 내주므로 미리보기와 같은 조회 감사를 남긴다
+    log_audit(db, str(current_user.id), "document.preview", "document", str(doc.id))
+    await db.commit()
+    return Response(
+        content=png, media_type="image/png",
+        headers={
+            HIGHLIGHT_PAGE_HEADER: str(page_number), HIGHLIGHT_COUNT_HEADER: str(count),
+            "Cache-Control": "private, no-store",
+        },
+    )
+
 
 @router.get("/{document_id}/chunks", response_model=DocumentChunksResponse)
 async def list_document_chunks(
@@ -69,6 +142,12 @@ async def list_document_chunks(
             )
         ).all()
         pg_chunks_by_id = {str(c.id): c for c in pg_rows}
+    # 상위 청크에 child가 하나뿐이면 상위 청크가 곧 이 청크라 "상위 청크 보기"가 같은 글을 되풀이한다
+    children_per_parent: dict[str, int] = {}
+    for row in pg_chunks_by_id.values():
+        if row.parent_chunk_id and row.chunk_tier == "child":
+            key = str(row.parent_chunk_id)
+            children_per_parent[key] = children_per_parent.get(key, 0) + 1
 
     def _pg_fields(chunk_id: str) -> dict:
         c = pg_chunks_by_id.get(chunk_id)
@@ -92,7 +171,9 @@ async def list_document_chunks(
             "heading_path": c.section_path,
             # Parent Retrieval(Phase 9) — "상위 청크 보기" 토글용. parent 자체는
             # 목록에 노출되지 않으므로 child 응답에 텍스트를 인라인으로 실어준다.
-            "parent_chunk_text": parent.chunk_text if parent else None,
+            "parent_chunk_text": (
+                parent.chunk_text if parent and children_per_parent.get(str(parent.id), 0) > 1 else None
+            ),
             "language": c.language,
             "source_file": c.source_file,
             "version": c.version,

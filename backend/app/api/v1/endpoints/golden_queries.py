@@ -30,8 +30,10 @@ router = APIRouter()
 _RUN_LIST_LIMIT = 20
 # 컬렉션당 골든 쿼리 상한. 평가 한 번이 질의 수만큼 검색을 돌리므로 묶어 둔다
 MAX_GOLDEN_QUERIES_PER_COLLECTION = 100
+_ANSWER_FIELDS = {"expected_facts": None, "facts_found": None, "fact_recall": None, "answer_status": None,
+                  "answer": None, "citation_count": None}
 _MASKED_SCORES = {"precision": None, "recall": None, "hit": None, "reciprocal_rank": None,
-                  "first_hit_rank": None, "masked": True}
+                  "first_hit_rank": None, "masked": True, **_ANSWER_FIELDS}
 
 
 async def _visible_ids(db: AsyncSession, user: User, document_ids: set[str]) -> tuple[set[str], set[str]]:
@@ -86,8 +88,12 @@ async def _masked_runs(db: AsyncSession, user: User, runs: list[GoldenEvalRun]) 
     out = []
     for run in runs:
         data = GoldenEvalRunResponse.model_validate(run).model_dump()
+        # 답은 실행한 사람의 권한으로 만들어져, 다른 열람자가 볼 수 없는 문서의 내용이 들어 있을 수 있다
+        can_read_answers = user.role == "admin" or str(run.created_by) == str(user.id)
         if run.results is not None:
             rows = [_mask_result(dict(r), existing, visible) for r in run.results]
+            if not can_read_answers:
+                rows = [{**r, "answer": None} for r in rows]
             data["results"] = rows
             if data.get("regression"):
                 masked_ids = {str(r["golden_query_id"]) for r in rows if r.get("masked")}
@@ -129,6 +135,7 @@ async def create_golden_query(
         collection_id=str(collection_id),
         query=data.query,
         expected_document_ids=[str(d) for d in data.expected_document_ids],
+        expected_facts=list(data.expected_facts) if data.expected_facts else None,
         created_by=str(current_user.id),
     )
     db.add(gq)
@@ -173,6 +180,8 @@ async def update_golden_query(
     if data.expected_document_ids is not None:
         await _check_expected_documents(db, collection_id, data.expected_document_ids, current_user)
         gq.expected_document_ids = [str(d) for d in data.expected_document_ids]
+    if data.expected_facts is not None:
+        gq.expected_facts = list(data.expected_facts) or None
     log_audit(db, str(current_user.id), "golden_query.update", "collection", str(collection_id),
               detail={"golden_query_id": str(gq.id)})
     await db.commit()
@@ -207,7 +216,7 @@ async def run_golden_eval(
     from app.core.rate_limit import enforce_user_rate_limit
     from app.services.search_settings import DEFAULT_SEARCH_SETTINGS, stored_collection_search_settings
 
-    enforce_user_rate_limit(str(current_user.id), "golden_eval", limit=5, window_seconds=60)
+    enforce_user_rate_limit(str(current_user.id), "golden_eval", limit=5, window_seconds=60, fail_closed=True)
     await check_collection_access(db, collection_id, current_user, min_role="editor")
     has_queries = await db.scalar(
         select(GoldenQuery.id).where(GoldenQuery.collection_id == str(collection_id)).limit(1)
@@ -216,7 +225,7 @@ async def run_golden_eval(
         raise HTTPException(status_code=400, detail="평가할 골든 쿼리가 없습니다. 먼저 골든 쿼리를 추가하세요.")
     stored = await stored_collection_search_settings(db, str(collection_id))
     top_k = data.top_k or (stored or DEFAULT_SEARCH_SETTINGS).top_k
-    run = new_run(str(collection_id), str(current_user.id), top_k, TRIGGER_MANUAL)
+    run = new_run(str(collection_id), str(current_user.id), top_k, TRIGGER_MANUAL, with_answers=data.with_answers)
     db.add(run)
     await db.commit()
     await db.refresh(run)

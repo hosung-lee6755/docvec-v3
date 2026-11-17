@@ -1,15 +1,18 @@
 """민감정보 탐지 블록 — 통합 설계서 §3.3⑩.
 
 1차 정규식 엔진(주민번호/전화/이메일/계좌/카드) + 체크섬(주민번호/카드) +
-사용자 사전 PERSON 타입 매칭(이름)까지만 구현한다. 주소(ADDRESS)는
-DictionaryEntry.term_type에 대응 값이 없고 신뢰할 정규식도 없어 제외,
-NER(로컬 LLM 보조)도 별도 작업으로 미룬다(둘 다 §13 Task 5 축소 범위).
+사용자 사전 PERSON 타입 매칭(이름).
+
+2026-11-16(전체 점검 1-6): 문맥으로 찾는 이름(표지·호칭), 주소, 운전면허, 여권을 더했다
+(pii_personal.py). 사업자등록번호(BIZNO)는 법인의 공개 정보인 경우가 많아 기본 탐지에서 빼고,
+설정에서 골랐을 때만 찾는다. NER(로컬 LLM 보조)은 여전히 별도 작업이다.
 """
 import re
 
 from pydantic import BaseModel
 
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
+from app.pipeline.blocks import pii_personal
 from app.pipeline.blocks.content_blocks import _carry, _upstream_text
 from app.pipeline.blocks.normalization_blocks import (
     _dictionary_version_cutoff,
@@ -99,8 +102,11 @@ def _is_personal_email(text: str, match: re.Match) -> bool:
 # 우선순위 순서로 겹치는 매치를 먼저 차지한 쪽이 이긴다(예: 카드번호 패턴이
 # 계좌번호 패턴과 겹치면 카드로 판정) — 이후 낮은 우선순위 탐지기는 이미
 # 차지된 구간을 건너뛴다.
-_ENTITY_PRIORITY = ["RRN", "CARD", "PHONE", "ACCOUNT", "EMAIL", "NAME"]
-_ALL_ENTITY_TYPES = ["RRN", "PHONE", "EMAIL", "ACCOUNT", "CARD", "NAME"]
+_ENTITY_PRIORITY = [
+    "RRN", "CARD", "DRIVER_LICENSE", "BIZNO", "PHONE", "ACCOUNT", "EMAIL", "PASSPORT", "ADDRESS", "NAME",
+]
+# entity_types를 비웠을 때 찾는 유형. BIZNO는 골랐을 때만 찾는다
+_ALL_ENTITY_TYPES = ["RRN", "PHONE", "EMAIL", "ACCOUNT", "CARD", "NAME", "ADDRESS", "DRIVER_LICENSE", "PASSPORT"]
 
 _ACTION_TO_ENUM = {
     "mark_only": "MARK", "mask": "MASK", "tokenize": "TOKENIZE",
@@ -148,7 +154,8 @@ def _detect_regex_matches(text: str, entity_type: str) -> list[tuple[int, int, f
         return _account_matches(text)
     if entity_type == "EMAIL":
         return [(m.start(), m.end(), 0.98) for m in _EMAIL_RE.finditer(text) if _is_personal_email(text, m)]
-    return []
+    detector = pii_personal.DETECTORS.get(entity_type)
+    return detector(text) if detector else []
 
 
 _REGEX_ENTITY_TYPES = ("RRN", "CARD", "PHONE", "ACCOUNT", "EMAIL")
@@ -165,7 +172,7 @@ def mask_pii_patterns(text: str, mask_char: str = "*") -> str:
 
 
 class PiiDetectConfig(BaseModel):
-    entity_types: list[str] | None = None  # None = 전체 6종(RRN/PHONE/EMAIL/ACCOUNT/CARD/NAME)
+    entity_types: list[str] | None = None  # None = _ALL_ENTITY_TYPES(사업자등록번호 BIZNO는 골라야 찾는다)
     action: str = "mask"  # mark_only | mask | tokenize | remove | exclude_from_embedding
     mask_char: str = "*"
     require_admin_approval: bool = False
@@ -179,6 +186,11 @@ class PiiDetectBlock(BaseBlock):
     @property
     def category(self) -> str:
         return "구조·보호"
+
+    @property
+    def block_version(self) -> str:
+        # 1.1.0 — 문맥 기반 이름, 주소, 운전면허, 여권, 사업자등록번호(선택) 탐지
+        return "1.1.0"
 
     @property
     def config_schema(self):
@@ -221,6 +233,8 @@ class PiiDetectBlock(BaseBlock):
                                 (s, e, 0.6)
                                 for s, e in _find_spans(variant.variant_term, "EXACT", entry.case_sensitive, text)
                             )
+                    # 사전에 없는 이름은 표지와 호칭으로 찾는다. 겹치면 먼저 넣은 사전 쪽이 이긴다
+                    matches.extend(pii_personal.name_matches(text))
                 else:
                     matches = _detect_regex_matches(text, entity_type)
 

@@ -254,3 +254,85 @@ def test_pending_manual_run_does_not_block_auto_scheduling(world):
         select(GoldenEvalRun).where(GoldenEvalRun.collection_id == world.coll.id, GoldenEvalRun.status == "QUEUED")
     ).all()
     assert len(pending) == 2
+
+
+# ------------------------------------------------------------ 답변 평가(2026-11-16)
+
+def test_score_facts_ignores_spacing_case_and_thousands_separators():
+    out = ge.score_facts(["5억 원", "2,165", "N26", "없는 사실"], "지원 한도는 5억원이고 차이는 2165원, 노선은 n26입니다.")
+
+    assert out["facts_found"] == ["5억 원", "2,165", "N26"]
+    assert out["fact_recall"] == pytest.approx(0.75)
+
+
+def test_score_facts_without_facts_or_answer():
+    assert ge.score_facts([], "답")["fact_recall"] is None
+    assert ge.score_facts(["가"], None) == {"expected_facts": ["가"], "facts_found": [], "fact_recall": 0.0}
+
+
+def test_mean_fact_recall_skips_queries_without_facts():
+    assert ge.mean_fact_recall([{"fact_recall": 1.0}, {"fact_recall": None}, {"fact_recall": 0.5}, {}]) == 0.75
+    assert ge.mean_fact_recall([{}]) is None
+
+
+def _fake_generate_answer(session_factory, answer, status="DONE"):
+    """generate_answer.apply 대신 메시지에 답을 써 넣는다(워커가 다른 세션으로 쓰는 것과 같게)."""
+    from app.db.models.chat_message import ChatMessage
+
+    def apply(args):
+        other = session_factory()
+        message = other.get(ChatMessage, args[0])
+        message.status, message.answer, message.citations = status, answer, [{"n": 1}]
+        other.commit()
+        other.close()
+
+    return SimpleNamespace(apply=apply)
+
+
+def test_run_with_answers_scores_expected_facts_through_an_eval_conversation(world, session_factory):
+    from app.db.models.chat_conversation import ChatConversation
+
+    world.gq.expected_facts = ["5억", "50%"]
+    world.db.commit()
+    run = ge.new_run(str(world.coll.id), str(world.owner.id), 5, "manual", with_answers=True)
+    world.db.add(run)
+    world.db.commit()
+
+    with patch("app.pipeline.tasks.chat.generate_answer", _fake_generate_answer(session_factory, "한도는 5억 원입니다.")):
+        _evaluate(world, run, [{"document_id": str(world.v2.id)}])
+
+    world.db.refresh(run)
+    row = run.results[0]
+    assert (row["facts_found"], row["fact_recall"], row["answer_status"]) == (["5억"], 0.5, "DONE")
+    assert row["answer"] == "한도는 5억 원입니다." and row["citation_count"] == 1
+    assert run.mean_fact_recall == 0.5
+    conversation = world.db.scalar(select(ChatConversation).where(ChatConversation.user_id == world.owner.id))
+    assert conversation.channel == "eval" and str(conversation.collection_id) == str(world.coll.id)
+
+
+def test_failed_answer_scores_zero_and_the_run_still_finishes(world, session_factory):
+    world.gq.expected_facts = ["5억"]
+    world.db.commit()
+    run = ge.new_run(str(world.coll.id), str(world.owner.id), 5, "manual", with_answers=True)
+    world.db.add(run)
+    world.db.commit()
+
+    with patch("app.pipeline.tasks.chat.generate_answer", _fake_generate_answer(session_factory, None, "FAILED")):
+        _evaluate(world, run, [{"document_id": str(world.v2.id)}])
+
+    world.db.refresh(run)
+    assert run.status == "DONE"
+    assert (run.results[0]["answer_status"], run.results[0]["fact_recall"]) == ("FAILED", 0.0)
+
+
+def test_run_without_answers_does_not_generate_even_when_facts_exist(world):
+    world.gq.expected_facts = ["5억"]
+    world.db.commit()
+    run = _queued(world)
+
+    with patch("app.pipeline.tasks.chat.generate_answer") as task:
+        _evaluate(world, run, [{"document_id": str(world.v2.id)}])
+
+    world.db.refresh(run)
+    task.apply.assert_not_called()
+    assert "fact_recall" not in run.results[0] and run.mean_fact_recall is None

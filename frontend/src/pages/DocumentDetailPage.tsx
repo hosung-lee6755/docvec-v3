@@ -410,6 +410,7 @@ export default function DocumentDetailPage() {
                       contentError={contentError}
                       revisionsResult={revisionsResult}
                       editNodesResult={editNodesResult}
+                      chunksResult={chunksResult}
                       editedContent={editedContent}
                       showJson={showJson}
                       reprocess={reprocess}
@@ -466,6 +467,8 @@ export default function DocumentDetailPage() {
                       isPreviewError={isPreviewError}
                       previewError={previewError}
                       content={content}
+                      ragSource={doc}
+                      chunksResult={chunksResult}
                       pagesTextResult={pagesTextResult}
                       previewResult={previewResult}
                       isPdfDoc={isPdfDoc}

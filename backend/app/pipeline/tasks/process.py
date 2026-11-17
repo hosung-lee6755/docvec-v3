@@ -197,6 +197,11 @@ def _resolve_vision_credentials(db, doc) -> dict:
     from app.db.models.collection import Collection
     from app.db.models.project_api_key import ProjectApiKey
     from app.db.models.user_api_key import UserApiKey
+    from app.services.external_model_policy import document_allows_external
+
+    # 등급이 높은 문서의 쪽 그림은 클라우드로 보내지 않는다. 로컬 OCR로 읽는다(전체 점검 2-11)
+    if not document_allows_external(db, doc):
+        return {}
 
     project_id = None
     if doc.collection_id:
@@ -239,6 +244,68 @@ _FIGURE_VISION_PROMPT = (
 )
 
 
+_local_vision_providers: dict = {}
+
+
+def _describe_figure_locally(png_bytes: bytes) -> str:
+    """LOCAL_VISION_MODEL이 정해져 있으면 사내 추론 서버의 그림 모델로 설명을 받는다(전체 점검 2-1).
+    문서가 밖으로 나가지 않으므로 보안등급과 상관없이 쓴다. 실패하면 ""를 돌려 OCR로 넘어간다."""
+    tag = settings.local_vision_model.strip()
+    if not tag:
+        return ""
+    try:
+        from app.services.llm import LLMServerProvider
+
+        if tag not in _local_vision_providers:
+            _local_vision_providers[tag] = LLMServerProvider(tag)
+        text = _local_vision_providers[tag].generate_vision("", png_bytes, "image/png", _FIGURE_VISION_PROMPT)
+        return (text or "").strip()
+    except Exception:
+        logger.exception("local figure description failed; falling back to Tesseract")
+        return ""
+
+
+def _has_position(bbox) -> bool:
+    return bool(bbox) and any(value for value in bbox)
+
+
+def _figure_anchor(page, region):
+    """그림 바로 앞에 오는 글 조각을 찾는다(전체 점검 2-1). 예전에는 그림의 글을 쪽 끝에 붙여서
+    설명 문단과 떨어졌다. 위치를 아는 조각 가운데 윗변이 그림 윗변보다 위에 있는 마지막 조각 뒤에 넣는다.
+    돌려주는 값: 조각(그 뒤에 넣는다), "start"(쪽 맨 앞), None(위치를 몰라 쪽 끝에 붙인다)."""
+    if not _has_position(getattr(region, "bbox", None)):
+        return None
+    positioned = [block for block in page.text_blocks if _has_position(block.bbox)]
+    if not positioned:
+        return None
+    top = region.bbox[1]
+    # Docling은 왼쪽 아래가 원점인 좌표(top > bottom)를 줄 때가 있다. 그때는 값이 클수록 위쪽이다
+    is_bottom_origin = region.bbox[1] > region.bbox[3]
+    above = [
+        block for block in positioned
+        if (block.bbox[1] >= top if is_bottom_origin else block.bbox[1] <= top)
+    ]
+    return above[-1] if above else "start"
+
+
+def _insert_figure_block(page, block, anchor, placed_after: dict) -> None:
+    """같은 조각 뒤에 그림이 여럿 오면 문서 순서대로 차례로 놓는다."""
+    if anchor is None:
+        page.text_blocks.append(block)
+        return
+    is_start = isinstance(anchor, str)
+    key = (id(page), "start") if is_start else id(anchor)
+    previous = placed_after.get(key)
+    if previous is not None:
+        index = next(i for i, item in enumerate(page.text_blocks) if item is previous) + 1
+    elif is_start:
+        index = 0
+    else:
+        index = next(i for i, item in enumerate(page.text_blocks) if item is anchor) + 1
+    page.text_blocks.insert(index, block)
+    placed_after[key] = block
+
+
 def _recognize_figure_text(png_bytes: bytes, vision_options: dict) -> str:
     """Cloud VLM first (BYOK key registered — same opt-in as scan OCR), then
     local Tesseract. Returns "" when neither produces anything."""
@@ -257,6 +324,9 @@ def _recognize_figure_text(png_bytes: bytes, vision_options: dict) -> str:
                     return text.strip()
         except Exception:
             logger.exception("figure VLM recognition failed; falling back to Tesseract")
+    local_text = _describe_figure_locally(png_bytes)
+    if local_text:
+        return local_text
     try:
         import io
 
@@ -274,7 +344,9 @@ def _recognize_figure_text(png_bytes: bytes, vision_options: dict) -> str:
         return ""
 
 
-def _recognize_document_images(document_id: str, parsed, vision_options: dict) -> list[dict]:
+def _recognize_document_images(
+    document_id: str, parsed, vision_options: dict, max_figures: int | None = None,
+) -> list[dict]:
     """Filters/dedupes adapter-extracted embedded images, recognizes their
     content (VLM or Tesseract), stores each as PNG in the artifacts bucket,
     and appends "[그림 N] ..." text blocks to the source page so figure content
@@ -325,17 +397,24 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
                 logger.debug("이미지 PNG 변환 실패 — 그림 후보에서 제외", exc_info=True,
                              extra={"document_id": document_id})
                 continue
-            candidates.append((page, buf.getvalue(), region.native_text))
+            # 그림 글을 넣기 전에 자리를 정해 둔다. 넣으면서 찾으면 먼저 넣은 그림 글에 밀린다
+            candidates.append((page, buf.getvalue(), region.native_text, _figure_anchor(page, region)))
 
-    if len(candidates) > _FIGURE_MAX_COUNT:
+    # 블록 설정(max_figures)이 있으면 그 값을, 없으면 기본 상한을 쓴다(전체 점검 2-1)
+    cap = max_figures if max_figures is not None and max_figures >= 0 else _FIGURE_MAX_COUNT
+    if len(candidates) > cap:
         logger.info(
             "figure recognition capped",
-            extra={"document_id": document_id, "total": len(candidates), "cap": _FIGURE_MAX_COUNT},
+            extra={"document_id": document_id, "total": len(candidates), "cap": cap},
         )
-        candidates = candidates[:_FIGURE_MAX_COUNT]
+        parsed.warnings.append(
+            f"그림 {len(candidates)}개 가운데 앞의 {cap}개만 인식했습니다. 텍스트 추출 블록의 '그림 인식 상한'을 올리면 더 읽습니다."
+        )
+        candidates = candidates[:cap]
 
     records: list[dict] = []
-    for figure_no, (page, png_bytes, native_text) in enumerate(candidates, 1):
+    placed_after: dict = {}
+    for figure_no, (page, png_bytes, native_text, anchor) in enumerate(candidates, 1):
         # 그림 안에 원본 텍스트 레이어가 있으면(차트 라벨·수치) 이미지 OCR 보다 정확하므로 그것을 쓴다.
         if native_text and len(native_text.strip()) >= _FIGURE_MIN_MEANINGFUL_CHARS:
             text = native_text.strip()
@@ -352,13 +431,12 @@ def _recognize_document_images(document_id: str, parsed, vision_options: dict) -
             {"page_number": page.page_number, "storage_key": storage_key, "text": text}
         )
         if len(body_text) >= _FIGURE_MIN_MEANINGFUL_CHARS:
-            page.text_blocks.append(
-                RawTextBlock(
-                    text=f"[그림 {figure_no}]\n{body_text}",
-                    page_number=page.page_number,
-                    block_type="image",
-                )
+            figure_block = RawTextBlock(
+                text=f"[그림 {figure_no}]\n{body_text}",
+                page_number=page.page_number,
+                block_type="image",
             )
+            _insert_figure_block(page, figure_block, anchor, placed_after)
     return records
 
 

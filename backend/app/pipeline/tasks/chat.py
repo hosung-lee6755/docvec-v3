@@ -148,10 +148,16 @@ def _find_api_key(db, conversation, backend: str) -> str | None:
 _VERIFICATION_MODEL_PRIORITY = [("openai", "gpt-4o-mini"), ("anthropic", "claude-3-5-haiku")]
 
 
-def _get_verifier_provider(db, conversation, generation_provider, generation_backend: str):
+def _get_verifier_provider(db, conversation, generation_provider, generation_backend: str, chunks=None):
     if generation_backend in ("openai", "anthropic"):
         # Generation is already on a cloud model — reuse it rather than paying
         # for a second provider instantiation and a second BYOK key lookup.
+        return generation_provider
+    from app.services.external_model_policy import blocked_document_ids
+
+    # 로컬 모델로 답했더라도 검증을 클라우드에 맡기면 근거가 밖으로 나간다. 등급이 높은 근거가 있으면
+    # 답변을 만든 로컬 모델로 검증한다(전체 점검 2-11)
+    if blocked_document_ids(db, [c.get("document_id") for c in chunks or []]):
         return generation_provider
     for backend, model_key in _VERIFICATION_MODEL_PRIORITY:
         key = _find_api_key(db, conversation, backend)
@@ -177,11 +183,22 @@ def _is_answer_grounded(provider, query: str, context: str, answer: str) -> bool
     return "INSUFFICIENT" not in verdict.strip().upper()
 
 
+def _with_parent_context(db, chunks: list[dict], collection_id: str | None) -> list[dict]:
+    """컬렉션 검색 설정에서 Parent Retrieval을 켰으면(기본) 근거마다 같은 상위 절의 앞뒤 청크를 붙인다."""
+    from app.services.parent_context import attach_parent_context
+    from app.services.search_settings import collection_search_settings_sync
+
+    if not chunks or not collection_search_settings_sync(db, collection_id).parent_context:
+        return chunks
+    return attach_parent_context(db, chunks)
+
+
 def _build_context(chunks: list[dict]) -> str:
     citation_lines = []
     for i, c in enumerate(chunks, start=1):
         page_part = f" ({c['page_number']}쪽)" if c.get("page_number") else ""
-        citation_lines.append(f"[{i}] {c['filename']}{page_part}: {c['text']}")
+        # Parent Retrieval로 붙은 앞뒤 문맥이 있으면 그것을, 없으면 청크 본문을 넣는다
+        citation_lines.append(f"[{i}] {c['filename']}{page_part}: {c.get('context_text') or c['text']}")
     return "\n\n".join(citation_lines) or "(관련 발췌문 없음)"
 
 # Number of prior Q&A pairs from the same conversation included as chat history —
@@ -264,6 +281,7 @@ def _retrieve_chunks(
     from app.services.bm25_service import bm25_rerank
     from app.services.dictionary_service import ensure_dictionary_cache_sync, expand_query
     from app.services.embedding import get_embedding_provider
+    from app.services.lexical_index import hybrid_query_vector
     from app.services.qdrant_service import qdrant_service
     from app.services.search_settings import collection_search_settings_sync
 
@@ -299,6 +317,9 @@ def _retrieve_chunks(
         limit=limit * _HYBRID_CANDIDATE_MULTIPLIER,
         with_vectors=search.diversify,
         query_filter=qdrant_access_filter(ctx, scope),
+        # 키워드 색인 후보를 더한다(전체 점검 1-1). 벡터 후보에 못 든 품번·조항 번호를 찾기 위해서다
+        lexical=hybrid_query_vector(search_query, search.mode),
+        lexical_scope=scope,
     )
     if hits:
         facts = load_document_facts_sync(db, {h["payload"].get("document_id") for h in hits})
@@ -562,6 +583,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
     from app.db.session import get_sync_db
     from app.services.answer_trace import record_answer_trace
     from app.services.llm import LLM_MODEL_REGISTRY, get_llm_provider
+    from app.services.external_model_policy import blocked_document_ids, ensure_external_allowed, is_external_backend
 
     started = time.monotonic()
     db = get_sync_db()
@@ -613,7 +635,9 @@ def generate_answer(self, chat_message_id: str) -> dict:
             mode=trace["mode"],
             variant=_retrieval_variant(db, collection_id_str),
         )
-        cached = redis_client.get(cache_key)
+        # 평가(channel="eval")는 지금 색인 상태로 만든 답을 재야 하므로 캐시를 읽지도 쓰지도 않는다
+        use_cache = (conversation.channel or "web") != "eval"
+        cached = redis_client.get(cache_key) if use_cache else None
         cached_payload = json.loads(cached) if cached else None
         if cached_payload and not _cited_documents_still_visible(db, access_ctx, cached_payload):
             # 캐시 이후 인용 문서의 등급·ACL이 바뀌었다 — 낡은 답변을 버리고 새로 만든다.
@@ -697,6 +721,9 @@ def generate_answer(self, chat_message_id: str) -> dict:
             from app.services.agentic.deep_search import prune_unrelated
 
             chunks = prune_unrelated(chunks)
+        chunks = _with_parent_context(db, chunks, collection_id_str)
+        if is_external_backend(spec["backend"]):
+            ensure_external_allowed(db, chunks)
         msg.expanded_terms = _expanded_terms(db, msg.query)
         answer_started = time.monotonic()
         context = _build_context(chunks)
@@ -771,7 +798,7 @@ def generate_answer(self, chat_message_id: str) -> dict:
         # Agentic self-reflection: verify the answer is grounded in what was
         # retrieved. If not, broaden retrieval once and regenerate — capped at
         # exactly one extra hop so a persistently ungrounded question can't loop.
-        verifier = _get_verifier_provider(db, conversation, provider, spec["backend"])
+        verifier = _get_verifier_provider(db, conversation, provider, spec["backend"], chunks)
         grounding = GROUNDING_SKIPPED
         broadened = False
         if chunks:
@@ -792,7 +819,12 @@ def generate_answer(self, chat_message_id: str) -> dict:
                 )
                 from app.services.agentic.deep_search import prune_unrelated
 
-                broadened_chunks = prune_unrelated(broadened_chunks)
+                broadened_chunks = _with_parent_context(db, prune_unrelated(broadened_chunks), collection_id_str)
+                if broadened_chunks and is_external_backend(spec["backend"]) and blocked_document_ids(
+                    db, [c.get("document_id") for c in broadened_chunks]
+                ):
+                    # 넓힌 근거에 외부로 보낼 수 없는 문서가 섞였다. 넓히기 전의 답을 그대로 둔다
+                    broadened_chunks = []
                 if broadened_chunks:
                     chunks = broadened_chunks
                     context = _build_context(chunks)
@@ -830,6 +862,8 @@ def generate_answer(self, chat_message_id: str) -> dict:
                 "page_number": c.get("page_number"),
                 "text": c["text"],
                 "evidence": c.get("evidence"),
+                # 원문에서 근거 자리를 표시할 때 쓴다(전체 점검 1-7). 예전 답변에는 없다
+                "chunk_id": c.get("chunk_ref") if c.get("source_kind", "chunk") == "chunk" else None,
             }
             for i, c in enumerate(chunks)
         ]
@@ -850,12 +884,13 @@ def generate_answer(self, chat_message_id: str) -> dict:
             pass
 
         try:
-            redis_client.setex(
-                cache_key,
-                _ANSWER_CACHE_TTL_SECONDS,
-                json.dumps({"answer": msg.answer, "citations": msg.citations, "agent_steps": msg.agent_steps,
-                            "expanded_terms": msg.expanded_terms}),
-            )
+            if use_cache:
+                redis_client.setex(
+                    cache_key,
+                    _ANSWER_CACHE_TTL_SECONDS,
+                    json.dumps({"answer": msg.answer, "citations": msg.citations, "agent_steps": msg.agent_steps,
+                                "expanded_terms": msg.expanded_terms}),
+                )
         except Exception:
             logger.exception("generate_answer: failed to write answer cache")
 

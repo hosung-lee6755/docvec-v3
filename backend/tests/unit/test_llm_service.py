@@ -1,11 +1,13 @@
 """Coverage for app.services.llm — provider classes, registry lookup and cost
-estimation. torch/transformers/openai/anthropic are replaced by fakes injected
-into sys.modules so no model is loaded and no network call is made."""
+estimation. openai/anthropic are replaced by fakes injected into sys.modules and the
+inference server is replaced by httpx.MockTransport, so no network call is made."""
 
 import base64
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from app.services import llm
@@ -32,106 +34,118 @@ def test_base_vision_not_supported():
         _Echo().generate_vision("s", b"img", "image/png", "p")
 
 
-# ----------------------------------------------------------- local provider
+# ------------------------------------------------------ 추론 서버(Ollama) provider
+# 2026-11-13: 로컬 LLM을 워커 프로세스 안(transformers)에서 돌리지 않고 별도 추론 서버로 뺐다.
+# 워커가 LLM·임베딩·재순위를 한 GPU 프로세스에 함께 올려 약 10GB를 써서, 추출과 겹치면 12GB를 넘었다.
 
 
-class _Inputs(dict):
-    def to(self, _device):
-        return self
+def _server(handler):
+    calls = []
+
+    def _record(request):
+        calls.append(request)
+        return handler(request)
+
+    provider = llm.LLMServerProvider("qwen2.5:3b-instruct-q4_K_M", transport=httpx.MockTransport(_record))
+    return provider, calls
 
 
-def _local_provider(cuda=False):
-    torch = MagicMock()
-    torch.cuda.is_available.return_value = cuda
-    transformers = MagicMock()
-    tokenizer = transformers.AutoTokenizer.from_pretrained.return_value
-    model = transformers.AutoModelForCausalLM.from_pretrained.return_value.to.return_value
-    tokenizer.apply_chat_template.return_value = "PROMPT"
-    tokenizer.return_value = _Inputs(input_ids=SimpleNamespace(shape=(1, 3)))
-    modules = {"torch": torch, "transformers": transformers}
-    with patch.dict("sys.modules", modules):
-        provider = llm.LocalLLMProvider("repo/x")
-    return provider, torch, transformers, tokenizer, model
+def _chat_reply(content):
+    return httpx.Response(200, json={"message": {"role": "assistant", "content": content}, "done": True})
 
 
-def test_local_provider_uses_fp32_on_cpu():
-    _p, torch, transformers, _tok, _model = _local_provider(cuda=False)
-
-    kwargs = transformers.AutoModelForCausalLM.from_pretrained.call_args.kwargs
-    assert kwargs["torch_dtype"] is torch.float32
-    transformers.AutoModelForCausalLM.from_pretrained.return_value.to.assert_called_with("cpu")
-
-
-def test_local_provider_uses_fp16_on_gpu():
-    _p, torch, transformers, _tok, _model = _local_provider(cuda=True)
-
-    kwargs = transformers.AutoModelForCausalLM.from_pretrained.call_args.kwargs
-    assert kwargs["torch_dtype"] is torch.float16
-    transformers.AutoModelForCausalLM.from_pretrained.return_value.to.assert_called_with("cuda")
-
-
-def test_local_generate_decodes_only_new_tokens_without_length_floor():
-    provider, _t, _tf, tokenizer, model = _local_provider()
-    model.generate.return_value = [[1, 2, 3, 40, 50]]
-    tokenizer.decode.return_value = "생성된 답"
+def test_server_generate_sends_system_prompt_and_greedy_options():
+    provider, calls = _server(lambda _req: _chat_reply("생성된 답"))
 
     out = provider.generate("sys", [{"role": "user", "content": "hi"}])
 
     assert out == "생성된 답"
-    tokenizer.apply_chat_template.assert_called_once_with(
-        [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
-        tokenize=False, add_generation_prompt=True,
-    )
-    assert tokenizer.decode.call_args.args[0] == [40, 50]
-    gen_kwargs = model.generate.call_args.kwargs
-    # 길이 하한을 두면 짧게 끝나야 할 답도 끝을 못 내고 대화 템플릿을 지어낸다(2026-11-12 실측)
-    assert "min_new_tokens" not in gen_kwargs
-    assert gen_kwargs["max_new_tokens"] == 512
-    assert gen_kwargs["do_sample"] is False
-    assert gen_kwargs["repetition_penalty"] == pytest.approx(1.15)
+    body = json.loads(calls[0].content)
+    assert calls[0].url.path == "/api/chat"
+    assert body["model"] == "qwen2.5:3b-instruct-q4_K_M"
+    assert body["messages"] == [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+    assert body["stream"] is False
+    assert body["keep_alive"] == llm.settings.llm_server_keep_alive
+    options = body["options"]
+    # 예전 로컬 생성과 같은 조건: 탐욕 생성, 최대 512토큰, 반복 억제 1.15, 길이 하한 없음
+    assert options["temperature"] == 0
+    assert options["num_predict"] == 512
+    assert options["repeat_penalty"] == pytest.approx(1.15)
+    # Ollama 기본 문맥(2~4천 토큰)은 RAG 발췌문을 잘라 버리므로 명시한다
+    assert options["num_ctx"] == llm.settings.llm_server_num_ctx
 
 
-def test_local_generate_stream_reports_accumulated_text_and_returns_full_text():
-    provider, _t, transformers, _tok, model = _local_provider()
-    transformers.TextIteratorStreamer.return_value = ["안녕", "하세요"]
-    seen = []
-    with patch.dict("sys.modules", {"transformers": transformers}):
-        out = provider.generate_stream("sys", [], seen.append)
-
-    assert out == "안녕하세요"
-    assert seen == ["안녕", "안녕하세요"]
-    model.generate.assert_called_once()
-    assert model.generate.call_args.kwargs["streamer"] is transformers.TextIteratorStreamer.return_value
-
-
-def test_local_generate_cuts_leaked_chat_template():
-    provider, _t, _tf, tokenizer, model = _local_provider()
-    model.generate.return_value = [[1, 2, 3, 40]]
-    tokenizer.decode.return_value = "알 수 없습니다.[1]<tool_call>\n返回\nuser\n질문: 지어낸 질문"
+def test_server_generate_cuts_leaked_chat_template():
+    provider, _ = _server(lambda _req: _chat_reply("알 수 없습니다.[1]<tool_call>\n질문: 지어낸 질문"))
 
     assert provider.generate("sys", []) == "알 수 없습니다.[1]"
 
 
-def test_local_generate_stream_cuts_leaked_chat_template_in_partial_and_final():
-    provider, _t, transformers, _tok, _model = _local_provider()
-    transformers.TextIteratorStreamer.return_value = ["답", "입니다.", "<tool_call>", "\nuser 지어낸 질문"]
+def _stream_reply(pieces):
+    lines = [json.dumps({"message": {"content": p}, "done": False}) for p in pieces]
+    lines.append(json.dumps({"message": {"content": ""}, "done": True}))
+    return httpx.Response(200, content="\n".join(lines).encode())
+
+
+def test_server_stream_reports_accumulated_text_and_cuts_leaks():
+    provider, calls = _server(lambda _req: _stream_reply(["답", "입니다.", "<tool_call>", " 지어낸 질문"]))
     seen = []
-    with patch.dict("sys.modules", {"transformers": transformers}):
-        out = provider.generate_stream("sys", [], seen.append)
+
+    out = provider.generate_stream("sys", [], seen.append)
 
     assert out == "답입니다."
-    assert all("<tool_call>" not in s and "user" not in s for s in seen)
+    assert seen[:2] == ["답", "답입니다."]
+    assert all("<tool_call>" not in s for s in seen)
+    assert json.loads(calls[0].content)["stream"] is True
 
 
-def test_local_generate_stream_ignores_callback_errors():
-    provider, _t, transformers, _tok, _model = _local_provider()
-    transformers.TextIteratorStreamer.return_value = ["a", "b"]
+def test_server_stream_ignores_callback_errors():
+    provider, _ = _server(lambda _req: _stream_reply(["a", "b"]))
 
     def boom(_text):
         raise RuntimeError("redis down")
 
-    with patch.dict("sys.modules", {"transformers": transformers}):
-        assert provider.generate_stream("s", [], boom) == "ab"
+    assert provider.generate_stream("s", [], boom) == "ab"
+
+
+def test_server_unreachable_raises_a_clear_error():
+    def refuse(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    provider, _ = _server(refuse)
+
+    with pytest.raises(llm.LLMServerError, match="추론 서버에 연결하지 못했습니다"):
+        provider.generate("s", [])
+
+
+def test_server_missing_model_tells_how_to_pull_it():
+    provider, _ = _server(lambda _req: httpx.Response(404, json={"error": "model not found"}))
+
+    with pytest.raises(llm.LLMServerError, match="ollama pull qwen2.5:3b-instruct-q4_K_M"):
+        provider.generate("s", [])
+
+
+def test_pulled_local_models_reads_server_tags_and_caches_them():
+    calls = []
+
+    def tags(request):
+        calls.append(request)
+        return httpx.Response(200, json={"models": [{"name": "qwen2.5:3b-instruct-q4_K_M"}]})
+
+    with patch.dict(llm._pulled_models_cache, {}, clear=True):
+        first = llm.pulled_local_models(transport=httpx.MockTransport(tags))
+        second = llm.pulled_local_models(transport=httpx.MockTransport(tags))
+
+    assert first == second == {"qwen2.5:3b-instruct-q4_K_M"}
+    assert len(calls) == 1 and calls[0].url.path == "/api/tags"
+
+
+def test_pulled_local_models_is_empty_when_the_server_is_down():
+    def refuse(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    with patch.dict(llm._pulled_models_cache, {}, clear=True):
+        assert llm.pulled_local_models(transport=httpx.MockTransport(refuse)) == set()
 
 
 # ----------------------------------------------------------- openai provider
@@ -266,17 +280,17 @@ def test_get_llm_provider_unknown_model_raises():
 def test_get_llm_provider_caches_local_model_instances():
     created = []
 
-    class FakeLocal:
-        def __init__(self, repo_id):
-            created.append(repo_id)
+    class FakeServer:
+        def __init__(self, model_tag):
+            created.append(model_tag)
 
     with patch.dict(llm._local_provider_cache, {}, clear=True), \
-         patch.object(llm, "LocalLLMProvider", FakeLocal):
+         patch.object(llm, "LLMServerProvider", FakeServer):
         first = llm.get_llm_provider("qwen2.5-3b")
         second = llm.get_llm_provider("qwen2.5-3b")
 
     assert first is second
-    assert created == ["Qwen/Qwen2.5-3B-Instruct"]
+    assert created == ["qwen2.5:3b-instruct-q4_K_M"]
 
 
 @pytest.mark.parametrize(

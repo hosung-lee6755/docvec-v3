@@ -9,6 +9,9 @@ export interface AuthOptions {
   self_signup_enabled: boolean
   admin_code_signup: boolean
   directory_login: boolean
+  // 전체 점검 2-6 — 통합 로그인(OIDC)이 켜져 있으면 로그인 화면에 단추를 보인다
+  oidc_login?: boolean
+  oidc_label?: string
 }
 
 export type AccountRole = 'viewer' | 'editor' | 'admin'

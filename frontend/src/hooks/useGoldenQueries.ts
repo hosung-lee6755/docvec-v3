@@ -6,6 +6,8 @@ export interface GoldenQuery {
   collection_id: string
   query: string
   expected_document_ids: string[]
+  // 답에 반드시 있어야 할 사실 조각. 있으면 "답변까지 평가"에서 답을 만들어 대조한다
+  expected_facts?: string[] | null
   created_at: string
 }
 
@@ -46,6 +48,13 @@ export interface GoldenEvalQueryResult {
   first_hit_rank?: number | null
   // 요청자가 볼 수 없는 기대 문서가 있어 질의별 점수를 가렸다
   masked?: boolean
+  // 답변까지 평가한 실행에서 기대 사실이 있는 질의에만 온다. 답 본문은 실행한 사람과 관리자에게만 온다
+  expected_facts?: string[] | null
+  facts_found?: string[] | null
+  fact_recall?: number | null
+  answer_status?: 'DONE' | 'FAILED' | null
+  answer?: string | null
+  citation_count?: number | null
 }
 
 export interface GoldenEvalRun {
@@ -58,6 +67,8 @@ export interface GoldenEvalRun {
   mean_recall: number | null
   mean_hit_rate: number | null
   mean_mrr: number | null
+  with_answers?: boolean
+  mean_fact_recall?: number | null
   is_baseline: boolean
   is_regression: boolean | null
   regression: GoldenRegression | null
@@ -69,6 +80,11 @@ export interface GoldenEvalRun {
 }
 
 export const GOLDEN_RUN_POLL_INTERVAL_MS = 3000
+
+// 기대 사실 입력란(한 줄에 하나)을 목록으로 바꾼다. 빈 줄과 겹치는 줄은 뺀다.
+export function parseExpectedFacts(input: string): string[] {
+  return Array.from(new Set(input.split('\n').map((line) => line.trim()).filter(Boolean)))
+}
 
 export function isGoldenRunActive(run: Pick<GoldenEvalRun, 'status'>): boolean {
   return run.status === 'QUEUED' || run.status === 'RUNNING'
@@ -88,7 +104,7 @@ export function useGoldenQueries(collectionId: string | null) {
 export function useCreateGoldenQuery(collectionId: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: { query: string; expected_document_ids: string[] }) => {
+    mutationFn: async (input: { query: string; expected_document_ids: string[]; expected_facts?: string[] }) => {
       const { data } = await apiClient.post(`/collections/${collectionId}/golden-queries`, input)
       return data as GoldenQuery
     },
@@ -101,7 +117,9 @@ export function useCreateGoldenQuery(collectionId: string | null) {
 export function useUpdateGoldenQuery(collectionId: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ queryId, ...input }: { queryId: string; query?: string; expected_document_ids?: string[] }) => {
+    mutationFn: async ({ queryId, ...input }: {
+      queryId: string; query?: string; expected_document_ids?: string[]; expected_facts?: string[]
+    }) => {
       const { data } = await apiClient.patch(`/collections/${collectionId}/golden-queries/${queryId}`, input)
       return data as GoldenQuery
     },
@@ -143,8 +161,10 @@ export function useGoldenEvalRuns(collectionId: string | null) {
 export function useRunGoldenEval(collectionId: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (topK: number | null) => {
-      const { data } = await apiClient.post(`/collections/${collectionId}/golden-eval-runs`, { top_k: topK })
+    mutationFn: async ({ topK, withAnswers = false }: { topK: number | null; withAnswers?: boolean }) => {
+      const { data } = await apiClient.post(`/collections/${collectionId}/golden-eval-runs`, {
+        top_k: topK, with_answers: withAnswers,
+      })
       return data as GoldenEvalRun
     },
     onSuccess: () => {

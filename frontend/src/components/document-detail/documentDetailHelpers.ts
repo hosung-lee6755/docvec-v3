@@ -1,5 +1,6 @@
 import type { QualityMetrics } from '../../hooks/useDocumentRuns'
 import type { DocumentLanguage } from '../../hooks/useDocumentMetadata'
+import type { DocumentChunk2 } from '../../hooks/useDocuments'
 
 export type TabKey =
   | 'edit' | 'tables' | 'images' | 'chunks' | 'original' | 'quality' | 'history'
@@ -47,7 +48,7 @@ export function qualityEvidenceText(category: string, metrics: QualityMetrics): 
 }
 
 export const RUN_TRIGGER_LABELS: Record<string, string> = {
-  UPLOAD: '업로드', MANUAL: '수동 실행', REPROCESS: '부분 재처리', COLLECTION_REPROCESS: '컬렉션 재처리',
+  UPLOAD: '업로드', MANUAL: '수동 실행', REPROCESS: '재처리', COLLECTION_REPROCESS: '컬렉션 재처리',
 }
 
 // 실행 상태를 화면에 보일 한글 이름. 모르는 값은 원래 값을 그대로 보인다.
@@ -90,4 +91,48 @@ export const QUALITY_WARNING_TAB: Record<string, TabKey> = {
 export function toBlocksJson(text: string): string {
   const blocks = text.split('\n\n').filter((b) => b.trim().length > 0)
   return JSON.stringify({ blocks }, null, 2)
+}
+
+export interface RagRecordSource {
+  id: string
+  original_filename: string
+  title?: string | null
+  language?: string | null
+  security_level?: string | null
+}
+
+/**
+ * 검색과 채팅이 실제로 쓰는 RAG 레코드(벡터 DB에 저장된 청크와 그 메타데이터)를 JSON으로 보여 준다.
+ * 예전 JSON 보기는 본문을 빈 줄로 잘라 {blocks: [...]}로만 보여 줘, 구조와 요소 정보가 전혀 없었다(2026-11-13).
+ * page를 주면 그 쪽에서 시작하는 청크만 담는다.
+ */
+export function toRagRecordsJson(doc: RagRecordSource, chunks: DocumentChunk2[], page?: number): string {
+  const selected = page == null ? chunks : chunks.filter((c) => c.page_number === page)
+  return JSON.stringify({
+    document: {
+      id: doc.id,
+      filename: doc.original_filename,
+      title: doc.title ?? null,
+      language: doc.language ?? null,
+      security_level: doc.security_level ?? null,
+    },
+    chunk_count: selected.length,
+    chunks: selected.map((c) => ({
+      id: c.id,
+      index: c.chunk_index,
+      page: c.page_number,
+      section_path: c.section_path ?? [],
+      chunk_type: c.chunk_type,
+      element_id: c.element_id,
+      token_count: c.token_count,
+      char_count: c.char_count,
+      keywords: c.keywords ?? [],
+      embedding_model: c.embedding_model,
+      embedded: c.embedded,
+      search_excluded: c.disabled,
+      edited: c.edited,
+      has_parent_context: !!c.parent_chunk_text,
+      text: c.text,
+    })),
+  }, null, 2)
 }

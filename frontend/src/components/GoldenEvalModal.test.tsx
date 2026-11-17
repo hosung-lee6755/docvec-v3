@@ -112,7 +112,7 @@ describe('GoldenEvalModal', () => {
     mocks.runEval.mockReturnValue(mutation(runEval))
     renderModal()
     fireEvent.click(screen.getByRole('button', { name: '평가 실행' }))
-    expect(runEval).toHaveBeenCalledWith(null)
+    expect(runEval).toHaveBeenCalledWith({ topK: null, withAnswers: false })
   })
 
   it('disables running when top_k is outside 1 to 20', () => {

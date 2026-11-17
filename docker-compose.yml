@@ -239,7 +239,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-    # llm 큐(답변 생성·골든 평가)도 받는다. 한 프로세스가 LLM·임베딩·재순위 모델 한 벌을 함께 쓴다.
+    # llm 큐(답변 생성·골든 평가)도 받는다. 질문 임베딩과 재순위는 이 프로세스가 하고, 문장 생성은
+    # 추론 서버(llm 서비스)가 맡는다. 2026-11-13부터 LLM은 이 프로세스에 올라가지 않는다.
     # prefetch 1과 -O fair로 임베딩 작업을 미리 쌓아 두지 않아, 채팅이 많아야 작업 하나만 기다린다
     command: poetry run celery -A app.pipeline.celery_app worker --loglevel=info --concurrency=1 --prefetch-multiplier=1 -O fair -Q llm,embed
 
@@ -289,6 +290,32 @@ services:
       minio:
         condition: service_healthy
     command: poetry run celery -A app.pipeline.celery_app worker --loglevel=info --concurrency=1 --prefetch-multiplier=1 -O fair -Q extract --max-memory-per-child=8000000
+  # 로컬 LLM 추론 서버(Ollama). 예전에는 worker-embed 안에서 LLM(3B fp16 약 6GB)을 올려 임베딩, 재순위와
+  # 합쳐 GPU 약 10GB를 썼고, 문서 추출과 겹치면 12GB를 넘었다(2026-11-13).
+  # 4비트 양자화 모델(3B 약 2.5GB)을 요청이 올 때 올리고, OLLAMA_KEEP_ALIVE 동안 요청이 없으면 내린다.
+  # 한 번에 모델 하나, 요청 하나만 처리한다. 호스트 포트는 열지 않고 컨테이너 망에서만 쓴다.
+  # 모델은 배포 때 한 번 받는다: docker compose exec llm ollama pull qwen2.5:3b-instruct-q4_K_M
+  llm:
+    image: ollama/ollama:0.40.12
+    environment:
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+    volumes:
+      - ollama_models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
   flower:
     build:
       context: ./backend
@@ -381,6 +408,7 @@ volumes:
   backend_venv:
   worker_venv:
   model_cache:
+  ollama_models:
   caddy_data:
   caddy_config:
 

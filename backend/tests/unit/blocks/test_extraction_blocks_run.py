@@ -31,13 +31,33 @@ def _doc(**kw):
 
 
 # ---- FileValidateBlock ----
-def _validate(doc, config=None, dup=None):
+def _validate(doc, config=None, dup=None, pdf_pages=None):
     db = MagicMock()
     db.get.return_value = doc
     db.query.return_value.filter.return_value.first.return_value = dup
-    with patch("app.db.session.get_sync_db", return_value=db):
+    with patch("app.db.session.get_sync_db", return_value=db), patch.object(
+        eb, "_pdf_page_count", return_value=pdf_pages
+    ):
         result = eb.FileValidateBlock().run(_ctx(config))
     return result, db
+
+
+def test_file_validate_rejects_pdf_over_max_pages():
+    with pytest.raises(BlockExecutionError, match="페이지 수 초과"):
+        _validate(_doc(), {"max_pages": 10}, pdf_pages=11)
+
+
+def test_file_validate_allows_pdf_at_max_pages_or_unknown_count():
+    at_limit, _ = _validate(_doc(), {"max_pages": 10}, pdf_pages=10)
+    unknown, _ = _validate(_doc(), {"max_pages": 10}, pdf_pages=None)
+    assert at_limit.output["passed"] is True and unknown.output["passed"] is True
+
+
+def test_file_validate_records_malware_scan_as_skipped():
+    result, _ = _validate(_doc(), {"scan_malware": True})
+    check = result.output["checks"][-1]
+    assert (check["name"], check["skipped"]) == ("malware_scan", True)
+    assert "검사하지 않았습니다" in check["detail"]
 
 
 def test_file_validate_requires_document_id():
@@ -405,12 +425,12 @@ def test_block_metadata(block, btype, schema):
 
 
 def test_text_extract_block_version():
-    assert eb.TextExtractBlock().block_version == "1.22.0"
+    assert eb.TextExtractBlock().block_version == "1.25.0"
 
 
 def test_config_defaults_and_validation():
     assert eb.TextExtractConfig().engine == "auto"
-    assert eb.FileValidateConfig().allowed_extensions == [".pdf", ".docx", ".hwp", ".hwpx"]
+    assert {".pdf", ".docx", ".hwp", ".hwpx", ".xlsx", ".pptx", ".md", ".png"} <= set(eb.FileValidateConfig().allowed_extensions)
     with pytest.raises(Exception):
         eb.FileValidateConfig(max_pages="lots")
 

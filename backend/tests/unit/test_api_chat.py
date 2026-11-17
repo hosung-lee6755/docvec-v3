@@ -116,13 +116,24 @@ async def test_list_models_marks_cloud_models_available_per_registered_key(db_se
     db_session.add(UserApiKey(id=uuid4(), user_id=OWNER_ID, provider="anthropic", encrypted_key="x"))
     await db_session.flush()
 
-    result = await chat_api.list_chat_models(None, db_session, owner_user())
+    with patch("app.services.llm.pulled_local_models", return_value={"qwen2.5:3b-instruct-q4_K_M"}):
+        result = await chat_api.list_chat_models(None, db_session, owner_user())
 
     availability = {item["key"]: item["available"] for item in result["items"]}
     assert availability["qwen2.5-3b"] is True
+    # 추론 서버에 받아 두지 않은 로컬 모델은 고를 수 없다(예전에는 12GB에 안 들어가는 7B도 '사용 가능'이었다)
+    assert availability["qwen2.5-7b"] is False
     assert availability["claude-3-5-haiku"] is True
     assert availability["gpt-4o-mini"] is False
     assert result["default_system_prompt"]
+
+
+async def test_list_models_marks_local_models_unavailable_when_the_server_is_down(db_session):  # noqa: F811
+    with patch("app.services.llm.pulled_local_models", return_value=set()):
+        result = await chat_api.list_chat_models(None, db_session, owner_user())
+
+    availability = {item["key"]: item["available"] for item in result["items"]}
+    assert availability["qwen2.5-3b"] is False
 
 
 async def test_list_models_includes_project_keys_and_checks_project_access(db_session):  # noqa: F811
@@ -275,7 +286,7 @@ async def test_create_message_queues_generation_and_touches_conversation(db_sess
 
     assert (msg.status, msg.query) == ("PENDING", "후속 질문")
     task.delay.assert_called_once_with(str(msg.id))
-    limiter.assert_called_once_with(OWNER_ID, "chat_message", limit=30, window_seconds=60)
+    limiter.assert_called_once_with(OWNER_ID, "chat_message", limit=30, window_seconds=60, fail_closed=True)
     await db_session.refresh(conversation)
     assert conversation.updated_at.replace(tzinfo=None) > before  # UTCDateTime은 tz-aware로 돌려준다
 
@@ -353,3 +364,33 @@ def test_generating_deep_message_carries_its_progress():
         plain = chat_api._message_with_partial(SimpleNamespace(status="GENERATING", mode="standard", agent_steps=None, **base))
     assert deep.progress == progress and plain.progress is None
     lookup.assert_called_once()
+
+
+# ------------------------------------------------------------ 사용자 평가(2026-11-16)
+
+async def test_feedback_is_saved_cleared_and_returned(db_session):  # noqa: F811
+    conversation = await _conversation(db_session)
+    message = await _message(db_session, conversation)
+
+    rated = await chat_api.set_message_feedback(
+        message.id, chat_api.MessageFeedbackRequest(rating="down", note="  기간이 틀림  "), db_session, owner_user()
+    )
+    assert (rated.feedback, rated.feedback_note) == ("down", "기간이 틀림")
+    assert message.feedback_at is not None
+
+    cleared = await chat_api.set_message_feedback(
+        message.id, chat_api.MessageFeedbackRequest(rating=None, note="남지 않는다"), db_session, owner_user()
+    )
+    assert (cleared.feedback, cleared.feedback_note, message.feedback_at) == (None, None, None)
+
+
+async def test_feedback_only_by_owner_on_finished_messages(db_session):  # noqa: F811
+    conversation = await _conversation(db_session)
+    pending = await _message(db_session, conversation, status="GENERATING")
+    done = await _message(db_session, conversation)
+    body = chat_api.MessageFeedbackRequest(rating="up")
+
+    await assert_http_error(chat_api.set_message_feedback(pending.id, body, db_session, owner_user()), 409)
+    await assert_http_error(chat_api.set_message_feedback(done.id, body, db_session, stranger_user()), 403)
+    await assert_http_error(chat_api.set_message_feedback(uuid4(), body, db_session, owner_user()), 404)
+    assert done.feedback is None

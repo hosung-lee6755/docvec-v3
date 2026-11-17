@@ -147,7 +147,9 @@ def test_cloud_generation_records_tokens_and_verifier(chat_env, world):
     _conv, msg = chat_env.build(model_key="gpt-4o-mini")
     provider = ScriptedProvider(usage={"input_tokens": 1000, "output_tokens": 500})
 
-    with patch.object(chat, "_find_api_key", return_value="sk-test"):
+    # 근거 청크의 문서는 DB에 없는 가짜 id다. 등급 판정은 test_external_model_policy가 따로 본다
+    no_blocked = patch("app.services.external_model_policy.blocked_document_ids", return_value=[])
+    with patch.object(chat, "_find_api_key", return_value="sk-test"), no_blocked:
         chat_env.run(msg.id, provider)
 
     db = world.factory()

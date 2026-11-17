@@ -1,9 +1,9 @@
 import { Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { Document, useReprocessDocument, useRestoreRevision } from '../../hooks/useDocuments'
+import type { Document, DocumentChunksResult, useReprocessDocument, useRestoreRevision } from '../../hooks/useDocuments'
 import { ViewModeToggle } from './documentDetailParts'
-import { REVISION_SOURCE_LABELS, toBlocksJson, type TabKey } from './documentDetailHelpers'
+import { REVISION_SOURCE_LABELS, toRagRecordsJson, type TabKey } from './documentDetailHelpers'
 import type { DocumentNodesResult } from '../../hooks/useDocumentStructure'
 import { ErrorText } from '../ui'
 
@@ -16,6 +16,7 @@ interface EditTabProps {
   contentError?: unknown
   revisionsResult: { revisions: Array<{ id: string; source: string; created_at: string; text_length: number; preview: string }> } | undefined
   editNodesResult: DocumentNodesResult | undefined
+  chunksResult: DocumentChunksResult | undefined
   editedContent: string
   showJson: boolean
   reprocess: ReturnType<typeof useReprocessDocument>
@@ -34,6 +35,7 @@ export default function EditTab({
   contentError,
   revisionsResult,
   editNodesResult,
+  chunksResult,
   editedContent,
   showJson,
   reprocess,
@@ -163,6 +165,12 @@ export default function EditTab({
       <div style={{ flexShrink: 0 }}>
         <ViewModeToggle showJson={showJson} onChange={onShowJsonChange} />
       </div>
+      {showJson && (
+        <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)', flexShrink: 0 }}>
+          검색과 채팅이 실제로 쓰는 RAG 레코드(벡터 DB에 저장된 청크와 절 경로, 요소 유형, 쪽 같은 메타데이터)입니다.
+          본문 수정은 텍스트 보기에서 하고, 저장하면 청크가 다시 만들어집니다.
+        </p>
+      )}
       {showJson ? (
         <pre style={{
           flex: 1, minHeight: 0, overflow: 'auto', fontSize: 12, lineHeight: 1.6,
@@ -170,7 +178,7 @@ export default function EditTab({
           border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)',
           padding: 'var(--space-3)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0,
         }}>
-          {toBlocksJson(editedContent)}
+          {chunksResult ? toRagRecordsJson(doc, chunksResult.chunks) : '저장된 청크를 불러오는 중입니다.'}
         </pre>
       ) : (
         <div className="textarea-wrap" style={{ flex: 1, minHeight: 0 }}>

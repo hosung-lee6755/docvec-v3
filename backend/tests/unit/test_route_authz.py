@@ -32,6 +32,11 @@ PUBLIC_ROUTES = {
     ("POST", "/api/v1/auth/refresh"),
     # 리프레시 쿠키만 지운다 — 액세스 토큰이 만료된 사용자도 로그아웃할 수 있어야 한다.
     ("POST", "/api/v1/auth/logout"),
+    # 통합 로그인(OIDC) 흐름은 로그인 전에 불린다. login과 callback은 OIDC가 꺼져 있으면 404이고,
+    # exchange는 60초짜리 일회용 코드가 맞아야만 세션을 준다.
+    ("GET", "/api/v1/auth/oidc/login"),
+    ("GET", "/api/v1/auth/oidc/callback"),
+    ("POST", "/api/v1/auth/oidc/exchange"),
     # MCP 무상태 서버는 GET(서버 발신 스트림)과 DELETE(세션 종료)를 지원하지 않아 항상 405만 돌려준다.
     # 데이터를 내지 않으므로 인증 전에 답해도 된다. 실제 요청(POST)은 개인 접근 토큰을 요구한다.
     ("GET", "/api/v1/mcp"),

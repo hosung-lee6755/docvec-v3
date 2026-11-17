@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
 
 // Docling 도입 설계서(2026-07-23) Phase 4 — Document.elements(JSON 컬럼,
@@ -43,14 +43,27 @@ export interface DocumentElementItem {
 export interface DocumentElementsResult {
   document_id: string
   elements: DocumentElementItem[]
+  total: number
+  offset: number
+  corrected_count: number
 }
 
+// 큰 문서는 요소가 수천 개라(988쪽 문서 약 6,900개) 200개씩 나눠 받는다(2026-11-16).
+export const ELEMENTS_PAGE_SIZE = 200
+
 export function useDocumentElements(documentId: string, enabled = true) {
-  return useQuery<DocumentElementsResult>({
+  return useInfiniteQuery({
     queryKey: ['documents', documentId, 'elements'],
-    queryFn: async () => {
-      const { data } = await apiClient.get(`/documents/${documentId}/elements`)
+    queryFn: async ({ pageParam }) => {
+      const { data } = await apiClient.get<DocumentElementsResult>(`/documents/${documentId}/elements`, {
+        params: { offset: pageParam, limit: ELEMENTS_PAGE_SIZE },
+      })
       return data
+    },
+    initialPageParam: 0,
+    getNextPageParam: (last) => {
+      const next = last.offset + last.elements.length
+      return next < last.total ? next : undefined
     },
     enabled: enabled && !!documentId,
   })

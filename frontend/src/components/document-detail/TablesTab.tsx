@@ -1,6 +1,7 @@
 import { Loader2 } from 'lucide-react'
 import type { DocumentTablesResult } from '../../hooks/useDocuments'
 import { ErrorText } from '../ui'
+import { layoutCells } from '../../lib/tableSpans'
 
 interface TablesTabProps {
   isLoading: boolean
@@ -49,19 +50,22 @@ export default function TablesTab({
           <div style={{ overflowX: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
             <table style={{ borderCollapse: 'collapse', fontSize: 13, whiteSpace: 'nowrap' }}>
               <tbody>
-                {table.rows.map((row, ri) => (
+                {layoutCells(table.rows, table.spans).map((row, ri) => (
                   <tr key={ri}>
-                    {row.map((cell, ci) => (
+                    {row.map((cell) => (
                       <td
-                        key={ci}
+                        key={cell.column}
+                        rowSpan={cell.rowSpan}
+                        colSpan={cell.colSpan}
                         style={{
+                          verticalAlign: 'top',
                           padding: '6px 10px',
                           border: '1px solid var(--color-border)',
                           background: ri === 0 ? 'var(--color-surface-subtle)' : undefined,
                           fontWeight: ri === 0 ? 600 : 400,
                         }}
                       >
-                        {cell}
+                        {cell.text}
                       </td>
                     ))}
                   </tr>

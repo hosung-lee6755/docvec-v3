@@ -416,3 +416,31 @@ button.ds-stat:focus-visible, a.ds-stat:focus-visible { outline: none; box-shado
 .group-carryover__actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .group-carryover__list a { color: var(--color-primary); text-decoration: underline; text-underline-offset: 2px; }
 .group-carryover__list a:hover { text-decoration-thickness: 2px; }
+
+/* 알림(전체 점검 2-7). 사이드바 아래쪽 단추에서 위로 열린다. 패널은 body에 그려 사이드바에 잘리거나 본문 틀에 가려지지 않게 한다. */
+.ds-notify { position: relative; display: flex; }
+.ds-notify__trigger { position: relative; }
+.ds-notify__dot { position: absolute; top: -3px; right: -4px; min-width: 15px; height: 15px; padding: 0 3px; box-sizing: border-box; border-radius: var(--radius-pill); background: var(--color-danger); color: var(--color-text-inverse); font-size: 10px; font-weight: var(--weight-semibold); line-height: 15px; text-align: center; }
+.ds-notify__panel { position: fixed; left: 12px; bottom: 92px; z-index: 60; width: min(360px, calc(100vw - 24px)); max-height: min(520px, calc(100vh - 120px)); display: flex; flex-direction: column; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden; }
+.ds-notify__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); font-size: var(--text-md); }
+.ds-notify__all { border: 0; background: transparent; padding: 2px 4px; border-radius: var(--radius-sm); color: var(--color-primary); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.ds-notify__all:hover:not(:disabled) { text-decoration: underline; }
+.ds-notify__all:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.ds-notify__all:disabled { color: var(--color-text-disabled); cursor: default; }
+.ds-notify__empty { margin: 0; padding: var(--space-6) var(--space-4); color: var(--color-text-muted); font-size: var(--text-sm); text-align: center; }
+.ds-notify__list { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
+.ds-notify__item { display: flex; align-items: flex-start; gap: 2px; padding-right: var(--space-2); border-bottom: 1px solid var(--color-border-subtle); border-left: 3px solid transparent; }
+.ds-notify__item:last-child { border-bottom: 0; }
+.ds-notify__item.is-unread { border-left-color: var(--color-primary); background: var(--color-primary-subtle); }
+.ds-notify__open { flex: 1; min-width: 0; display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-2) var(--space-3) var(--space-3); border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.ds-notify__open:hover .ds-notify__title { text-decoration: underline; }
+.ds-notify__open:focus-visible { outline: none; box-shadow: inset var(--focus-ring); }
+.ds-notify__icon { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; }
+.ds-notify__icon--danger { background: var(--color-danger-bg); color: var(--color-danger); }
+.ds-notify__icon--warning { background: var(--color-warning-bg); color: var(--color-warning-text); }
+.ds-notify__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ds-notify__title { font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--color-text); overflow-wrap: anywhere; }
+.ds-notify__item:not(.is-unread) .ds-notify__title { font-weight: var(--weight-regular); color: var(--color-text-secondary); }
+.ds-notify__body { font-size: var(--text-xs); color: var(--color-text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.ds-notify__time { font-size: var(--text-xs); color: var(--color-text-subtle); }
+.ds-notify__remove { margin-top: var(--space-2); flex-shrink: 0; }

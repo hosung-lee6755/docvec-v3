@@ -304,3 +304,25 @@ def test_a_short_line_right_before_a_table_becomes_its_title():
     chunks = _tree(nodes, text, max_chars=200, min_chars=30, respect_headings=True, merge_small_sections=True)
 
     assert [c.text for c in chunks] == [first, caption + "XX" + second]
+
+
+# ---- 청크 본문에서 머리말·꼬리말·목차 지우기(2026-11-13) ----
+def test_strip_ranges_removes_footer_inside_chunk_but_keeps_heading_prefix():
+    full = "본문 앞쪽. 꼬리말 텍스트 본문 뒤쪽."
+    footer = (full.index("꼬리말"), full.index("꼬리말") + len("꼬리말 텍스트 "))
+    chunk = "[1장]\n" + full
+
+    assert cs.strip_ranges(chunk, full, 0, len(full), [footer]) == "[1장]\n본문 앞쪽. 본문 뒤쪽."
+
+
+def test_strip_ranges_leaves_rewritten_text_alone():
+    full = "| a | b |\n꼬리말"
+    assert cs.strip_ranges("표: a, b", full, 0, len(full), [(10, 13)]) == "표: a, b"
+
+
+def test_non_body_ranges_picks_only_header_footer_toc():
+    from types import SimpleNamespace as N
+
+    nodes = [N(node_type="FOOTER", span_start=5, span_end=9), N(node_type="PARAGRAPH", span_start=0, span_end=5),
+             N(node_type="TOC", span_start=1, span_end=3), N(node_type="HEADER", span_start=None, span_end=None)]
+    assert cs.non_body_ranges(nodes) == [(1, 3), (5, 9)]

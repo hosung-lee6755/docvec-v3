@@ -15,10 +15,11 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockExecutionError, BlockResult
+from app.pipeline.formats import SUPPORTED_SUFFIXES
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_ALLOWED_EXTENSIONS = [".pdf", ".docx", ".hwp", ".hwpx"]
+_DEFAULT_ALLOWED_EXTENSIONS = sorted(SUPPORTED_SUFFIXES)
 # PDF-only has_text_layer heuristic (format_detect) — sample the first few
 # pages rather than the whole document so detection stays cheap; a scanned
 # PDF has ~0 extractable chars on every page, a real one has plenty on any.
@@ -33,6 +34,21 @@ class FileValidateConfig(BaseModel):
     reject_duplicates: bool = True
     max_pages: int = 1000
     scan_malware: bool = False
+
+
+def _pdf_page_count(minio_key: str) -> int | None:
+    """원본 PDF의 쪽수. 파일을 열 수 없으면 None을 돌려주고, 그 판단은 다음 블록(형식 판별)에 맡긴다."""
+    from app.core.config import settings
+    from app.services.storage import storage_service
+
+    try:
+        import fitz
+
+        data = storage_service.download_file(settings.minio_bucket_originals, minio_key)
+        with fitz.open(stream=data, filetype="pdf") as pdf:
+            return pdf.page_count
+    except Exception:  # noqa: BLE001 - 깨졌거나 암호화된 파일은 형식 판별 블록이 사유와 함께 거부한다
+        return None
 
 
 class FileValidateBlock(BaseBlock):
@@ -92,12 +108,24 @@ class FileValidateBlock(BaseBlock):
                     "detail": str(dup.id) if dup else None,
                 })
 
-            # reject_encrypted/max_pages: real detection needs the file open,
-            # which format_detect already does next — enforced there instead
-            # of downloading the file twice. scan_malware: no-op placeholder,
+            # max_pages: 설정만 있고 적용되지 않던 것을 연결했다(2026-11-16). PDF만 쪽수를 미리 알 수 있다.
+            # 통과했을 때는 출력에 항목을 더하지 않는다. 출력이 바뀌면 뒤 블록의 캐시가 전부 무효가 된다.
+            if suffix == ".pdf":
+                pages = _pdf_page_count(doc.minio_key)
+                if pages is not None and pages > cfg.max_pages:
+                    raise BlockExecutionError(
+                        f"페이지 수 초과: {pages}쪽 > {cfg.max_pages}쪽",
+                        error_code="FILE_UNSUPPORTED", permanent=True,
+                    )
+
+            # reject_encrypted: 암호화 여부는 파일을 열어 보는 형식 판별 블록이 검사한다.
+            # scan_malware: no-op placeholder,
             # no ClamAV integration exists yet (설계서 §3.3① "연동 여지").
             if cfg.scan_malware:
-                checks.append({"name": "malware_scan", "ok": True, "detail": "스캔 미연동(통과 처리)"})
+                checks.append({
+                    "name": "malware_scan", "ok": True, "skipped": True,
+                    "detail": "검사 엔진이 연결되어 있지 않아 검사하지 않았습니다",
+                })
 
             return BlockResult(output={"passed": True, "checks": checks, "document_id": str(doc.id)})
         finally:
@@ -148,6 +176,11 @@ def resolve_extract_engine(engine: str, path: Path, mime_type: str) -> tuple[str
             "추출 엔진을 '자동'으로 바꾸면 전면 OCR 로 처리합니다."
         )
     return "legacy", "텍스트 레이어가 없는 스캔 PDF 라 Docling 대신 전면 OCR 엔진으로 처리했습니다."
+
+
+def _is_scanned_pdf_run(path: Path, engine: str, routing_note: str | None) -> bool:
+    """자동 엔진이 글자 층이 없는 PDF를 전면 OCR로 돌린 경우인가. 그때만 안내 문구가 붙는다."""
+    return path.suffix.lower() == ".pdf" and engine == "legacy" and routing_note is not None
 
 
 class FormatDetectBlock(BaseBlock):
@@ -236,6 +269,9 @@ class TextExtractConfig(BaseModel):
     # "auto"(기본): 텍스트 레이어가 있는 PDF 는 Docling, 스캔 PDF 는 전면 OCR(legacy).
     # "docling"/"legacy"는 강제 선택. DOCX/HWP/HWPX는 이 값과 무관하게 항상 기존 어댑터.
     engine: str = "auto"
+    # 스캔 PDF에서 표와 그림을 따로 찾아 덧붙인다(전체 점검 1-3). 본문은 전면 OCR 결과를 그대로 쓴다.
+    # 쪽마다 레이아웃 인식을 한 번 더 하므로 처리 시간이 늘어난다(27쪽에 약 90초 실측)
+    scan_layout: bool = True
 
 
 # Repeated-position clustering thresholds — a line counts as a running
@@ -529,7 +565,9 @@ class TextExtractBlock(BaseBlock):
         # 1.22.0: (2026-11-13 전처리 성능 검토) page_map 을 실제 조립 텍스트 기준으로 만들고, HWP/HWPX 표를
         # 문서 순서 자리에 두며 셀 안 문단을 " / "로 구분하고, Docling 표의 실제 머리글 행을 남기고, OCR 이 %를
         # 9·96으로 읽은 값을 고치고, 잡음뿐인 그림 인식 결과를 본문에서 뺀다 — 이전 캐시는 이 모두가 달랐다.
-        return "1.22.0"
+        # 1.23.0: (2026-11-16 전체 점검) 스캔 PDF의 표와 그림을 따로 찾아 덧붙인다(scan_layout).
+        # XLSX, PPTX, TXT, MD, HTML, 이미지 형식을 받는다.
+        return "1.25.0"
 
     @property
     def category(self) -> str:
@@ -544,6 +582,7 @@ class TextExtractBlock(BaseBlock):
         from app.db.models.document_revision import DocumentTextRevision
         from app.db.session import get_sync_db
         from app.pipeline.adapters import UnsupportedFileTypeError, get_adapter
+        from app.pipeline.adapters.hwpx_structure import sync_layout_pages
         from app.pipeline.job_tracker import complete_job, fail_job, start_job
         from app.pipeline.tasks.process import (
             _apply_preview_page_count,
@@ -597,12 +636,17 @@ class TextExtractBlock(BaseBlock):
                 parsed = adapter.extract(tmp_path, adapter_options)
                 if routing_note:
                     parsed.warnings.append(routing_note)
+                if cfg.scan_layout and _is_scanned_pdf_run(tmp_path, engine, routing_note):
+                    from app.pipeline.adapters.scan_layout import enrich_scanned_pdf
+
+                    enrich_scanned_pdf(parsed, tmp_path)
             finally:
                 tmp_path.unlink(missing_ok=True)
 
             if parsed.format_id in ("hwp", "hwpx"):
                 try:
                     _repaginate_hwp_like(str(doc.id), doc, parsed)
+                    sync_layout_pages(parsed)
                 except Exception:
                     # degrade to page_number=1, matching parse_document's behavior
                     logger.warning(
@@ -629,7 +673,9 @@ class TextExtractBlock(BaseBlock):
             image_records = []
             if cfg.recognize_figures:
                 try:
-                    image_records = _recognize_document_images(str(doc.id), parsed, vision_options)
+                    image_records = _recognize_document_images(
+                        str(doc.id), parsed, vision_options, max_figures=cfg.max_figures,
+                    )
                 except Exception:
                     logger.exception("image recognition failed", extra={"document_id": str(doc.id)})
                     image_records = []
@@ -688,6 +734,7 @@ class TextExtractBlock(BaseBlock):
                     "page_number": page.page_number, "rows": table.rows,
                     "id": table.id, "confidence": table.confidence,
                     "detected_as": table.detected_as,
+                    **({"spans": table.spans} if getattr(table, "spans", None) else {}),
                 }
                 for page in parsed.pages
                 for table in page.table_candidates

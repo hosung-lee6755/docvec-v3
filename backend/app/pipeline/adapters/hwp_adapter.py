@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.pipeline.adapters.base import (
@@ -9,6 +10,9 @@ from app.pipeline.adapters.base import (
     RawTableCandidate,
     RawTextBlock,
 )
+from app.pipeline.adapters.hwpx_structure import HwpxStyles, load_styles, paragraph_layout, table_grid
+
+HWPX_HEADER = "Contents/header.xml"
 
 _IMAGE_MAGIC_PREFIXES = (b"\x89PNG", b"\xff\xd8", b"BM", b"GIF8", b"II*\x00", b"MM\x00*")
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".tif")
@@ -109,18 +113,34 @@ def _hwpx_cell_text(tc) -> str:
     return CELL_PARAGRAPH_SEP.join(parts)
 
 
+@dataclass
+class _HwpxContext:
+    """HWPX 한 문서를 훑는 동안 모으는 서식 정보(전체 점검 2-2, 2-12)."""
+
+    styles: HwpxStyles = field(default_factory=HwpxStyles)
+    # 문단 조각과 같은 순서의 줄 정보(글자 크기, 굵기, 개요 수준)
+    layout: list[dict] = field(default_factory=list)
+    # 표 번호(0부터) → 합친 칸 목록
+    spans: dict[int, list[dict]] = field(default_factory=dict)
+
+
 def _hwpx_table_rows(tbl_elem) -> list[list[str]]:
-    rows = []
-    for tr in tbl_elem:
-        if _hwpx_local_tag(tr) != "tr":
-            continue
-        cells = [_hwpx_cell_text(tc) for tc in tr if _hwpx_local_tag(tc) == "tc"]
-        if any(cells):
-            rows.append(cells)
-    return rows
+    return table_grid(tbl_elem, _hwpx_cell_text)[0]
 
 
-def _collect_nested_hwpx_tables(elem, tables: list[list[list[str]]], order: list | None = None) -> None:
+def _add_hwpx_table(tbl_elem, tables: list, order: list | None, ctx: _HwpxContext | None) -> None:
+    rows, spans = table_grid(tbl_elem, _hwpx_cell_text)
+    if not rows:
+        return
+    tables.append(rows)
+    if ctx is not None and spans:
+        ctx.spans[len(tables) - 1] = spans
+    _record(order, "t", len(tables) - 1)
+
+
+def _collect_nested_hwpx_tables(
+    elem, tables: list[list[list[str]]], order: list | None = None, ctx: _HwpxContext | None = None,
+) -> None:
     """HWPX anchors a table as an inline object inside its host paragraph's
     run (hp:p > hp:run > hp:tbl), not as the paragraph's sibling — so once a
     paragraph's own text is collected, its children must still be searched
@@ -128,12 +148,9 @@ def _collect_nested_hwpx_tables(elem, tables: list[list[list[str]]], order: list
     so this can't create duplicate top-level paragraph entries."""
     for child in elem:
         if _hwpx_local_tag(child) == "tbl":
-            rows = _hwpx_table_rows(child)
-            if rows:
-                tables.append(rows)
-                _record(order, "t", len(tables) - 1)
+            _add_hwpx_table(child, tables, order, ctx)
             continue
-        _collect_nested_hwpx_tables(child, tables, order)
+        _collect_nested_hwpx_tables(child, tables, order, ctx)
 
 
 def _hwp_collect_text(elem) -> str:
@@ -214,6 +231,7 @@ def _walk_hwp_body(
 
 def _walk_hwpx(
     elem, paragraphs: list[str], tables: list[list[list[str]]], order: list | None = None,
+    ctx: _HwpxContext | None = None,
 ) -> None:
     """Walks an HWPX section XML tree, separating table cells from loose
     paragraph text. A table is anchored inline inside its host paragraph's
@@ -223,28 +241,31 @@ def _walk_hwpx(
     from that text so the table's cell content isn't double-counted."""
     tag = _hwpx_local_tag(elem)
     if tag == "tbl":
-        rows = _hwpx_table_rows(elem)
-        if rows:
-            tables.append(rows)
-            _record(order, "t", len(tables) - 1)
+        _add_hwpx_table(elem, tables, order, ctx)
         return
     if tag == "p":
         text = _hwpx_collect_text(elem, skip_tables=True).strip()
         if text:
             paragraphs.append(text)
             _record(order, "p", len(paragraphs) - 1)
-        _collect_nested_hwpx_tables(elem, tables, order)
+            if ctx is not None:
+                ctx.layout.append(paragraph_layout(elem, text, ctx.styles))
+        _collect_nested_hwpx_tables(elem, tables, order, ctx)
         return
     for child in elem:
-        _walk_hwpx(child, paragraphs, tables, order)
+        _walk_hwpx(child, paragraphs, tables, order, ctx)
 
 
 def _ordered_text_blocks(
     paragraphs: list[str], tables: list[list[list[str]]], order: list[tuple[str, int]],
+    spans: dict[int, list[dict]] | None = None,
 ) -> tuple[list[RawTextBlock], list[RawTableCandidate]]:
     """문단과 표를 문서에 나온 순서대로 블록으로 만든다. 예전에는 표를 모두 문서 끝에 붙여 표가 설명 문단과
     떨어지고, 청크에서 무슨 표인지 알 수 없었다(2026-11-13 검토). 표 번호 [표 N]도 문서 순서다."""
-    table_candidates = [RawTableCandidate(page_number=1, rows=rows) for rows in tables]
+    table_candidates = [
+        RawTableCandidate(page_number=1, rows=rows, spans=(spans or {}).get(index))
+        for index, rows in enumerate(tables)
+    ]
     text_blocks: list[RawTextBlock] = []
     for kind, index in order:
         if kind == "p":
@@ -282,12 +303,9 @@ class HWPAdapter(BaseAdapter):
         }
 
     def extract(self, file_path: Path, options: dict) -> RawParsedDocument:
-        # Deliberately does not populate metadata["line_layout"] (문서 파싱
-        # 고도화 Phase 1) — pyhwp exposes no stable per-run font-size/bold API
-        # for HWP/HWPX, unlike pdfplumber's page.chars or python-docx's
-        # run.font. structure_blocks.py falls back to its regex-only path for
-        # any document with no line_layout, so this is a silent, safe no-op
-        # rather than a half-populated/misleading signal.
+        # HWP(구형 바이너리)는 metadata["line_layout"]을 채우지 않는다. pyhwp가 글자 크기와 굵기를
+        # 안정적으로 내주지 않기 때문이다. 줄 정보가 없으면 structure_blocks.py는 정규식만으로 판정한다.
+        # HWPX는 XML에서 글자 모양과 개요 스타일을 직접 읽어 채운다(전체 점검 2-12, hwpx_structure.py).
         suffix = file_path.suffix.lower()
         if suffix == ".hwpx":
             return self._extract_hwpx(file_path)
@@ -365,12 +383,16 @@ class HWPAdapter(BaseAdapter):
         paragraphs: list[str] = []
         raw_tables: list[list[list[str]]] = []
         order: list[tuple[str, int]] = []
+        ctx = _HwpxContext()
         try:
             with zipfile.ZipFile(file_path, "r") as z:
+                if HWPX_HEADER in z.namelist():
+                    with z.open(HWPX_HEADER) as f:
+                        ctx.styles = load_styles(parse_xml(f))
                 for name in sorted(z.namelist()):
                     if name.startswith("Contents/") and name.endswith(".xml"):
                         with z.open(name) as f:
-                            _walk_hwpx(parse_xml(f), paragraphs, raw_tables, order)
+                            _walk_hwpx(parse_xml(f), paragraphs, raw_tables, order, ctx)
                 raw_images = _hwpx_bindata_images(z)
         except Exception as exc:
             return RawParsedDocument(
@@ -384,7 +406,7 @@ class HWPAdapter(BaseAdapter):
         # See the matching comment in _extract_hwp: one block per paragraph so
         # the repagination pass can locate each paragraph independently in the
         # rendered preview PDF's per-page text.
-        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order)
+        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order, ctx.spans)
 
         page = RawPage(
             page_number=1,
@@ -398,7 +420,7 @@ class HWPAdapter(BaseAdapter):
             ],
         )
         return RawParsedDocument(
-            format_id="hwpx", page_count=1, pages=[page], metadata={}, warnings=[]
+            format_id="hwpx", page_count=1, pages=[page], metadata={"line_layout": ctx.layout}, warnings=[]
         )
 
     def extract_metadata(self, file_path: Path) -> dict:

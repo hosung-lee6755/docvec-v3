@@ -111,3 +111,36 @@ def test_extract_metadata_sets_failed_on_provider_error():
 def test_parse_keywords_drops_overlong_lines():
     long_line = "가" * 200
     assert _parse_keywords(f"예산\n{long_line}", exclude=set()) == ["예산"]
+
+
+def test_extract_metadata_sets_category_from_filename():
+    doc = _document()
+    doc.original_filename = "2026년도 지원사업 2차 공고.pdf"
+    doc.user_edited_fields = None
+
+    result = _run(doc, "예산")
+
+    assert doc.category == "공고문"
+    assert result["category"] == "공고문"
+
+
+def test_extract_metadata_keeps_user_edited_category():
+    doc = _document()
+    doc.original_filename = "2026년도 지원사업 2차 공고.pdf"
+    doc.user_edited_fields = ["category"]
+    doc.category = "계약서"
+
+    _run(doc, "예산")
+
+    assert doc.category == "계약서"
+
+
+def test_every_task_module_is_registered_with_the_workers():
+    """include에 빠진 모듈의 작업은 워커가 "등록되지 않은 작업"으로 버린다.
+    metadata 모듈이 빠져 있어 메타데이터 추출이 한 번도 돌지 않았다(2026-11-16)."""
+    from pathlib import Path
+
+    from app.pipeline import celery_app as ca, tasks
+
+    modules = {f"app.pipeline.tasks.{p.stem}" for p in Path(tasks.__file__).parent.glob("*.py") if p.stem != "__init__"}
+    assert modules <= set(ca.celery_app.conf.include)

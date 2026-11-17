@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 RUN_QUEUED, RUN_RUNNING, RUN_DONE, RUN_FAILED = "QUEUED", "RUNNING", "DONE", "FAILED"
 TRIGGER_MANUAL = "manual"
+# 평가가 만든 대화의 채널. 사용자 대화 목록(web)과 MCP 동시 실행 제한(mcp)에 섞이지 않는다
+EVAL_CHANNEL = "eval"
 AUTO_TRIGGERS = ("search_settings", "dictionary", "new_version", "lifecycle", "document_deleted")
 REGRESSION_METRICS = ("mean_hit_rate", "mean_recall", "mean_mrr")
 # 허용치와 똑같이 떨어진 경우를 부동소수 오차(0.95 - 1.0 = -0.0500…04)로 회귀라 하지 않게 둔다
@@ -66,6 +68,32 @@ def score_query(expected_ids: list, retrieved_ids: list[str], lineage_of: dict[s
         "reciprocal_rank": 1.0 / rank if rank else 0.0,
         "first_hit_rank": rank or None,
     }
+
+
+_ANSWER_MAX_LEN = 4000
+
+
+def _fact_key(text: str) -> str:
+    """띄어쓰기와 대소문자, 천 단위 쉼표 차이로 놓치지 않게 맞춘 비교용 문자열."""
+    return "".join(text.split()).replace(",", "").lower()
+
+
+def score_facts(expected_facts: list[str], answer: str | None) -> dict:
+    """답에 기대 사실이 몇 개 들어 있는지 센다. 문자열 포함 여부만 보므로 결과가 매번 같다.
+    표현을 바꿔 쓴 답은 놓칠 수 있으니, 사실은 숫자나 이름처럼 그대로 나와야 하는 짧은 문구로 적는다."""
+    facts = [f for f in expected_facts if f and f.strip()]
+    haystack = _fact_key(answer or "")
+    found = [f for f in facts if _fact_key(f) in haystack]
+    return {
+        "expected_facts": facts,
+        "facts_found": found,
+        "fact_recall": len(found) / len(facts) if facts else None,
+    }
+
+
+def mean_fact_recall(results: list[dict]) -> float | None:
+    values = [r["fact_recall"] for r in results if r.get("fact_recall") is not None]
+    return sum(values) / len(values) if values else None
 
 
 def summarize(results: list[dict]) -> dict:
@@ -141,6 +169,40 @@ def _retrieved_document_ids(chunks: list[dict]) -> list[str]:
     return _ordered_unique(str(c.get("document_id")) for c in chunks if c.get("document_id"))
 
 
+def _answer_result(db, run: GoldenEvalRun, gq: GoldenQuery) -> dict:
+    """채팅과 똑같은 경로(generate_answer)로 답을 만들어 기대 사실과 대조한다.
+    평가용 대화는 channel="eval"이라 사용자의 대화 목록에 나오지 않고, 답변 캐시도 쓰지 않는다.
+    답 하나가 실패해도 평가 전체는 계속한다."""
+    from app.db.models.chat_conversation import ChatConversation
+    from app.db.models.chat_message import ChatMessage
+    from app.pipeline.tasks.chat import generate_answer
+
+    conversation = ChatConversation(
+        user_id=str(run.created_by), collection_id=str(run.collection_id), model_key=settings.mcp_answer_model,
+        title=f"[평가] {gq.query.strip()[:50]}", channel=EVAL_CHANNEL,
+    )
+    db.add(conversation)
+    db.flush()
+    message = ChatMessage(conversation_id=conversation.id, query=gq.query, status="PENDING", mode="standard")
+    db.add(message)
+    db.commit()
+    message_id = str(message.id)
+    try:
+        generate_answer.apply(args=[message_id])
+    except Exception:  # noqa: BLE001
+        logger.exception("golden eval answer failed: run=%s query=%s", run.id, gq.id)
+    db.expire_all()
+    message = db.get(ChatMessage, message_id)
+    done = message is not None and message.status == "DONE"
+    answer = (message.answer or "") if done else ""
+    return {
+        **score_facts(list(gq.expected_facts or []), answer),
+        "answer_status": "DONE" if done else "FAILED",
+        "answer": answer[:_ANSWER_MAX_LEN] or None,
+        "citation_count": len(message.citations or []) if done else 0,
+    }
+
+
 def evaluate_run_sync(db, run_id: str) -> GoldenEvalRun | None:
     """대기 중인 실행 하나를 끝까지 돌린다. 실패하면 FAILED와 사유를 남긴다."""
     from app.pipeline.tasks.chat import _retrieve_chunks
@@ -171,6 +233,7 @@ def evaluate_run_sync(db, run_id: str) -> GoldenEvalRun | None:
                 "expected_document_ids": [str(d) for d in gq.expected_document_ids],
                 "retrieved_document_ids": retrieved_by_query[str(gq.id)],
                 **score_query(gq.expected_document_ids, retrieved_by_query[str(gq.id)], lineage_of),
+                **(_answer_result(db, run, gq) if run.with_answers and gq.expected_facts else {}),
             }
             for gq in queries
         ]
@@ -192,6 +255,7 @@ def _finish(db, run: GoldenEvalRun, results: list[dict], means: dict, search_set
     run.mean_recall = means["mean_recall"]
     run.mean_hit_rate = means["mean_hit_rate"]
     run.mean_mrr = means["mean_mrr"]
+    run.mean_fact_recall = mean_fact_recall(results)
     run.search_settings = search_settings
     baseline = db.scalar(
         select(GoldenEvalRun).where(
@@ -260,9 +324,12 @@ def enqueue_run(run_id: str, countdown: int = 0) -> None:
     run_golden_eval.apply_async(args=[run_id], countdown=countdown)
 
 
-def new_run(collection_id: str, created_by: str, top_k: int, trigger: str) -> GoldenEvalRun:
+def new_run(
+    collection_id: str, created_by: str, top_k: int, trigger: str, with_answers: bool = False,
+) -> GoldenEvalRun:
     return GoldenEvalRun(
         collection_id=collection_id, created_by=created_by, top_k=top_k, status=RUN_QUEUED, trigger=trigger,
+        with_answers=with_answers,
     )
 
 

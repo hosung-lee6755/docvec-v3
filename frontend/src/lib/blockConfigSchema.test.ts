@@ -31,10 +31,10 @@ describe('jsonSchemaToConfigFields — 자유 입력을 선택으로', () => {
       allowed_extensions: { type: 'array', items: { type: 'string' } },
     } }
     expect(field(arr, 'pii_detect', 'entity_types')?.options?.map((o) => o.value))
-      .toEqual(['RRN', 'PHONE', 'EMAIL', 'ACCOUNT', 'CARD', 'NAME'])
+      .toEqual(['RRN', 'PHONE', 'EMAIL', 'ACCOUNT', 'CARD', 'NAME', 'ADDRESS', 'DRIVER_LICENSE', 'PASSPORT', 'BIZNO'])
     expect(field(arr, 'user_dict', 'term_types')?.options?.length).toBe(8)
     expect(field(arr, 'file_validate', 'allowed_extensions')?.options?.map((o) => o.value))
-      .toEqual(['.pdf', '.docx', '.hwp', '.hwpx'])
+      .toEqual(expect.arrayContaining(['.pdf', '.docx', '.hwp', '.hwpx', '.xlsx', '.pptx', '.md', '.png']))
     for (const [bt, k] of [['pii_detect', 'entity_types'], ['user_dict', 'term_types'], ['file_validate', 'allowed_extensions']]) {
       expect(field(arr, bt, k)?.type).toBe('list')
     }

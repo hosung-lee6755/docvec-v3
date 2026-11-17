@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.pipeline.adapters.base import BaseAdapter
+from app.pipeline.formats import SUPPORTED_LABEL
 
 
 class UnsupportedFileTypeError(Exception):
@@ -9,16 +10,24 @@ class UnsupportedFileTypeError(Exception):
         self.mime_type = mime_type
         super().__init__(
             f"지원하지 않는 파일 형식입니다: {self.suffix or mime_type or '알 수 없음'}. "
-            "지원 형식: PDF, DOCX, HWP, HWPX"
+            f"지원 형식: {SUPPORTED_LABEL}"
         )
 
 
 def get_adapter(file_path: Path, mime_type: str, engine: str = "legacy") -> BaseAdapter:
     from app.pipeline.adapters.docx_adapter import DOCXAdapter
     from app.pipeline.adapters.hwp_adapter import HWPAdapter
+    from app.pipeline.adapters.image_adapter import ImageAdapter
     from app.pipeline.adapters.pdf_adapter import PDFAdapter
+    from app.pipeline.adapters.sheet_adapter import SheetAdapter
+    from app.pipeline.adapters.slide_adapter import SlideAdapter
+    from app.pipeline.adapters.text_adapter import HtmlAdapter, TextAdapter
 
-    for adapter in (PDFAdapter(), HWPAdapter(), DOCXAdapter()):
+    adapters = (
+        PDFAdapter(), HWPAdapter(), DOCXAdapter(),
+        SheetAdapter(), SlideAdapter(), TextAdapter(), HtmlAdapter(), ImageAdapter(),
+    )
+    for adapter in adapters:
         if adapter.can_handle(file_path, mime_type):
             # Docling은 PDF만 지원 — DOCX/HWP/HWPX는 engine 값과 무관하게
             # 항상 기존 어댑터(Docling 도입 설계서, 2026-07-23 Phase 1).

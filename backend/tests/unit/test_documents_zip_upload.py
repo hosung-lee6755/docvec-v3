@@ -72,7 +72,7 @@ async def test_upload_zip_rejects_too_many_entries():
 
 @pytest.mark.asyncio
 async def test_upload_zip_skips_unsupported_extensions():
-    upload = _zip_upload_file({"notes.txt": b"just text"})
+    upload = _zip_upload_file({"notes.csv": b"just text"})
     db = AsyncMock()
     db.add = MagicMock()
 

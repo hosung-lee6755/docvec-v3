@@ -242,14 +242,14 @@ export function UploadModal({
                     icon={<Upload size={16} />}
                     onClick={() => fileRef.current?.click()}
                   >
-                    {selectedFiles.length > 0 ? `${selectedFiles.length}개 파일 선택됨 (추가 선택)` : '파일 선택 (.pdf, .hwp, .hwpx, .docx)'}
+                    {selectedFiles.length > 0 ? `${selectedFiles.length}개 파일 선택됨 (추가 선택)` : '파일 선택 (PDF, HWP, HWPX, DOCX, XLSX, PPTX, TXT, MD, HTML, 이미지)'}
                   </Button>
                   <input
                     ref={fileRef}
                     type="file"
                     hidden
                     multiple
-                    accept=".pdf,.hwp,.hwpx,.docx"
+                    accept=".pdf,.hwp,.hwpx,.docx,.xlsx,.pptx,.txt,.md,.html,.htm,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp"
                     aria-label="업로드할 파일"
                     onChange={(e) => {
                       const newFiles = Array.from(e.target.files ?? [])

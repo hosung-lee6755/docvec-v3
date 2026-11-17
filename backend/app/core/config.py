@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
 
+    # 로컬 LLM 추론 서버(Ollama, docker-compose의 llm 서비스). 워커 프로세스 안에서 LLM을 올리면
+    # 임베딩·재순위와 합쳐 GPU 약 10GB를 써서 추출과 겹치면 12GB를 넘었다(2026-11-13).
+    llm_server_url: str = "http://llm:11434"
+    # 요청이 없으면 이 시간 뒤 모델을 GPU에서 내린다. 다음 첫 요청은 적재 시간(수 초)만큼 늦다.
+    llm_server_keep_alive: str = "10m"
+    # Ollama 기본 문맥은 RAG 발췌문과 요약 입력(최대 12,000자)을 잘라 버릴 만큼 짧다.
+    llm_server_num_ctx: int = 16384
+    llm_server_timeout_seconds: float = 300.0
+
     # Pipeline defaults
     default_chunk_max_tokens: int = 512
     default_chunk_min_tokens: int = 50
@@ -108,6 +117,41 @@ class Settings(BaseSettings):
 
     # v3 마일스톤 4 — 외부 에이전트 연동(MCP). 직원이 발급한 개인 접근 토큰으로만 접속한다.
     mcp_enabled: bool = False
+    # 이 등급까지의 문서만 클라우드 모델(OpenAI, Anthropic)로 보낸다(전체 점검 2-11). Public, Internal,
+    # Confidential 가운데 하나다. 잘못된 값이면 어떤 문서도 내보내지 않는다(services/external_model_policy.py)
+    external_model_max_security_level: str = "Internal"
+    # 답변 추적 기록(answer_traces)을 며칠 보관할지. 0이면 지우지 않는다(전체 점검 2-8).
+    # 감사 요건에 맞춰 정한다. 매일 한 번 tasks.purge_answer_traces가 지난 기록을 지운다
+    answer_trace_retention_days: int = 0
+    # 모니터링 수집기가 /admin/metrics를 읽을 때 쓰는 고정 토큰. 비우면 관리자 계정으로만 읽는다(전체 점검 2-8)
+    metrics_token: str | None = None
+    # 코드에 든 모델 목록에 더할 답변 모델(JSON 목록). 형식은 app/services/llm.py의 설명을 본다(전체 점검 2-3)
+    llm_extra_models: str = ""
+    # openai_compatible 추론 서버가 키를 요구할 때만 넣는다
+    llm_compatible_api_key: str | None = None
+    # 그림을 설명할 로컬 모델의 Ollama 태그(예: qwen2.5vl:3b). 비우면 쓰지 않고 OCR로 글자만 읽는다
+    # (전체 점검 2-1). 켜면 그림마다 추론 서버를 부르므로 문서 추출과 GPU를 나눠 쓴다. 12GB GPU에서는
+    # 추출 워커와 겹칠 때 메모리가 모자랄 수 있으니 GPU_MEMORY_FRACTION과 함께 정한다
+    local_vision_model: str = ""
+    # OIDC 통합 로그인(전체 점검 2-6). 흐름과 주의할 점은 app/services/oidc.py의 설명을 본다.
+    # oidc_redirect_url은 로그인 서버에 등록한 값과 글자 하나까지 같아야 한다
+    # (예: https://docvec.example.com/api/v1/auth/oidc/callback)
+    oidc_enabled: bool = False
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_redirect_url: str = ""
+    oidc_scopes: str = "openid email profile"
+    # 이 클레임에 이 값이 있으면 관리자로 둔다(예: groups, docvec-admins). 비우면 모두 일반 사용자다
+    oidc_admin_claim: str = ""
+    oidc_admin_value: str = ""
+    oidc_button_label: str = "통합 로그인(SSO)"
+    # 로그인을 마친 뒤 돌아갈 화면 경로. 일회용 코드를 # 뒤에 붙여 보낸다
+    oidc_post_login_path: str = "/login"
+    # GPU를 쓰는 워커 프로세스 하나가 잡을 수 있는 GPU 메모리의 비율(0~1). 비우면 제한하지 않는다
+    # (전체 점검 2-10). 워커마다 환경 변수 GPU_MEMORY_FRACTION으로 따로 준다. 상한을 넘으면 그 작업만
+    # 메모리 부족으로 실패하고, 같은 GPU를 쓰는 답변 생성은 계속 돈다
+    gpu_memory_fraction: float | None = None
     mcp_answer_model: str = "qwen2.5-3b"
     mcp_answer_timeout_seconds: int = 180
     # 심층 검색은 분해, 하위 질문별 검색, 종합을 거쳐 더 오래 걸린다(v3 마일스톤 5)

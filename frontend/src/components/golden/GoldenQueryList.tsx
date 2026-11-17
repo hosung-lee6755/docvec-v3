@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Trash2 } from 'lucide-react'
-import type { GoldenQuery } from '../../hooks/useGoldenQueries'
-import { Alert, Button, IconButton, Input } from '../ui'
+import { parseExpectedFacts, type GoldenQuery } from '../../hooks/useGoldenQueries'
+import { Alert, Button, IconButton, Input, Textarea } from '../ui'
 
 export interface GoldenDocOption {
   id: string
@@ -13,7 +13,7 @@ interface GoldenQueryListProps {
   docOptions: GoldenDocOption[]
   isSaving: boolean
   saveError: string | null
-  onSave: (queryId: string, input: { query: string; expected_document_ids: string[] }) => void
+  onSave: (queryId: string, input: { query: string; expected_document_ids: string[]; expected_facts: string[] }) => void
   onDelete: (queryId: string) => void
 }
 
@@ -21,11 +21,13 @@ export default function GoldenQueryList({ items, docOptions, isSaving, saveError
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftQuery, setDraftQuery] = useState('')
   const [draftExpected, setDraftExpected] = useState<Set<string>>(new Set())
+  const [draftFacts, setDraftFacts] = useState('')
 
   const startEdit = (gq: GoldenQuery) => {
     setEditingId(gq.id)
     setDraftQuery(gq.query)
     setDraftExpected(new Set(gq.expected_document_ids))
+    setDraftFacts((gq.expected_facts ?? []).join('\n'))
   }
 
   const toggleDraftExpected = (docId: string) =>
@@ -39,7 +41,11 @@ export default function GoldenQueryList({ items, docOptions, isSaving, saveError
 
   const handleSave = (queryId: string) => {
     if (!canSave) return
-    onSave(queryId, { query: draftQuery.trim(), expected_document_ids: Array.from(draftExpected) })
+    onSave(queryId, {
+      query: draftQuery.trim(),
+      expected_document_ids: Array.from(draftExpected),
+      expected_facts: parseExpectedFacts(draftFacts),
+    })
     setEditingId(null)
   }
 
@@ -78,6 +84,13 @@ export default function GoldenQueryList({ items, docOptions, isSaving, saveError
                 </label>
               ))}
             </div>
+            <Textarea
+              aria-label="기대 사실 수정 (한 줄에 하나)"
+              placeholder="기대 사실 (선택, 한 줄에 하나)"
+              rows={2}
+              value={draftFacts}
+              onChange={(e) => setDraftFacts(e.target.value)}
+            />
             {!canSave && <Alert tone="warning">질문과 기대 문서를 하나 이상 입력하세요.</Alert>}
             <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
               <Button size="sm" variant="primary" onClick={() => handleSave(gq.id)} disabled={isSaving || !canSave}>
@@ -99,7 +112,9 @@ export default function GoldenQueryList({ items, docOptions, isSaving, saveError
           >
             <span>
               {gq.query}{' '}
-              <span style={{ color: 'var(--color-text-muted)' }}>({gq.expected_document_ids.length}개 문서)</span>
+              <span style={{ color: 'var(--color-text-muted)' }}>
+                ({gq.expected_document_ids.length}개 문서{gq.expected_facts?.length ? `, 기대 사실 ${gq.expected_facts.length}개` : ''})
+              </span>
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}>
               <Button size="sm" variant="ghost" onClick={() => startEdit(gq)}>수정</Button>

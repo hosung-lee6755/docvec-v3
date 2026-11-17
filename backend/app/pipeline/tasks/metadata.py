@@ -20,6 +20,7 @@ _MAX_METADATA_INPUT_CHARS = 12_000
 _METADATA_MODEL_KEY = "qwen2.5-3b"
 _MAX_SUGGESTED_TAGS = 10
 _MAX_TAG_LENGTH = 100
+_MAX_CATEGORY_LENGTH = 50
 
 # Same drift guard as generate_summary: Qwen sometimes answers in Chinese
 # despite the Korean instruction. Applied per-line since keyword lines are
@@ -61,6 +62,21 @@ def _parse_keywords(raw: str, exclude: set[str]) -> list[str]:
     return result
 
 
+def _classify(doc, text: str) -> str | None:
+    """문서 종류를 채운다. 사용자가 직접 고친 분류는 덮어쓰지 않는다. 분류에 실패해도 키워드 결과는 살린다."""
+    if "category" in (doc.user_edited_fields or []):
+        return doc.category
+    from app.pipeline.blocks.content_blocks import classify_text
+
+    try:
+        category, _source = classify_text(text, str(doc.original_filename or ""))
+    except Exception:  # noqa: BLE001 - 분류 실패가 키워드 저장을 막지 않게 한다
+        logger.exception("extract_metadata: classification failed", extra={"document_id": str(doc.id)})
+        return doc.category
+    doc.category = category[:_MAX_CATEGORY_LENGTH]
+    return doc.category
+
+
 @celery_app.task(name="tasks.extract_metadata", queue="embed")
 def extract_metadata(document_id: str) -> dict:
     from app.db.models.document import Document
@@ -94,9 +110,10 @@ def extract_metadata(document_id: str) -> dict:
         suggested = _parse_keywords(raw, exclude=existing_tags)
 
         doc.suggested_tags = suggested or None
+        category = _classify(doc, truncated)
         doc.metadata_status = "DONE"
         db.commit()
-        return {"document_id": document_id, "status": "DONE", "suggested_tags": suggested}
+        return {"document_id": document_id, "status": "DONE", "suggested_tags": suggested, "category": category}
 
     except Exception as exc:
         logger.exception("extract_metadata failed", extra={"document_id": document_id})

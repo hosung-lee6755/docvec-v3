@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react'
 import { useApprovePii, usePiiDetections, useRejectPii, useRevealPii } from '../../hooks/useDocumentStructure'
 import { useAuthStore } from '../../store/authStore'
 import { ErrorText } from '../ui'
+import { PII_TYPE_LABELS } from '../../lib/documentQueues'
 
 const PII_ACTION_LABELS: Record<string, string> = {
   MARK: '표시', MASK: '마스킹', TOKENIZE: '토큰화', REMOVE: '제거', EXCLUDE_EMBEDDING: '임베딩 제외',
@@ -66,7 +67,7 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
           <tbody>
             {detections.map((d) => (
               <tr key={d.id}>
-                <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)' }}>{d.entity_type}</td>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)' }}>{PII_TYPE_LABELS[d.entity_type] ?? d.entity_type}</td>
                 <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)', fontFamily: 'var(--font-mono)' }}>
                   {d.masked_value ?? '-'}
                 </td>

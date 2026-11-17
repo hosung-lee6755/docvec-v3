@@ -65,6 +65,9 @@ class RawTableCandidate:
     # 셀에도 속하지 않는 글자가 생기는데, bbox 전체를 본문에서 지우면 그 글자가 사라진다 — 본문 제외는
     # 이 셀 사각형으로만 한다. None 이면 bbox 전체를 표 영역으로 본다(암시적 표 등).
     cell_bboxes: list[tuple[float, float, float, float]] | None = None
+    # 합친 칸 목록({"row", "col", "row_span", "col_span"}, 0부터). rows는 이미 열이 맞는 격자이고,
+    # 이 값은 화면이 원래 모양(합쳐진 칸)으로 그릴 때만 쓴다. 합친 칸이 없거나 모르면 None(전체 점검 2-2)
+    spans: list[dict] | None = None
 
 
 @dataclass

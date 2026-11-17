@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import {
   useReprocessCollection,
+  useReprocessCollectionFromStart,
   useUpdateCollection,
   type Collection,
 } from '../../hooks/useCollections'
@@ -95,6 +96,8 @@ function VersionPicker({ idPrefix, mode, onModeChange, versionNumber, onVersionC
 
 const FORM_ID = 'collection-edit-form'
 
+type ReprocessKind = 'full' | 'chunks'
+
 interface CollectionEditModalProps {
   collection: Collection
   projects: ProjectOption[]
@@ -106,8 +109,10 @@ interface CollectionEditModalProps {
 export function CollectionEditModal({ collection, projects, routeProjectId, onClose }: CollectionEditModalProps) {
   const updateCollection = useUpdateCollection()
   const reprocessCollection = useReprocessCollection()
+  const reprocessFromStart = useReprocessCollectionFromStart()
   const [reprocessResult, setReprocessResult] = useState<string | null>(null)
-  const [reprocessConfirming, setReprocessConfirming] = useState(false)
+  // 어느 재처리를 확인 중인지: 청크·임베딩만(chunks) 또는 추출부터(full)
+  const [reprocessConfirming, setReprocessConfirming] = useState<ReprocessKind | null>(null)
   const [isExporting, setIsExporting] = useState(false)
 
   const [name, setName] = useState(collection.name)
@@ -177,16 +182,23 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
     }
   }
 
-  const handleReprocess = async () => {
-    setReprocessConfirming(false)
+  const handleReprocess = async (kind: ReprocessKind) => {
+    setReprocessConfirming(null)
     setReprocessResult(null)
-    let result
     try {
-      result = await reprocessCollection.mutateAsync(collection.id)
+      if (kind === 'full') {
+        const result = await reprocessFromStart.mutateAsync(collection.id)
+        const reasons = Object.entries(result.skipped_reasons ?? {}).map(([reason, count]) => `${reason} ${count}건`)
+        setReprocessResult(
+          `${result.queued}건 처음부터 재처리 시작됨${result.skipped ? ` (${result.skipped}건 건너뜀: ${reasons.join(', ')})` : ''}`,
+        )
+        return
+      }
+      const result = await reprocessCollection.mutateAsync(collection.id)
+      setReprocessResult(`${result.queued}건 청크·임베딩 다시 만들기 시작됨${result.skipped ? ` (${result.skipped}건 건너뜀)` : ''}`)
     } catch {
-      return // 실패 원인은 아래 알림이 보여 준다
+      // 실패 원인은 아래 알림이 보여 준다
     }
-    setReprocessResult(`${result.queued}건 재처리 시작됨${result.skipped ? ` (${result.skipped}건 건너뜀)` : ''}`)
   }
 
   const handleExport = async () => {
@@ -205,6 +217,10 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
   }
 
   const docCount = collection.document_count
+  const isReprocessPending = reprocessCollection.isPending || reprocessFromStart.isPending
+  const confirmMessage = reprocessConfirming === 'full'
+    ? `문서 ${docCount}건을 워크플로우 최신 버전으로 추출부터 다시 처리합니다. 문서마다 원본 파싱부터 다시 하므로 시간이 걸리고, 품질 경고가 있으면 검토 대기로 멈출 수 있습니다. 계속할까요?`
+    : `문서 ${docCount}건의 청크와 임베딩만 이미 추출된 텍스트로 다시 만듭니다. 예상 소요 시간은 약 ${Math.max(1, Math.ceil(docCount * 0.5))}분입니다. 계속할까요?`
 
   return (
     <Modal
@@ -350,29 +366,44 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
         {updateCollection.isError && <ErrorAlert error={updateCollection.error} message="컬렉션을 수정하지 못했습니다." />}
         {reprocessResult && <Alert tone="success">{reprocessResult}</Alert>}
         {reprocessCollection.isError && <ErrorAlert error={reprocessCollection.error} message="컬렉션 문서를 다시 처리하지 못했습니다." />}
+        {reprocessFromStart.isError && <ErrorAlert error={reprocessFromStart.error} message="컬렉션 문서를 처음부터 다시 처리하지 못했습니다." />}
 
         {reprocessConfirming ? (
           <Alert tone="danger">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-              <span>
-                문서 {docCount}건을 현재 설정으로 다시 처리합니다. 예상 소요 시간은 약 {Math.max(1, Math.ceil(docCount * 0.5))}분입니다. 계속할까요?
-              </span>
+              <span>{confirmMessage}</span>
               <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
-                <Button size="sm" variant="secondary" onClick={() => setReprocessConfirming(false)}>취소</Button>
-                <Button size="sm" variant="danger" disabled={reprocessCollection.isPending} onClick={handleReprocess}>확인</Button>
+                <Button size="sm" variant="secondary" onClick={() => setReprocessConfirming(null)}>취소</Button>
+                <Button size="sm" variant="danger" disabled={isReprocessPending} onClick={() => handleReprocess(reprocessConfirming)}>확인</Button>
               </div>
             </div>
           </Alert>
         ) : (
-          <Button
-            variant="secondary"
-            isBlock
-            disabled={reprocessCollection.isPending || docCount === 0}
-            onClick={() => setReprocessConfirming(true)}
-            icon={reprocessCollection.isPending ? <Loader2 size={14} aria-hidden="true" style={{ animation: 'spin 1s linear infinite' }} /> : undefined}
+          <Field
+            label="다시 처리"
+            hint="처음부터 다시 처리는 원본 파싱부터 다시 해 추출·표·쪽 번호 개선까지 반영합니다. 청크·임베딩만 다시 만들기는 이미 추출된 텍스트로 빠르게 다시 자릅니다."
           >
-            이 설정으로 다시 처리
-          </Button>
+            {() => (
+              <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                <Button
+                  variant="secondary"
+                  disabled={isReprocessPending || docCount === 0}
+                  onClick={() => setReprocessConfirming('full')}
+                  icon={reprocessFromStart.isPending ? <Loader2 size={14} aria-hidden="true" style={{ animation: 'spin 1s linear infinite' }} /> : undefined}
+                >
+                  처음부터 다시 처리 (추출부터)
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={isReprocessPending || docCount === 0}
+                  onClick={() => setReprocessConfirming('chunks')}
+                  icon={reprocessCollection.isPending ? <Loader2 size={14} aria-hidden="true" style={{ animation: 'spin 1s linear infinite' }} /> : undefined}
+                >
+                  청크·임베딩만 다시 만들기
+                </Button>
+              </div>
+            )}
+          </Field>
         )}
 
         <Button variant="secondary" isBlock disabled={isExporting} onClick={handleExport}

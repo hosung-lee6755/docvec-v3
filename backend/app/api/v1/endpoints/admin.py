@@ -1,7 +1,10 @@
+import hmac
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +13,8 @@ from app.db.models.audit_log import AuditLog
 from app.db.models.llm_usage_log import LLMUsageLog
 from app.db.models.user import User
 from app.db.session import get_db
+from app.core.config import settings
+from app.services import metrics
 
 router = APIRouter()
 
@@ -162,3 +167,27 @@ async def get_usage_summary(
             for user_id, username, requests, input_tokens, output_tokens, cost_usd in by_user_rows
         ],
     }
+
+
+async def _authorize_metrics(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """지표는 관리자 계정이나 수집기 전용 토큰(METRICS_TOKEN)으로만 읽는다. 수집기는 로그인을 하지
+    못하므로 고정 토큰을 따로 둔다. 토큰을 설정하지 않으면 관리자 계정만 읽을 수 있다."""
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = settings.metrics_token
+    if token and hmac.compare_digest(credentials.credentials.encode(), token.encode()):
+        return
+    require_admin(await get_current_user(credentials, db, request))
+
+
+@router.get("/admin/metrics", response_class=PlainTextResponse)
+async def get_metrics(
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_authorize_metrics),
+):
+    """모니터링 지표를 Prometheus 텍스트 형식으로 돌려준다(전체 점검 2-8)."""
+    return PlainTextResponse(metrics.render(await metrics.collect(db)), media_type=metrics.CONTENT_TYPE)

@@ -194,7 +194,7 @@ async def _call_tool(db, user, token, id_, params: dict) -> dict:
     try:
         enforce_user_rate_limit(user_id, "mcp_call", limit=_CALLS_PER_MINUTE, window_seconds=60)
         if spec.expensive:
-            enforce_user_rate_limit(user_id, "mcp_ask", limit=_ASKS_PER_MINUTE, window_seconds=60)
+            enforce_user_rate_limit(user_id, "mcp_ask", limit=_ASKS_PER_MINUTE, window_seconds=60, fail_closed=True)
     except HTTPException:
         await _audit_call(db, user_id, spec, {"tool": spec.name, "token_id": token_id, "error": "rate_limited"})
         return _result(id_, _tool_payload({"error": "호출이 너무 잦습니다. 잠시 뒤 다시 시도하세요."}, is_error=True))

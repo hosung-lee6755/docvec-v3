@@ -32,6 +32,10 @@ export const PII_TYPE_LABELS: Record<string, string> = {
   ACCOUNT: '계좌번호',
   CARD: '카드번호',
   NAME: '이름',
+  ADDRESS: '주소',
+  DRIVER_LICENSE: '운전면허번호',
+  PASSPORT: '여권번호',
+  BIZNO: '사업자등록번호',
 }
 
 const MINUTE = 60_000

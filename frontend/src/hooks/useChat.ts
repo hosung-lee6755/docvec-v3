@@ -21,6 +21,8 @@ export interface ChatCitation {
   hidden?: boolean
   // v3 마일스톤 6: 근거가 된 이유(점수, 겹친 낱말, 쪽의 OCR 신뢰도). 가린 인용에는 없다
   evidence?: RetrievalEvidence | null
+  // 원문에서 근거 자리를 표시할 때 쓰는 청크 id. 예전 답변과 가린 인용에는 없다
+  chunk_id?: string | null
 }
 
 // v3 마일스톤 5 심층 검색 — 하위 질문별 검색 과정. 지금 볼 수 없는 문서는 서버가 가려서 보낸다.
@@ -53,6 +55,7 @@ export interface DeepProgress {
 }
 
 export type ChatMode = 'standard' | 'deep'
+export type FeedbackRating = 'up' | 'down'
 
 export interface ChatMessage {
   id: string
@@ -68,6 +71,9 @@ export interface ChatMessage {
   progress?: DeepProgress | null
   // 사전의 검색어 확장으로 질문에 덧붙여 찾은 낱말
   expanded_terms?: string[] | null
+  // 사용자 평가. 평가 전이면 null
+  feedback?: FeedbackRating | null
+  feedback_note?: string | null
 }
 
 export interface ConversationSummary {
@@ -110,7 +116,11 @@ export function useConversations(projectId?: string) {
   })
 }
 
-export function useConversation(id: string | null) {
+// 답변 스트림이 열려 있으면 글은 스트림으로 오므로 주기 조회는 느리게 돈다(전체 점검 2-5)
+const POLL_MS = 1500
+const POLL_WHILE_STREAMING_MS = 5000
+
+export function useConversation(id: string | null, isStreaming = false) {
   return useQuery<ConversationDetail>({
     queryKey: ['conversation', id],
     queryFn: async () => {
@@ -118,7 +128,27 @@ export function useConversation(id: string | null) {
       return data
     },
     enabled: !!id,
-    refetchInterval: (query) => (query.state.data?.messages.some(isPending) ? 1500 : false),
+    refetchInterval: (query) => {
+      if (!query.state.data?.messages.some(isPending)) return false
+      return isStreaming ? POLL_WHILE_STREAMING_MS : POLL_MS
+    },
+  })
+}
+
+// rating이 null이면 평가를 지운다. 끝나면 열려 있는 대화를 다시 불러 버튼 상태를 맞춘다.
+export function useMessageFeedback() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: { messageId: string; rating: FeedbackRating | null; note?: string | null }) => {
+      const { data } = await apiClient.put(`/chat/${input.messageId}/feedback`, {
+        rating: input.rating,
+        note: input.note ?? null,
+      })
+      return data as ChatMessage
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['conversation'] })
+    },
   })
 }
 

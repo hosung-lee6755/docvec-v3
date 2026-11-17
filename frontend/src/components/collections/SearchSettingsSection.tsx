@@ -18,7 +18,8 @@ const ROW_STYLE = {
 const HINT_STYLE = { marginLeft: 'var(--space-2)', color: 'var(--color-text-muted)' } as const
 
 export function SearchSettingsSection({ collection }: { collection: Collection }) {
-  const saved = collection.search_settings ?? DEFAULT_SEARCH_SETTINGS
+  // 예전에 저장한 설정에는 새 항목(parent_context)이 없어 기본값으로 채운다
+  const saved = { ...DEFAULT_SEARCH_SETTINGS, ...collection.search_settings }
   const [draft, setDraft] = useState<SearchSettings>(saved)
   const update = useUpdateCollection()
   const isDirty = JSON.stringify(draft) !== JSON.stringify(saved)
@@ -93,6 +94,19 @@ export function SearchSettingsSection({ collection }: { collection: Collection }
         <span>
           <input id="search_diversify" type="checkbox" checked={draft.diversify} onChange={(e) => set('diversify', e.target.checked)} />
           <span style={HINT_STYLE}>비슷한 발췌문이 겹쳐 나오지 않게 고릅니다.</span>
+        </span>
+
+        <label htmlFor="search_parent_context">상위 절 문맥</label>
+        <span>
+          <input
+            id="search_parent_context"
+            type="checkbox"
+            checked={draft.parent_context}
+            onChange={(e) => set('parent_context', e.target.checked)}
+          />
+          <span style={HINT_STYLE}>
+            Parent Retrieval. 검색은 작은 청크로 하고, 채팅 답변을 만들 때 근거 청크와 같은 상위 절의 앞뒤 청크를 함께 넘깁니다.
+          </span>
         </span>
       </div>
 

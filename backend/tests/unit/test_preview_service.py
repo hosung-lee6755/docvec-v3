@@ -299,7 +299,7 @@ def storage():
 
 
 def test_preview_url_unsupported_format_returns_nones_without_storage_access(storage):
-    assert ps.preview_url_for("d", "photo.png", "k") == (None, None, None)
+    assert ps.preview_url_for("d", "data.csv", "k") == (None, None, None)
     storage.download_file.assert_not_called()
 
 

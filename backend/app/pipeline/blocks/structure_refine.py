@@ -1,0 +1,168 @@
+"""Docling 요소로 만든 구조 블록을 다듬는다(2026-11-13 구조 탭 정확도 점검).
+
+Docling은 제목(section_header)의 레벨을 모두 1로 주고, 목차 쪽의 줄을 제목으로, 쪽 가장자리의
+머리말을 본문으로, 글리프 조각("㔕" 같은 한 글자)을 문단으로 내보낸다. 그대로 쓰면 구조 탭의
+트리가 평평하고, 청크의 절 경로도 깊이가 1이라 상위 절 문맥(Parent Retrieval)이 생기지 않는다.
+
+여기서는 요소의 bbox만으로 다음을 보정한다.
+1. 제목 레벨: bbox 높이와 '너비 ÷ 글자 수'의 기하평균으로 글자 크기를 추정해 층을 나눈다.
+   여러 줄 제목은 높이가 줄 수만큼 커지고 너비 추정은 줄 수만큼 작아져 기하평균에서 상쇄된다.
+2. 목차: 목차 요소가 있는 쪽의 제목, 문단, 목록 항목 가운데 같은 문구가 다른 쪽에서 제목으로 나오면 목차 항목이다.
+3. 머리말과 꼬리말: 쪽 위아래 가장자리에 있고 세 쪽 이상에서 반복되는 문구다.
+   본문 안에서 반복되는 라벨("[모범 사례]")은 의미가 있으므로 건드리지 않는다.
+4. 한 글자 문단은 버린다.
+"""
+import re
+from collections import defaultdict
+
+Block = tuple  # (node_type, level, span_start, span_end, text, layout)
+
+# 글자 크기 추정값이 이 비율 안에 있으면 같은 층으로 본다
+_TIER_TOLERANCE = 0.08
+# 쪽 위아래 가장자리로 보는 범위(문서 전체 요소의 y 범위 대비)
+_MARGIN_BAND = 0.07
+_REPEAT_MIN_PAGES = 3
+# 목차 쪽에서 목차 항목으로 바꿀 수 있는 블록(Docling은 목차 줄을 제목이나 일반 문단으로 낸다)
+_TOC_CANDIDATE_TYPES = {"HEADING", "PARAGRAPH", "LIST_ITEM"}
+_REPEAT_MAX_CHARS = 80
+_DIGITS_RE = re.compile(r"\d+")
+_SPACE_RE = re.compile(r"\s+")
+
+
+def _visual_len(text: str) -> float:
+    """글자 폭 합계를 글자 크기 단위로 어림한다. 한글, 한자는 1, 영문과 숫자는 0.55, 공백과 기호는 0.3."""
+    total = 0.0
+    for ch in text:
+        if ch.isspace() or not ch.isalnum():
+            total += 0.3
+        elif ch.isascii():
+            total += 0.55
+        else:
+            total += 1.0
+    return total
+
+
+def estimate_font_size(text: str, bbox) -> float | None:
+    if not bbox or len(bbox) != 4 or not text.strip():
+        return None
+    width = abs(bbox[2] - bbox[0])
+    height = abs(bbox[1] - bbox[3])
+    length = _visual_len(text.strip())
+    if width <= 0 or height <= 0 or length <= 0:
+        return None
+    return (height * width / length) ** 0.5
+
+
+_KMEANS_ROUNDS = 30
+
+
+def _kmeans_1d(values: list[float], k: int) -> list[float]:
+    """1차원 k-평균의 중심(큰 것부터). 시작점은 분위수라 결과가 매번 같다."""
+    ordered = sorted(values)
+    centers = [ordered[min(len(ordered) - 1, int((i + 0.5) * len(ordered) / k))] for i in range(k)]
+    for _ in range(_KMEANS_ROUNDS):
+        groups: list[list[float]] = [[] for _ in centers]
+        for v in values:
+            groups[min(range(len(centers)), key=lambda i: abs(v - centers[i]))].append(v)
+        updated = [sum(g) / len(g) if g else c for g, c in zip(groups, centers)]
+        if updated == centers:
+            break
+        centers = updated
+    return sorted(set(centers), reverse=True)
+
+
+def assign_tiers(sizes: list[float], max_level: int) -> dict[float, int]:
+    """크기를 로그 척도에서 최대 max_level개 무리로 나눠 크기 → 레벨(큰 무리가 1) 지도를 돌려준다.
+    추정 크기는 층이 깔끔히 끊기지 않고 퍼져 있어(2026-11-13 실측) 일정 간격으로 자르면 층이 너무 많아진다.
+    중심이 _TIER_TOLERANCE 안으로 가까운 무리는 합친다."""
+    import math
+
+    logs = [math.log(s) for s in sizes]
+    centers = _kmeans_1d(logs, min(max_level, len(set(logs))))
+    merged: list[float] = []
+    for c in centers:
+        if not merged or merged[-1] - c > math.log(1 + _TIER_TOLERANCE):
+            merged.append(c)
+    return {
+        s: 1 + min(range(len(merged)), key=lambda i: abs(math.log(s) - merged[i]))
+        for s in set(sizes)
+    }
+
+
+def _norm(text: str) -> str:
+    return _SPACE_RE.sub("", text)
+
+
+def _refine_levels(blocks: list[list], sizes: list[float | None], max_level: int) -> None:
+    known = [s for s, b in zip(sizes, blocks) if s is not None and b[0] == "HEADING"]
+    if len({round(s, 1) for s in known}) < 2:
+        return  # 크기 차이가 없으면 Docling 레벨을 그대로 둔다
+    level_of = assign_tiers(known, max_level)
+    previous = 1
+    for block, size in zip(blocks, sizes):
+        if block[0] != "HEADING":
+            continue
+        block[1] = level_of[size] if size is not None else previous
+        previous = block[1]
+
+
+def _mark_toc_entries(blocks: list[list], elements: list[dict]) -> None:
+    toc_pages = {el.get("page") for el in elements if el.get("type") == "document_index"}
+    if not toc_pages:
+        return
+    later_headings: set[str] = set()
+    for block in blocks:
+        if block[0] == "HEADING" and (block[5] or {}).get("page_number") not in toc_pages:
+            later_headings.add(_norm(block[4]))
+    for block in blocks:
+        page = (block[5] or {}).get("page_number")
+        if block[0] in _TOC_CANDIDATE_TYPES and page in toc_pages and _norm(block[4]) in later_headings:
+            block[0], block[1] = "TOC", None
+
+
+def _mark_running_headers(blocks: list[list], elements: list[dict]) -> None:
+    ys = [y for el in elements if el.get("bbox") and len(el["bbox"]) == 4 for y in (el["bbox"][1], el["bbox"][3])]
+    if not ys:
+        return
+    low, high = min(ys), max(ys)
+    band = (high - low) * _MARGIN_BAND
+    if band <= 0:
+        return
+    bbox_by_id = {el.get("id"): el.get("bbox") for el in elements}
+
+    def edge(block) -> str | None:
+        bbox = bbox_by_id.get((block[5] or {}).get("element_id"))
+        if not bbox or len(bbox) != 4:
+            return None
+        top, bottom = max(bbox[1], bbox[3]), min(bbox[1], bbox[3])
+        if top >= high - band:
+            return "HEADER"
+        if bottom <= low + band:
+            return "FOOTER"
+        return None
+
+    pages_by_text: dict[tuple[str, str], set] = defaultdict(set)
+    keys = []
+    for block in blocks:
+        kind = edge(block) if block[0] in ("PARAGRAPH", "HEADING") and len(block[4]) <= _REPEAT_MAX_CHARS else None
+        key = (kind, _DIGITS_RE.sub("#", _norm(block[4]))) if kind else None
+        keys.append(key)
+        if key:
+            pages_by_text[key].add((block[5] or {}).get("page_number"))
+    for block, key in zip(blocks, keys):
+        if key and len(pages_by_text[key]) >= _REPEAT_MIN_PAGES:
+            block[0], block[1] = key[0], None
+
+
+def refine_element_blocks(blocks: list[Block], elements: list[dict], max_level: int = 3) -> list[Block]:
+    """`_build_blocks_from_elements()`의 결과를 보정한 새 목록을 돌려준다(입력은 바꾸지 않는다)."""
+    bbox_by_id = {el.get("id"): el.get("bbox") for el in elements}
+    work = [list(b) for b in blocks if not (b[0] == "PARAGRAPH" and len(b[4].strip()) <= 1)]
+    _mark_toc_entries(work, elements)
+    _mark_running_headers(work, elements)
+    sizes = [
+        estimate_font_size(b[4], bbox_by_id.get((b[5] or {}).get("element_id"))) if b[0] == "HEADING" else None
+        for b in work
+    ]
+    _refine_levels(work, sizes, max_level)
+    return [tuple(b) for b in work]

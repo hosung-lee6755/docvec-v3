@@ -597,7 +597,7 @@ def test_generate_answer_happy_path_persists_answer_citations_and_cache(chat_env
     assert stored.answer == "정답입니다[1]"
     assert stored.citations == [{
         "index": 1, "document_id": "d1", "collection_id": "c1", "collection_name": "Coll",
-        "filename": "a.pdf", "page_number": 2, "text": "본문 발췌", "evidence": None,
+        "filename": "a.pdf", "page_number": 2, "text": "본문 발췌", "evidence": None, "chunk_id": None,
     }]
     cache_args = chat_env.redis.setex.call_args_list[-1].args
     assert cache_args[0].startswith("rag_answer:v2:qwen2.5-3b:")
@@ -982,3 +982,27 @@ def test_retrieve_chunks_searches_the_original_query_when_expansion_fails(world)
                                               user_id=str(world.alice.id), limit=None)
 
     assert qdrant.search.called and out
+
+
+# ------------------------------------------------ 보안등급별 외부 모델 차단(2-11)
+
+
+@pytest.fixture(autouse=True)
+def _fake_document_ids_are_sendable(request, monkeypatch):
+    """이 파일의 테스트는 "d1" 같은 가짜 문서 id를 쓴다. 등급 판정은 아래 전용 테스트에서만 본다."""
+    if "external_policy" in request.keywords:
+        return
+    from app.services import external_model_policy
+
+    monkeypatch.setattr(external_model_policy, "blocked_document_ids", lambda db, ids: [])
+
+
+@pytest.mark.external_policy
+def test_verifier_stays_local_when_evidence_cannot_leave(monkeypatch):
+    from app.services import external_model_policy
+
+    monkeypatch.setattr(external_model_policy, "blocked_document_ids", lambda db, ids: ["d1"])
+    gen = MagicMock()
+    with patch.object(chat, "_find_api_key", return_value="sk-key") as find_key:
+        assert chat._get_verifier_provider(MagicMock(), MagicMock(), gen, "local", [{"document_id": "d1"}]) is gen
+    find_key.assert_not_called()

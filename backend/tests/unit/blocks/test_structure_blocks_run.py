@@ -245,7 +245,79 @@ def test_run_elements_path_keeps_toc_when_enabled():
 def test_block_metadata():
     block = sb.StructureAnalyzeBlock()
     assert block.block_type == "structure_analyze"
-    assert block.block_version == "1.10.0"
+    assert block.block_version == "1.14.0"
     assert block.category == "구조·보호"
     assert block.config_schema is sb.StructureAnalyzeConfig
     assert sb.StructureAnalyzeConfig().heading_max_level == 3
+
+
+# ---- 쪽 정보가 없는 경로의 노드 쪽 번호(2026-11-16) ----
+def test_legacy_nodes_get_page_numbers_from_page_map():
+    text = "1. 서론\n첫 쪽 본문\n2. 본론\n둘째 쪽 본문"
+    second_page_start = text.index("2. 본론")
+    doc = _doc(page_map=[[second_page_start, 1], [len(text), 2]], parsed_text=text)
+
+    _result, _db, nodes = _run(doc, text=text)
+
+    pages = {n.text.split("\n")[0]: n.page_number for n in nodes if n.node_type != "DOCUMENT"}
+    assert pages["1. 서론"] == 1
+    assert pages["2. 본론"] == 2
+
+
+def test_single_entry_page_map_leaves_page_unknown():
+    text = "1. 서론\n본문"
+    _result, _db, nodes = _run(_doc(page_map=[[len(text), 1]], parsed_text=text), text=text)
+    assert all(n.page_number is None for n in nodes)
+
+
+# ---- legacy 경로의 번호 제목 판정과 반복 줄(2026-11-16) ----
+@pytest.mark.parametrize("line", [
+    "5.07    5.08    5.86    5.11    4.93",          # 표의 숫자 행
+    "005                                    000",
+    "1805 월 B+ 시 BS 시스템",                         # 앞 번호가 너무 크다(연도·쪽·OCR 조각)
+    "02 변기동ㆍ하미경. (2020). 지리적 특성을 고려한 범죄두려움 영향 요인 분석-범죄취약계층인 연구",  # 너무 길다
+    "106          aoe              헤드리스브라우저를통한 렌더링",
+    "29.94 | 26.59   37.21",
+    "8 2022 MS 데이터 펠로우십 분석보고서",            # 쪽 번호 + 연도
+    "3) 지역이 가진 지역 고유의 이미지가 지역의 GAIL 과잉 강조할 수 있다는 점(21610 et al,",
+])
+def test_ocr_and_table_lines_are_not_numbered_headings(line):
+    assert sb._classify(line, None, None)[0] != "HEADING"
+
+
+@pytest.mark.parametrize("line,level", [("1. 사업개요", 1), ("2.2.1. 디자인 검수 AI 서비스 개요", 3), ("3) 유저행동로그 DB 분석", 3)])
+def test_real_numbered_headings_still_detected(line, level):
+    assert sb._classify(line, None, None) == ("HEADING", level)
+
+
+def _pages(*pages):
+    text = "\n\n".join(pages)
+    page_map, end = [], 0
+    for i, page in enumerate(pages, start=1):
+        end += len(page) + (2 if i < len(pages) else 0)
+        page_map.append([end, i])
+    return text, page_map
+
+
+def test_lines_repeated_at_page_edges_become_headers():
+    text, page_map = _pages(*(
+        f"{n} 2022 서울 데이터 펠로우십 분석보고서\n1. 본문 제목 {n}\n내용 {n}\n내용 둘째 줄\n내용 셋째 줄" for n in (6, 8, 10)
+    ))
+    blocks = sb._build_blocks(text, page_map=page_map)
+    headers = [b for b in blocks if b[0] == "HEADER"]
+    assert len(headers) == 3
+    assert all("펠로우십" in b[4] for b in headers)
+    assert [b[4] for b in blocks if b[0] == "HEADING"] == ["1. 본문 제목 6", "1. 본문 제목 8", "1. 본문 제목 10"]
+
+
+def test_repeated_body_lines_away_from_page_edges_stay_in_body():
+    # 글머리표 줄이 쪽 끝(가장자리 후보)에 와도 머리말이 아니다
+    body = "머리 첫 줄\n머리 둘째 줄\n가운데 본문 줄\n꼬리 첫 줄 내용\n• 위반 건수 : 2개 요소 확인"
+    text, page_map = _pages(body, body.replace("첫", "1"), body.replace("첫", "2"))
+    blocks = sb._build_blocks(text, page_map=page_map)
+    assert not any("위반 건수" in b[4] for b in blocks if b[0] == "HEADER")
+
+
+def test_without_page_map_nothing_is_marked_header():
+    text = "\n\n".join(f"{n} 2022 서울 데이터 펠로우십 분석보고서\n본문" for n in (6, 8, 10))
+    assert not [b for b in sb._build_blocks(text) if b[0] == "HEADER"]

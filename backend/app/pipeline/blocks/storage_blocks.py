@@ -130,7 +130,12 @@ class ChunkSplitBlock(BaseBlock):
         # 묶는 parent 청크 행을 이제 함께 만든다(chunk_tier/parent_chunk_id) —
         # 캐시된 pre-1.5.0 결과는 parent 행이 전혀 없다(메타 정보 생성.txt 3절
         # Phase 9, 2026-07-24).
-        return "1.5.0"
+        #
+        # 1.6.0: parent를 같은 상위 절에 속한 연속 child로 묶는다. 예전에는 절 경로가 완전히
+        # 같아야 묶여, 세부 절이 많은 문서에서 parent가 child와 1:1이었다(2026-11-13).
+        #
+        # 1.7.0: 청크 본문에서 구간 안의 머리말·꼬리말·목차 노드 글자를 지운다(strip_ranges, 2026-11-13).
+        return "1.7.0"
 
     @property
     def category(self) -> str:
@@ -153,6 +158,8 @@ class ChunkSplitBlock(BaseBlock):
             _sentence_based_chunks,
             _tree_based_chunks,
             group_children_into_parents,
+            non_body_ranges,
+            strip_ranges,
         )
         from app.pipeline.tasks.process import (
             _chunk_text,
@@ -206,6 +213,8 @@ class ChunkSplitBlock(BaseBlock):
             # 이 맵이 채워졌을 때만 의미가 있다. sentence/fixed/semantic 전략은
             # 노드 트리가 없어 항상 None으로 남는다(문서화된 한계).
             node_by_id: dict[str, DocumentNode] = {}
+            # 청크 본문에서 지울 머리말·꼬리말·목차 노드 위치(구조 기반 전략만 채운다)
+            cut_ranges: list[tuple[int, int]] = []
 
             if strategy == "semantic":
                 provider = get_embedding_provider(embedding_model)
@@ -228,8 +237,10 @@ class ChunkSplitBlock(BaseBlock):
                         "블록이 있어야 합니다."
                     )
                 node_by_id = {str(n.id): n for n in nodes}
+                mapped_nodes = _nodes_in_text(nodes, doc.parsed_text or "", full_text)
+                cut_ranges = non_body_ranges(mapped_nodes)
                 tree_spans = _tree_based_chunks(
-                    _nodes_in_text(nodes, doc.parsed_text or "", full_text), full_text,
+                    mapped_nodes, full_text,
                     max_chars=max_tokens, min_chars=min_tokens,
                     respect_headings=strategy == "section_aware" or cfg.preserve_heading,
                     include_previous_heading=cfg.include_previous_heading,
@@ -252,6 +263,8 @@ class ChunkSplitBlock(BaseBlock):
 
             cleaned_spans = []
             for text, start, end, section_path, source_node_ids in spans:
+                if cut_ranges:
+                    text = strip_ranges(text, full_text, start, end, cut_ranges)
                 cleaned = _clean_rag_text(text)
                 if cleaned:
                     cleaned_spans.append((cleaned, text, start, end, section_path, source_node_ids))

@@ -1,5 +1,5 @@
 from celery import Celery
-from celery.signals import setup_logging
+from celery.signals import setup_logging, worker_process_init
 from kombu import Exchange, Queue
 
 from app.core.config import settings
@@ -12,6 +12,23 @@ def _configure_worker_logging(**kwargs):
     # `setup_logging` receiver is registered — this replaces that with the same
     # structured setup the API uses, so task logs share one shape.
     configure_logging()
+
+
+@worker_process_init.connect
+def _limit_gpu_memory(**kwargs):
+    """GPU_MEMORY_FRACTION이 있으면 이 워커 프로세스가 잡을 GPU 메모리에 상한을 건다."""
+    fraction = settings.gpu_memory_fraction
+    if not fraction or not 0 < fraction <= 1:
+        return
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.set_per_process_memory_fraction(fraction)
+    except Exception:  # noqa: BLE001 - 상한을 못 걸어도 워커는 떠야 한다
+        import logging
+
+        logging.getLogger(__name__).exception("GPU memory fraction could not be applied")
 
 
 celery_app = Celery(
@@ -30,6 +47,8 @@ celery_app.conf.include = [
     "app.pipeline.tasks.process",
     "app.pipeline.tasks.chat",
     "app.pipeline.tasks.summary",
+    "app.pipeline.tasks.metadata",
+    "app.pipeline.tasks.maintenance",
     "app.pipeline.tasks.chunks",
     "app.pipeline.tasks.reembed",
     "app.pipeline.tasks.workflow",
@@ -81,5 +100,10 @@ celery_app.conf.beat_schedule = {
     "expire-documents": {
         "task": "tasks.expire_documents",
         "schedule": 600.0,
+    },
+    # 보관 기간이 지난 답변 추적 기록을 하루에 한 번 지운다(기간이 0이면 작업이 바로 끝난다)
+    "purge-answer-traces": {
+        "task": "tasks.purge_answer_traces",
+        "schedule": 86400.0,
     },
 }

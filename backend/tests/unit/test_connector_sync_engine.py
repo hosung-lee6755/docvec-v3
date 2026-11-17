@@ -107,7 +107,7 @@ async def world(db_session):  # noqa: F811
         "exec/salary.pdf": (b"salary", acl((0, a_sid)), 1.0),
         "held/denied.pdf": (b"denied", acl((1, f"{DOM}-1109"), (0, s_sid)), 1.0),
         "held/unmapped.pdf": (b"unmapped", acl((0, "S-1-5-21-1-2-3-1001")), 1.0),
-        "notes.txt": (b"plain text", acl((0, a_sid)), 1.0),
+        "photo.png": (b"plain text", acl((0, a_sid)), 1.0),
     })
     return SimpleNamespace(db=db, connector=connector, source=source, alice=alice, sales=sales,
                            service=service, a_sid=a_sid, s_sid=s_sid, col=col)
@@ -134,7 +134,7 @@ async def test_first_sync_creates_documents_with_source_permissions(world, exter
     assert run.status == "success"
     assert run.counts["added"] == 4 and run.counts["held"] == 2 and run.counts["skipped"] == 1
     items = await _items(world)
-    assert "notes.txt" not in items  # 지원하지 않는 형식은 추적하지 않는다
+    assert "photo.png" not in items  # 지원하지 않는 형식은 추적하지 않는다
 
     docs = {p: await world.db.get(Document, items[p].document_id) for p in
             ("public/notice.pdf", "sales/plan.pdf", "personal/alice.pdf", "exec/salary.pdf")}

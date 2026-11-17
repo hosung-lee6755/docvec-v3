@@ -3,7 +3,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { usePdfBlobUrl } from '../../hooks/usePdfBlobUrl'
 import { ViewModeToggle } from './documentDetailParts'
-import { toBlocksJson } from './documentDetailHelpers'
+import { toRagRecordsJson, type RagRecordSource } from './documentDetailHelpers'
+import type { DocumentChunksResult } from '../../hooks/useDocuments'
 import { ErrorText } from '../ui'
 
 interface Page {
@@ -22,6 +23,8 @@ interface OriginalTabProps {
   isPreviewError: boolean
   previewError?: unknown
   content: { full_text: string; chunk_count: number } | undefined
+  ragSource: RagRecordSource
+  chunksResult: DocumentChunksResult | undefined
   pagesTextResult: { pages: Page[] } | undefined
   previewResult: PreviewResult | undefined
   isPdfDoc: boolean
@@ -36,6 +39,8 @@ export default function OriginalTab({
   isPreviewError,
   previewError,
   content,
+  ragSource,
+  chunksResult,
   pagesTextResult,
   previewResult,
   isPdfDoc,
@@ -141,7 +146,9 @@ export default function OriginalTab({
                 fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 fontFamily: 'var(--font-mono)', margin: 0,
               }}>
-                {toBlocksJson(currentPageText ?? content?.full_text ?? '')}
+                {chunksResult
+                  ? toRagRecordsJson(ragSource, chunksResult.chunks, isNativePdf && hasMultiplePages ? clampedPage : undefined)
+                  : '저장된 청크를 불러오는 중입니다.'}
               </pre>
             )}
             {!isContentLoading && !showJson && (

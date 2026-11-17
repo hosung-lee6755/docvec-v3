@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import {
-  useDocumentNodes, useUpdateDocumentNode, type DocumentNodeItem,
+  useDocumentNode, useDocumentNodes, useUpdateDocumentNode, type DocumentNodeItem,
 } from '../../hooks/useDocumentStructure'
 import { useDocumentRuns, useReprocessImpact } from '../../hooks/useDocumentRuns'
 import { useWorkflowRun } from '../../hooks/useWorkflows'
@@ -44,28 +44,56 @@ function buildTree(nodes: DocumentNodeItem[]): TreeNode[] {
   return roots
 }
 
+// 큰 문서는 노드가 수천 개라 전부 펼쳐 그리면 탭이 느려진다(2026-11-13 점검, 988쪽 문서 약 6,900개).
+// 맨 위(문서) 노드만 펼쳐 두고, 나머지는 펼칠 때 자식을 그린다.
+const TOGGLE_WIDTH = 14
+
 function TreeRow({
   node, depth, selectedId, onSelect,
 }: { node: TreeNode; depth: number; selectedId: string | null; onSelect: (n: TreeNode) => void }) {
+  const [isOpen, setIsOpen] = useState(depth === 0)
+  const hasChildren = node.children.length > 0
+  const isSelected = node.id === selectedId
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => onSelect(node)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left',
-          padding: '4px 8px', paddingLeft: 8 + depth * 16, fontSize: 12, border: 'none',
-          background: node.id === selectedId ? 'var(--color-primary-subtle)' : 'transparent', cursor: 'pointer',
-          color: node.id === selectedId ? 'var(--color-accent)' : 'inherit',
-        }}
-      >
-        <span style={{ color: 'var(--color-text-subtle)', flexShrink: 0 }}>{NODE_TYPE_ICONS[node.node_type] ?? '·'}</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {node.text?.slice(0, 60) || NODE_TYPE_LABELS[node.node_type] || node.node_type}
-        </span>
-        {node.user_corrected && <span style={{ flexShrink: 0, color: 'var(--color-primary)', fontSize: 11 }}>●</span>}
-      </button>
-      {node.children.map((child) => (
+      <div style={{ display: 'flex', alignItems: 'center', paddingLeft: 4 + depth * 16 }}>
+        {hasChildren ? (
+          <button
+            type="button"
+            onClick={() => setIsOpen((open) => !open)}
+            aria-expanded={isOpen}
+            aria-label={`${isOpen ? '접기' : '펼치기'} (하위 ${node.children.length}개)`}
+            style={{
+              width: TOGGLE_WIDTH, flexShrink: 0, border: 'none', background: 'transparent', padding: 0,
+              cursor: 'pointer', fontSize: 10, color: 'var(--color-text-muted)',
+            }}
+          >
+            {isOpen ? '▾' : '▸'}
+          </button>
+        ) : (
+          <span style={{ width: TOGGLE_WIDTH, flexShrink: 0 }} />
+        )}
+        <button
+          type="button"
+          onClick={() => onSelect(node)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0, textAlign: 'left',
+            padding: '4px 8px 4px 2px', fontSize: 12, border: 'none',
+            background: isSelected ? 'var(--color-primary-subtle)' : 'transparent', cursor: 'pointer',
+            color: isSelected ? 'var(--color-accent)' : 'inherit',
+          }}
+        >
+          <span style={{ color: 'var(--color-text-subtle)', flexShrink: 0 }}>{NODE_TYPE_ICONS[node.node_type] ?? '·'}</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {node.text?.slice(0, 60) || NODE_TYPE_LABELS[node.node_type] || node.node_type}
+          </span>
+          {!isOpen && hasChildren && (
+            <span style={{ flexShrink: 0, color: 'var(--color-text-subtle)', fontSize: 11 }}>{node.children.length}</span>
+          )}
+          {node.user_corrected && <span style={{ flexShrink: 0, color: 'var(--color-primary)', fontSize: 11 }}>●</span>}
+        </button>
+      </div>
+      {isOpen && node.children.map((child) => (
         <TreeRow key={child.id} node={child} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />
       ))}
     </div>
@@ -91,6 +119,17 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
   const [fontSizeInput, setFontSizeInput] = useState('')
   const [fontNameInput, setFontNameInput] = useState('')
   const [showReprocessBanner, setShowReprocessBanner] = useState(false)
+  // 목록은 본문 앞부분만 오므로(compact) 선택한 노드의 전체 본문과 style은 따로 받는다.
+  const { data: detail } = useDocumentNode(documentId, selected?.id ?? null)
+  const shown = detail && detail.id === selected?.id ? detail : selected
+
+  useEffect(() => {
+    if (!detail) return
+    const style = (detail.style ?? {}) as { style_name?: string; font_size?: number; font_name?: string }
+    setStyleNameInput(style.style_name ?? '')
+    setFontSizeInput(style.font_size != null ? String(style.font_size) : '')
+    setFontNameInput(style.font_name ?? '')
+  }, [detail])
 
   // `?? []`를 렌더마다 새로 만들면 useMemo 의존성이 매번 바뀌므로 안정된 참조를 쓴다.
   const nodes = data?.nodes ?? EMPTY_NODES
@@ -111,10 +150,9 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
     setSelected(node)
     setLevelInput(node.level != null ? String(node.level) : '')
     setTypeInput(node.node_type)
-    const style = (node.style ?? {}) as { style_name?: string; font_size?: number; font_name?: string }
-    setStyleNameInput(style.style_name ?? '')
-    setFontSizeInput(style.font_size != null ? String(style.font_size) : '')
-    setFontNameInput(style.font_name ?? '')
+    setStyleNameInput('')
+    setFontSizeInput('')
+    setFontNameInput('')
     setShowReprocessBanner(false)
   }
 
@@ -163,7 +201,7 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
           {!selected && (
             <p style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>왼쪽에서 노드를 선택하세요.</p>
           )}
-          {selected && (
+          {selected && shown && (
             <div style={{
               border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)',
               padding: 'var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)',
@@ -171,14 +209,14 @@ export default function StructureTab({ documentId, onViewInOriginal, onReprocess
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 12, color: 'var(--color-text-muted)' }}>
                 <span className="ds-badge ds-badge--info">{NODE_TYPE_LABELS[selected.node_type] ?? selected.node_type}</span>
                 {selected.page_number != null && <span>{selected.page_number}페이지</span>}
-                {selected.user_corrected && <span style={{ color: 'var(--color-primary)' }}>사용자 보정됨</span>}
+                {shown.user_corrected && <span style={{ color: 'var(--color-primary)' }}>사용자 보정됨</span>}
               </div>
-              {selected.text && (
-                <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: 0 }}>{selected.text}</p>
+              {shown.text && (
+                <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: 0 }}>{shown.text}</p>
               )}
-              {selected.style && Object.keys(selected.style).length > 0 && (
+              {shown.style && Object.keys(shown.style).length > 0 && (
                 <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
-                  스타일 {Object.entries(selected.style).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+                  스타일 {Object.entries(shown.style).map(([k, v]) => `${k}: ${v}`).join(' · ')}
                 </div>
               )}
               <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center' }}>

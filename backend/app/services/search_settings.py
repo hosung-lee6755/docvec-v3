@@ -28,6 +28,9 @@ class SearchSettings(BaseModel):
     diversify: bool = False
     # 하이브리드에서 벡터 점수의 비중. 나머지가 키워드 점수의 비중이다
     vector_weight: float = Field(0.6, ge=0.1, le=0.9)
+    # Parent Retrieval: 답변 생성 때 근거 청크의 같은 상위 절 앞뒤 청크를 함께 LLM에 넘긴다.
+    # 검색 순위와 인용은 그대로다(services/parent_context.py, 2026-11-13)
+    parent_context: bool = True
 
 
 DEFAULT_SEARCH_SETTINGS = SearchSettings()

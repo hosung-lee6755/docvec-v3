@@ -1,0 +1,177 @@
+"""HWPX의 병합 셀과 문단 서식 읽기(전체 점검 2-2, 2-12, 2026-11-16).
+
+표: 예전에는 한 줄에 실제로 들어 있는 칸만 순서대로 늘어놓았다. 세로로 합친 칸이 있으면 다음 줄에는
+그 칸이 아예 없어서 뒤의 값이 한 열씩 앞으로 당겨졌다. 여기서는 칸의 주소(cellAddr)와 합친 크기
+(cellSpan)로 격자를 만들어 열을 맞춘다. 세로로 합친 칸의 글은 아래 줄에도 되풀이해 적는다(줄 하나만
+잘려 나가도 무슨 항목의 값인지 알 수 있게). 가로로 합친 칸은 첫 칸에만 적고 나머지는 비운다(같은 말이
+옆으로 여러 번 되풀이되지 않게). 화면이 원래 모양으로 그릴 수 있도록 합친 칸의 위치와 크기는 따로 남긴다.
+
+문단 서식: 한글 문서는 제목에도 "바탕글" 스타일을 그대로 두고 글자만 키우는 일이 많다. 그래서 스타일
+이름만으로는 제목을 가릴 수 없고, 문단에서 가장 많이 쓰인 글자 모양(charPr)의 크기와 굵기를 함께 넘긴다.
+"개요 N" 스타일을 쓴 문단은 그 수준을 제목 수준으로 넘긴다.
+"""
+import re
+from dataclasses import dataclass, field
+
+BODY_FONT_FALLBACK = 10.0
+# charPr의 height는 1/100pt 단위다
+_HEIGHT_UNIT = 100.0
+_OUTLINE_NAME_RE = re.compile(r"^(?:개요|Outline)\s*(\d+)$", re.IGNORECASE)
+MAX_HEADING_LEVEL = 6
+# 주소가 깨진 파일이 격자를 끝없이 키우지 못하게 막는다
+MAX_GRID_CELLS = 20000
+
+
+def local_tag(elem) -> str:
+    tag = elem.tag
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _int_attr(elem, name: str, default: int) -> int:
+    try:
+        return int(elem.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+@dataclass(frozen=True)
+class CharShape:
+    font_size: float
+    is_bold: bool
+    is_italic: bool
+
+
+@dataclass(frozen=True)
+class HwpxStyles:
+    char_shapes: dict[str, CharShape] = field(default_factory=dict)
+    # 문단 스타일 id → 개요 수준(1부터)
+    outline_levels: dict[str, int] = field(default_factory=dict)
+    style_names: dict[str, str] = field(default_factory=dict)
+
+
+def load_styles(header_root) -> HwpxStyles:
+    """Contents/header.xml에서 글자 모양과 스타일을 읽는다."""
+    char_shapes: dict[str, CharShape] = {}
+    outline_levels: dict[str, int] = {}
+    style_names: dict[str, str] = {}
+    for elem in header_root.iter():
+        tag = local_tag(elem)
+        if tag == "charPr" and elem.get("id") is not None:
+            children = {local_tag(child) for child in elem}
+            char_shapes[elem.get("id")] = CharShape(
+                font_size=_int_attr(elem, "height", int(BODY_FONT_FALLBACK * _HEIGHT_UNIT)) / _HEIGHT_UNIT,
+                is_bold="bold" in children,
+                is_italic="italic" in children,
+            )
+        elif tag == "style" and elem.get("id") is not None:
+            name = (elem.get("name") or elem.get("engName") or "").strip()
+            style_names[elem.get("id")] = name
+            match = _OUTLINE_NAME_RE.match(name) or _OUTLINE_NAME_RE.match((elem.get("engName") or "").strip())
+            if match:
+                outline_levels[elem.get("id")] = min(int(match.group(1)), MAX_HEADING_LEVEL)
+    return HwpxStyles(char_shapes=char_shapes, outline_levels=outline_levels, style_names=style_names)
+
+
+def _dominant_char_shape(paragraph, styles: HwpxStyles) -> CharShape | None:
+    """문단에서 글자 수가 가장 많은 글자 모양. 표 안의 글자는 세지 않는다."""
+    lengths: dict[str, int] = {}
+
+    def text_length(elem) -> int:
+        total = 0
+        for child in elem:
+            tag = local_tag(child)
+            if tag == "t":
+                total += len("".join(child.itertext()))
+            elif tag != "tbl":
+                total += text_length(child)
+        return total
+
+    for run in paragraph:
+        if local_tag(run) != "run":
+            continue
+        ref = run.get("charPrIDRef")
+        length = text_length(run)
+        if ref is not None and length:
+            lengths[ref] = lengths.get(ref, 0) + length
+    if not lengths:
+        return None
+    return styles.char_shapes.get(max(lengths, key=lengths.get))
+
+
+def paragraph_layout(paragraph, text: str, styles: HwpxStyles) -> dict:
+    """구조 분석이 읽는 줄 정보 한 건. 쪽 번호는 쪽을 다시 나눈 뒤에 맞춘다(sync_layout_pages)."""
+    shape = _dominant_char_shape(paragraph, styles)
+    style_id = paragraph.get("styleIDRef")
+    level = styles.outline_levels.get(style_id)
+    return {
+        "page_number": 1,
+        "text": text,
+        "bbox": None,
+        "font_size": shape.font_size if shape else None,
+        "is_bold": bool(shape and shape.is_bold),
+        "is_italic": bool(shape and shape.is_italic),
+        "style_name": f"Heading {level}" if level else (styles.style_names.get(style_id) or None),
+        "font_name": None,
+        "heading_level": level,
+    }
+
+
+def table_grid(table, cell_text) -> tuple[list[list[str]], list[dict]]:
+    """표를 열이 맞는 격자로 만든다. (줄 목록, 합친 칸 목록)을 돌려준다.
+    합친 칸은 {"row", "col", "row_span", "col_span"}이고 줄과 열은 0부터 센다."""
+    cells: list[tuple[int, int, int, int, str]] = []
+    for row_index, tr in enumerate(child for child in table if local_tag(child) == "tr"):
+        next_col = 0
+        for tc in tr:
+            if local_tag(tc) != "tc":
+                continue
+            addr = next((c for c in tc if local_tag(c) == "cellAddr"), None)
+            span = next((c for c in tc if local_tag(c) == "cellSpan"), None)
+            row = _int_attr(addr, "rowAddr", row_index) if addr is not None else row_index
+            col = _int_attr(addr, "colAddr", next_col) if addr is not None else next_col
+            row_span = max(1, _int_attr(span, "rowSpan", 1)) if span is not None else 1
+            col_span = max(1, _int_attr(span, "colSpan", 1)) if span is not None else 1
+            next_col = col + col_span
+            if row < 0 or col < 0:
+                continue
+            cells.append((row, col, row_span, col_span, cell_text(tc)))
+    if not cells:
+        return [], []
+    height = max(row + row_span for row, _, row_span, _, _ in cells)
+    width = max(col + col_span for _, col, _, col_span, _ in cells)
+    if height * width > MAX_GRID_CELLS:
+        return [], []
+
+    grid = [["" for _ in range(width)] for _ in range(height)]
+    spans: list[dict] = []
+    for row, col, row_span, col_span, text in cells:
+        for offset in range(row_span):
+            grid[row + offset][col] = text
+        if row_span > 1 or col_span > 1:
+            spans.append({"row": row, "col": col, "row_span": row_span, "col_span": col_span})
+
+    # 글이 하나도 없는 줄은 뺀다. 줄이 빠지면 합친 칸의 줄 번호도 그만큼 당긴다
+    kept = [index for index, row in enumerate(grid) if any(row)]
+    new_index = {old: new for new, old in enumerate(kept)}
+    rows = [grid[index] for index in kept]
+    adjusted: list[dict] = []
+    for span in spans:
+        covered = [new_index[r] for r in range(span["row"], span["row"] + span["row_span"]) if r in new_index]
+        if not covered:
+            continue
+        if len(covered) > 1 or span["col_span"] > 1:
+            adjusted.append({**span, "row": covered[0], "row_span": len(covered)})
+    return rows, adjusted
+
+
+def sync_layout_pages(parsed) -> None:
+    """쪽을 다시 나눈 뒤 줄 정보의 쪽 번호를 글 조각에 맞춘다. 줄 정보는 문단 조각과 같은 순서로
+    하나씩 만들어지므로, 수가 같을 때만 순서대로 옮겨 적는다(다르면 건드리지 않는다)."""
+    layout = parsed.metadata.get("line_layout") or []
+    paragraphs = [
+        block for page in parsed.pages for block in page.text_blocks if block.block_type != "table"
+    ]
+    if not layout or len(layout) != len(paragraphs):
+        return
+    for entry, block in zip(layout, paragraphs):
+        entry["page_number"] = block.page_number

@@ -32,13 +32,29 @@ describe('SearchSettingsSection', () => {
 
     expect(mutate).toHaveBeenCalledWith({
       id: 'col-1',
-      search_settings: { mode: 'vector', top_k: 5, rerank: false, diversify: false, vector_weight: 0.6 },
+      search_settings: { mode: 'vector', top_k: 5, rerank: false, diversify: false, vector_weight: 0.6, parent_context: true },
+    })
+  })
+
+  it('lets the editor turn off parent context and fills it in for settings saved before it existed', () => {
+    // 예전에 저장한 설정에는 parent_context가 없다(2026-11-13 추가)
+    render(<SearchSettingsSection collection={collection({
+      search_settings: { mode: 'hybrid', top_k: 5, rerank: true, diversify: false, vector_weight: 0.6 } as never,
+    })} />)
+    const toggle = screen.getByLabelText('상위 절 문맥')
+    expect(toggle).toBeChecked()
+    fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole('button', { name: '검색 설정 저장' }))
+
+    expect(mutate).toHaveBeenCalledWith({
+      id: 'col-1',
+      search_settings: { mode: 'hybrid', top_k: 5, rerank: true, diversify: false, vector_weight: 0.6, parent_context: false },
     })
   })
 
   it('resets the draft to the defaults without saving', () => {
     render(<SearchSettingsSection collection={collection({
-      search_settings: { mode: 'vector', top_k: 8, rerank: false, diversify: true, vector_weight: 0.3 },
+      search_settings: { mode: 'vector', top_k: 8, rerank: false, diversify: true, vector_weight: 0.3, parent_context: false },
     })} />)
     fireEvent.click(screen.getByRole('button', { name: '기본값으로' }))
     expect(screen.getByLabelText('검색 방식')).toHaveValue('hybrid')

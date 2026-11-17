@@ -45,6 +45,7 @@ async def test_list_chunks_merges_qdrant_hits_with_postgres_metadata(db_session,
     parent = await _chunk(db_session, doc, run, 0, "부모 본문", chunk_tier="parent")
     c1 = await _chunk(db_session, doc, run, 1, "자식1", token_count=7, chunk_type="PARAGRAPH", parent_chunk_id=parent.id,
                       section_path=["1장"], language="ko")
+    await _chunk(db_session, doc, run, 2, "자식2", parent_chunk_id=parent.id)  # 형제가 있어야 상위 청크를 보여 준다
     other_run_hit = {"id": str(uuid4()), "payload": {"workflow_run_id": str(uuid4()), "chunk_index": 0}}
     qdrant.scroll_by_document.return_value = [
         _hit(c1.id, run.id, 5, "벡터 본문", page_number=3, disabled=True, edited=True),
@@ -64,6 +65,18 @@ async def test_list_chunks_merges_qdrant_hits_with_postgres_metadata(db_session,
     assert (merged["token_count"], merged["chunk_type"], merged["heading_path"]) == (7, "PARAGRAPH", ["1장"])
     assert merged["parent_chunk_text"] == "부모 본문"
     assert "token_count" not in chunks[0] and chunks[0]["hit_count"] == 0
+
+
+async def test_parent_text_is_hidden_when_parent_has_a_single_child(db_session, qdrant):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "c-list-solo")
+    parent = await _chunk(db_session, doc, run, 0, "부모 본문", chunk_tier="parent")
+    only = await _chunk(db_session, doc, run, 1, "자식", parent_chunk_id=parent.id)
+    qdrant.scroll_by_document.return_value = [_hit(only.id, run.id, 1, "자식")]
+
+    with patch("app.services.chunk_stats.get_hit_counts", return_value={}):
+        result = await chunks_api.list_document_chunks(doc.id, db_session, owner_user())
+
+    assert result["chunks"][0]["parent_chunk_text"] is None
 
 
 async def test_list_chunks_falls_back_to_postgres_child_rows_when_nothing_embedded(db_session, qdrant):  # noqa: F811

@@ -26,7 +26,7 @@ def _han_ratio(text: str) -> float:
         return 0.0
     return len(re.findall(r"[一-鿿]", stripped)) / len(stripped)
 
-# Local model context budget: the shared LocalLLMProvider isn't given a large
+# Local model context budget: the shared LLMServerProvider (Ollama) isn't given a large
 # max_new_tokens for summarization, and feeding it the entire document (up to
 # 200k chars) would blow past the 3B model's practical prompt window and slow
 # generation for every auto-triggered summary. Truncate to a size that keeps

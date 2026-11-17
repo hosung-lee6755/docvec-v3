@@ -13,6 +13,8 @@ export interface DocumentNodeItem {
   text: string | null
   style: Record<string, unknown> | null
   user_corrected: boolean
+  // compact 목록에서만 온다. text가 잘렸을 때의 원래 길이.
+  text_length?: number | null
 }
 
 export interface DocumentNodesResult {
@@ -21,14 +23,27 @@ export interface DocumentNodesResult {
   nodes: DocumentNodeItem[]
 }
 
+// 목록은 compact(본문 앞 80자, style 없음)로 받는다. 988쪽 문서는 전체가 약 4~5MB였다(2026-11-16).
+// 선택한 노드의 전체 본문과 style은 useDocumentNode로 따로 받는다.
 export function useDocumentNodes(documentId: string, enabled = true) {
   return useQuery<DocumentNodesResult>({
-    queryKey: ['documents', documentId, 'nodes'],
+    queryKey: ['documents', documentId, 'nodes', 'compact'],
     queryFn: async () => {
-      const { data } = await apiClient.get(`/documents/${documentId}/nodes`)
+      const { data } = await apiClient.get(`/documents/${documentId}/nodes`, { params: { compact: true } })
       return data
     },
     enabled: enabled && !!documentId,
+  })
+}
+
+export function useDocumentNode(documentId: string, nodeId: string | null) {
+  return useQuery<DocumentNodeItem>({
+    queryKey: ['documents', documentId, 'nodes', 'detail', nodeId],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`/documents/${documentId}/nodes/${nodeId}`)
+      return data
+    },
+    enabled: !!documentId && !!nodeId,
   })
 }
 

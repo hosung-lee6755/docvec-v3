@@ -82,12 +82,14 @@ async def test_login_screen_options_follow_the_settings(monkeypatch):
     monkeypatch.setattr(settings, "admin_signup_code", ADMIN_CODE)
     assert await auth_module.auth_options(_register_db()) == {
         "self_signup_enabled": False, "admin_code_signup": True, "directory_login": False,
+        "oidc_login": False, "oidc_label": settings.oidc_button_label,
     }
 
     monkeypatch.setattr(settings, "self_signup_enabled", True)
     monkeypatch.setattr(settings, "ldap_enabled", True)
     assert await auth_module.auth_options(_register_db()) == {
         "self_signup_enabled": False, "admin_code_signup": False, "directory_login": True,
+        "oidc_login": False, "oidc_label": settings.oidc_button_label,
     }
 
 

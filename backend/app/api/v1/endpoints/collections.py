@@ -599,6 +599,47 @@ async def reprocess_collection(
     return {"queued": len(claimed_ids), "skipped": skipped + len(reprocessable) - len(claimed_ids)}
 
 
+@router.post("/{collection_id}/reprocess-from-start")
+async def reprocess_collection_from_start(
+    collection_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """컬렉션의 문서를 워크플로우 최신 게시 버전으로 추출부터 다시 처리한다.
+
+    위의 일괄 재처리(`/reprocess`)는 예전 고정 파이프라인으로 이미 추출된 텍스트에서 청크와 임베딩만
+    다시 만들어, 추출·표·쪽 번호 개선이 반영되지 않는다(2026-11-13). 문서마다 새 실행을 만들고, 추출은
+    GPU 전용 워커가 한 건씩 처리하므로 한꺼번에 넣어도 GPU가 겹치지 않는다. 처리 중이거나 워크플로우로
+    처리된 적이 없는 문서는 건너뛰고 이유별 건수를 돌려준다."""
+    from app.services import reprocess_service
+
+    await check_collection_access(db, collection_id, current_user, min_role="editor")
+
+    doc_ids = (
+        await db.scalars(select(Document.id).where(Document.collection_id == collection_id))
+    ).all()
+
+    queued = 0
+    skipped_reasons: dict[str, int] = {}
+    for doc_id in doc_ids:
+        doc = await db.get(Document, doc_id)
+        if doc is None:
+            continue
+        await reprocess_service.reconcile_stuck_run(db, doc)
+        try:
+            await reprocess_service.start_reprocess_on_latest_version(db, doc, "컬렉션 처음부터 재처리")
+        except reprocess_service.ReprocessError as exc:
+            skipped_reasons[str(exc)] = skipped_reasons.get(str(exc), 0) + 1
+            continue
+        queued += 1
+
+    return {
+        "queued": queued,
+        "skipped": sum(skipped_reasons.values()),
+        "skipped_reasons": skipped_reasons,
+    }
+
+
 @router.get("/{collection_id}/export")
 async def export_collection(
     collection_id: UUID,

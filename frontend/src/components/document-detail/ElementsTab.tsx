@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { ErrorText } from '../ui'
 import {
@@ -12,7 +12,9 @@ const TYPE_LABELS: Record<string, string> = {
 }
 
 export default function ElementsTab({ documentId }: { documentId: string }) {
-  const { data, isLoading, isError, error } = useDocumentElements(documentId)
+  const {
+    data, isLoading, isError, error, hasNextPage, fetchNextPage, isFetchingNextPage,
+  } = useDocumentElements(documentId)
   const updateElement = useUpdateDocumentElement()
   const [editId, setEditId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
@@ -23,7 +25,9 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
   const [editFontSize, setEditFontSize] = useState('')
   const [editFontName, setEditFontName] = useState('')
 
-  const elements = data?.elements ?? []
+  const elements = useMemo(() => data?.pages.flatMap((p) => p.elements) ?? [], [data])
+  const total = data?.pages[0]?.total ?? 0
+  const correctedCount = data?.pages[0]?.corrected_count ?? 0
 
   const handleStartEdit = (el: DocumentElementItem) => {
     setEditId(el.id)
@@ -66,12 +70,10 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
     )
   }
 
-  const correctedCount = elements.filter((el) => el.user_corrected).length
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>
-        요소 {elements.length}개 · 사용자 보정 {correctedCount}개 — markdown을 수정하면 이 요소의 내용만 바뀌며,
+        요소 {total.toLocaleString()}개 · 사용자 보정 {correctedCount}개 — markdown을 수정하면 이 요소의 내용만 바뀌며,
         구조/청크에 반영하려면 재처리가 필요합니다.
       </p>
       {elements.map((el) => {
@@ -198,6 +200,17 @@ export default function ElementsTab({ documentId }: { documentId: string }) {
           </div>
         )
       })}
+      {hasNextPage && (
+        <button
+          type="button"
+          onClick={() => fetchNextPage()}
+          disabled={isFetchingNextPage}
+          className="ds-btn ds-btn--secondary ds-btn--sm"
+          style={{ alignSelf: 'center', cursor: 'pointer' }}
+        >
+          {isFetchingNextPage ? '불러오는 중…' : `더 보기 (${(total - elements.length).toLocaleString()}개 남음)`}
+        </button>
+      )}
     </div>
   )
 }

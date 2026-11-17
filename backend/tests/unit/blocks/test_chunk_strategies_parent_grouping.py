@@ -56,3 +56,38 @@ def test_single_span_forms_its_own_group():
     groups = group_children_into_parents(spans, max_chars=1000)
 
     assert groups == [[0]]
+
+
+def test_sibling_subsections_share_their_upper_section_parent():
+    # 세부 절이 많은 문서에서 parent가 child와 1:1이 되던 문제(2026-11-13)
+    spans = [
+        _span("a", 0, 10, ["2장", "2.1", "2.1.1"]),
+        _span("b", 10, 20, ["2장", "2.1", "2.1.2"]),
+        _span("c", 20, 30, ["2장", "2.1", "2.1.3"]),
+        _span("d", 30, 40, ["2장", "2.2", "2.2.1"]),
+    ]
+
+    groups = group_children_into_parents(spans, max_chars=1000)
+
+    assert groups == [[0, 1, 2], [3]]
+
+
+def test_section_intro_and_its_subsections_group_together():
+    spans = [
+        _span("a", 0, 10, ["2장", "2.1"]),
+        _span("b", 10, 20, ["2장", "2.1", "2.1.1"]),
+        _span("c", 20, 30, ["2장", "2.2"]),
+        _span("d", 30, 40, ["3장"]),
+    ]
+
+    groups = group_children_into_parents(spans, max_chars=1000)
+
+    assert groups == [[0, 1, 2], [3]]
+
+
+def test_flat_span_does_not_join_a_sectioned_group():
+    spans = [_span("a", 0, 10, ["1장"]), _span("b", 10, 20), _span("c", 20, 30)]
+
+    groups = group_children_into_parents(spans, max_chars=1000)
+
+    assert groups == [[0], [1, 2]]

@@ -25,12 +25,27 @@ from app.schemas.document import (
     ReprocessImpactResponse,
 )
 from app.services.document_state import claim_document_status as _claim_document_status
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 _MAX_RUN_HISTORY = 100
+# 구조 탭 목록(compact)에서 노드 본문을 이 길이까지만 보낸다. 988쪽 문서는 전체가 약 4~5MB였다.
+COMPACT_NODE_TEXT_CHARS = 80
+MAX_ELEMENTS_PAGE = 1000
+
+
+def _compact_node(node) -> dict:
+    text = node.text or ""
+    return {
+        **{c: getattr(node, c) for c in DocumentNodeItem.model_fields if c not in ("text", "style", "text_length")},
+        "text": text[:COMPACT_NODE_TEXT_CHARS] if node.text is not None else None,
+        "style": None,
+        "text_length": len(text) if node.text is not None else None,
+    }
 
 @router.get("/{document_id}/status")
 async def get_document_status(
@@ -359,7 +374,10 @@ async def list_document_nodes(
     document_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    compact: bool = False,
 ):
+    """compact=true면 본문을 앞 80자로 자르고 style을 빼서 보낸다. 선택한 노드의 전체 내용은
+    GET /{document_id}/nodes/{node_id}로 받는다."""
     from app.db.models.document_node import DocumentNode
 
     doc = await db.scalar(select(Document).where(Document.id == document_id))
@@ -377,7 +395,30 @@ async def list_document_nodes(
                 .order_by(DocumentNode.sort_order.asc())
             )
         ).all()
+    if compact:
+        nodes = [_compact_node(n) for n in nodes]
     return {"document_id": str(document_id), "run_id": run_id, "nodes": nodes}
+
+
+@router.get("/{document_id}/nodes/{node_id}", response_model=DocumentNodeItem)
+async def get_document_node(
+    document_id: UUID,
+    node_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.db.models.document_node import DocumentNode
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="viewer")
+    node = await db.scalar(
+        select(DocumentNode).where(DocumentNode.id == node_id, DocumentNode.document_id == document_id)
+    )
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    return node
 
 
 @router.patch("/{document_id}/nodes/{node_id}", response_model=DocumentNodeItem)
@@ -435,6 +476,8 @@ async def list_document_elements(
     document_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int | None, Query(ge=1, le=MAX_ELEMENTS_PAGE)] = None,
 ):
     """Document.elements(Docling 도입 설계서, 2026-07-23 Phase 4) — Docling
     엔진으로 처리된 PDF만 채워짐. HWP/HWPX나 legacy 엔진 문서는 항상 빈
@@ -444,7 +487,15 @@ async def list_document_elements(
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="viewer")
 
-    return {"document_id": str(document_id), "elements": doc.elements or []}
+    elements = doc.elements or []
+    page = elements[offset:] if limit is None else elements[offset:offset + limit]
+    return {
+        "document_id": str(document_id),
+        "elements": page,
+        "total": len(elements),
+        "offset": offset,
+        "corrected_count": sum(1 for el in elements if el.get("user_corrected")),
+    }
 
 
 @router.patch("/{document_id}/elements/{element_id}", response_model=DocumentElementItem)

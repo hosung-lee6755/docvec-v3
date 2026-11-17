@@ -30,6 +30,8 @@ def _estimate_token_count(text: str) -> int:
 # flat 구간(fixed/semantic/sentence 전략,
 # 또는 구조 없는 문서)에서 연속 child를 몇 개씩 하나의 parent로 묶을지.
 _PARENT_GROUP_MAX_CHILDREN = 5
+# 청크 본문에 넣지 않는 구조 노드(structure_refine.py가 쪽 가장자리 반복 문구와 목차 줄을 이렇게 표시한다)
+_NON_BODY_NODE_TYPES = {"HEADER", "FOOTER", "TOC"}
 # parent 하나의 combined 길이가 child 목표 크기(max_chars)의 몇 배를 넘으면
 # 그 자리에서 그룹을 끊을지 — 너무 큰 parent가 만들어지는 것을 방지.
 _PARENT_SIZE_MULTIPLIER = 4
@@ -47,7 +49,7 @@ def group_children_into_parents(
     없으므로 `_PARENT_GROUP_MAX_CHILDREN`개씩 묶는 것으로 폴백한다."""
     groups: list[list[int]] = []
     current: list[int] = []
-    current_section: list[str] | None = None
+    group_root: list[str] | None = None
     group_start: int | None = None
 
     def flush() -> None:
@@ -56,7 +58,10 @@ def group_children_into_parents(
 
     for i, span in enumerate(spans):
         _cleaned, _raw, start, end, section_path, _node_ids = span
-        section_changed = bool(current) and section_path != current_section
+        # 예전에는 section_path가 완전히 같은 child만 묶어, 세부 절이 많은 문서에서는 parent가
+        # child와 1:1이 되어 상위 문맥이 생기지 않았다(2026-11-13 측정). 이제 같은 상위 절에
+        # 속한 연속 child를 묶는다. 묶음의 첫 child가 정한 상위 절 경로로 시작하면 같은 묶음이다.
+        section_changed = bool(current) and not _within_root(section_path, group_root)
         flat_group_full = (
             bool(current) and not section_path and len(current) >= _PARENT_GROUP_MAX_CHILDREN
         )
@@ -70,10 +75,56 @@ def group_children_into_parents(
             group_start = None
         if not current:
             group_start = start
+            group_root = _parent_root(section_path)
         current.append(i)
-        current_section = section_path
     flush()
     return groups
+
+
+def non_body_ranges(nodes: list) -> list[tuple[int, int]]:
+    """청크 본문에서 뺄 머리말·꼬리말·목차 노드의 위치(시작 순)."""
+    return sorted(
+        (n.span_start, n.span_end)
+        for n in nodes
+        if getattr(n, "node_type", None) in _NON_BODY_NODE_TYPES
+        and n.span_start is not None and n.span_end is not None and n.span_end > n.span_start
+    )
+
+
+def strip_ranges(chunk_text: str, full_text: str, start: int, end: int, ranges: list[tuple[int, int]]) -> str:
+    """청크는 원문을 연속 구간으로 자르므로, 구간 가운데의 쪽 꼬리말이나 목차 줄이 그대로 따라 들어온다
+    (2026-11-13). 청크 본문(full_text[start:end]) 안에 있는 ranges 부분을 지운 글을 돌려준다.
+    위치(start, end)는 그대로라 쪽 번호와 원문 대조에는 영향이 없다. 본문이 원문 구간과 다르면
+    (표를 행 단위로 다시 쓴 청크 등) 손대지 않는다. 앞에 붙은 절 경로 머리말은 유지한다."""
+    import bisect
+
+    first = max(0, bisect.bisect_left(ranges, (start, -1)) - 1)
+    cuts = [(max(s, start), min(e, end)) for s, e in ranges[first:] if s < end and e > start]
+    body = full_text[start:end]
+    if not cuts or not chunk_text.endswith(body):
+        return chunk_text
+    prefix = chunk_text[: len(chunk_text) - len(body)]
+    pieces, pos = [], start
+    for cut_start, cut_end in cuts:
+        if cut_start > pos:
+            pieces.append(full_text[pos:cut_start])
+        pos = max(pos, cut_end)
+    pieces.append(full_text[pos:end])
+    return prefix + "".join(pieces)
+
+
+def _parent_root(section_path: list[str] | None) -> list[str]:
+    """parent 묶음의 기준 경로. 절 경로가 둘 이상이면 바로 위 절이고, 하나면 그 절 자체다."""
+    path = list(section_path or [])
+    return path[:-1] if len(path) > 1 else path
+
+
+def _within_root(section_path: list[str] | None, root: list[str] | None) -> bool:
+    path = list(section_path or [])
+    if not root:
+        # 경로가 없는 구간끼리만 묶는다(개수 상한은 호출부의 flat_group_full이 정한다)
+        return not path
+    return path[: len(root)] == root
 
 
 @dataclass
@@ -261,6 +312,8 @@ def _tree_based_chunks(
     for node in nodes:
         if node.node_type == "DOCUMENT":
             continue  # 루트 노드 — 전체 문서를 뒤덮는 span이라 내용 노드가 아니다
+        if node.node_type in _NON_BODY_NODE_TYPES:
+            continue  # 쪽마다 반복되는 머리말·꼬리말과 목차 줄은 검색 근거로 쓰지 않는다(2026-11-13)
 
         if node.node_type == "HEADING":
             if respect_headings:

@@ -116,6 +116,15 @@
 }
 .user-chat__notice { margin: 0; font-size: var(--text-xs); color: var(--color-text-muted); }
 .user-chat__cite-toggle { align-self: flex-start; margin-bottom: var(--space-2); }
+.user-chat__feedback {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1);
+  margin-top: var(--space-3); padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+.user-chat__feedback-label { font-size: var(--text-xs); color: var(--color-text-muted); margin-right: var(--space-1); }
+.user-chat__feedback .ds-icon-btn.is-active { background: var(--color-primary-subtle); color: var(--color-primary); }
+.user-chat__feedback-note { display: flex; gap: var(--space-2); flex: 1 1 240px; min-width: 0; }
+.user-chat__feedback-note > :first-child { flex: 1; min-width: 0; }
 .user-chat__cite-list { display: flex; flex-direction: column; gap: var(--space-2); }
 .user-chat__cite {
   padding: var(--space-3);
@@ -144,6 +153,15 @@
 .user-chat__cite-file { display: flex; align-items: center; gap: 4px; }
 .user-chat__cite-text { margin: 0; font-size: var(--text-sm); line-height: 1.5; }
 .user-chat__spacer { flex: 1 1 auto; }
+/* 인용 위치 보기: 원문 쪽 그림. 쪽이 길면 대화상자 안에서 스크롤한다 */
+.user-chat__cite-page {
+  max-height: 70vh;
+  overflow: auto;
+  border: 1px solid var(--color-border, #d6dbe1);
+  border-radius: 6px;
+  background: var(--color-surface-muted, #f4f5f7);
+}
+.user-chat__cite-page img { display: block; width: 100%; height: auto; }
 .user-chat__cite-btn {
   display: inline-flex;
   align-items: center;

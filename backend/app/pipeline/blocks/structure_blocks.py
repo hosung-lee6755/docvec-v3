@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
 from app.pipeline.blocks.content_blocks import _carry, _upstream_text
+from app.pipeline.blocks.structure_refine import refine_element_blocks
 from app.pipeline.blocks.title_resolver import LeadLine, _is_chapter_heading, resolve_title
 
 _HEADING_NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*)[.\)]?\s+\S")
@@ -136,6 +137,87 @@ def _body_font_size(entries: list[dict]) -> float | None:
     return max(set(sizes), key=sizes.count)
 
 
+# 숫자로 시작한다는 이유만으로 제목이 되던 줄을 거른다(2026-11-16 점검). 스캔 PDF와 HWPX의 그림 OCR에서
+# 표의 숫자 행("5.07    5.08 ..."), 쪽 머리말("6  2022 ... 분석보고서"), 참고문헌("02 홍길동. (2020). ...")이
+# 번호 제목으로 잡혔다.
+_HEADING_MAX_CHARS = 50
+_DATE_ONLY_RE = re.compile(
+    r"^(?:\d{4}\s*년\s*\d{1,2}\s*월(?:\s*\d{1,2}\s*일)?|\d{4}[.\-/]\s*\d{1,2}(?:[.\-/]\s*\d{1,2})?)\.?$"
+)
+_HEADING_MAX_LEADING_NUMBER = 99
+_WIDE_GAP_RE = re.compile(r"\S {3,}\S|\s\|\s")
+# 참고문헌 항목의 출판 연도 "(2020)."
+_CITATION_YEAR_RE = re.compile(r"\((?:19|20)\d{2}\)\.")
+# 번호 바로 뒤에 또 숫자가 오면 쪽 번호와 연도("8 2022 ... 분석보고서")다
+_NUMBER_THEN_NUMBER_RE = re.compile(r"^[.)]?\s*\d{2,}")
+# "1)" 꼴 번호는 문서마다 깊이가 달라 장 제목(레벨 1)으로 두면 트리가 무너진다
+_PAREN_NUMBER_LEVEL = 3
+_REPEATED_LINE_MIN_COUNT = 3
+_REPEATED_LINE_MIN_KEY = 8
+_REPEATED_LINE_MAX_CHARS = 80
+_BULLET_CHARS = set("•◦▪▫○●■□◆◇ㅇ※-*·")
+# 쪽의 처음과 끝에서 몇 줄까지를 머리말·꼬리말 후보로 볼지
+_PAGE_EDGE_LINES = 2
+_NON_KEY_RE = re.compile(r"[\d\s]+")
+
+
+def _plausible_numbered_heading(line: str, number: str) -> bool:
+    stripped = line.strip()
+    if len(stripped) > _HEADING_MAX_CHARS or _WIDE_GAP_RE.search(stripped) or _CITATION_YEAR_RE.search(stripped):
+        return False
+    if int(number.split(".")[0]) > _HEADING_MAX_LEADING_NUMBER:
+        return False
+    rest = stripped[stripped.find(number) + len(number):]
+    if _NUMBER_THEN_NUMBER_RE.match(rest):
+        return False
+    # 앞 번호를 뺀 나머지에 글자가 숫자보다 많아야 제목이다("1. 서론"은 제목, "5.07 5.08"은 숫자 행)
+    letters = sum(ch.isalpha() for ch in rest)
+    digits = sum(ch.isdigit() for ch in rest)
+    return letters > digits
+
+
+def _page_edge_line_starts(text: str, page_map: list | None) -> set[int]:
+    """각 쪽의 처음과 끝 몇 줄(빈 줄 제외)의 시작 위치. page_map 항목은 [쪽 끝 위치, 쪽 번호]다."""
+    if not page_map or len(page_map) < 2:
+        return set()
+    starts: list[int] = []
+    offset = 0
+    for line in text.split("\n"):
+        if line.strip():
+            starts.append(offset)
+        offset += len(line) + 1
+    edges: set[int] = set()
+    page_start = 0
+    for entry in page_map:
+        page_end = entry[0]
+        on_page = [s for s in starts if page_start <= s < page_end]
+        edges.update(on_page[:_PAGE_EDGE_LINES])
+        edges.update(on_page[-_PAGE_EDGE_LINES:])
+        page_start = page_end
+    return edges
+
+
+def _running_header_offsets(text: str, page_map: list | None) -> set[int]:
+    """쪽 가장자리에 있고, 숫자와 공백을 뺀 내용이 같은 줄이 여러 쪽에 나오면 머리말·꼬리말이다.
+    요소 위치 정보가 없는 경로(HWP/HWPX, 스캔 PDF)용이다. 쪽 경계를 모르면 아무것도 표시하지 않는다
+    (본문에서 반복되는 "위반 건수 : 2개" 같은 줄을 지우지 않기 위해, 2026-11-16)."""
+    edges = _page_edge_line_starts(text, page_map)
+    if not edges:
+        return set()
+    by_key: dict[str, list[int]] = {}
+    offset = 0
+    for line in text.split("\n"):
+        stripped = line.strip()
+        # 글머리표 줄("• 위반 건수 : 2개")은 쪽 끝에 와도 본문 목록이다
+        is_bullet = stripped[:1] in _BULLET_CHARS or bool(_LIST_RE.match(stripped))
+        if offset in edges and stripped and not is_bullet and len(stripped) <= _REPEATED_LINE_MAX_CHARS:
+            key = _NON_KEY_RE.sub("", stripped)
+            if len(key) >= _REPEATED_LINE_MIN_KEY:
+                by_key.setdefault(key, []).append(offset)
+        offset += len(line) + 1
+    return {o for offsets in by_key.values() if len(offsets) >= _REPEATED_LINE_MIN_COUNT for o in offsets}
+
+
 def _classify(
     line: str, layout: dict | None, body_font_size: float | None,
 ) -> tuple[str, int | None]:
@@ -149,7 +231,9 @@ def _classify(
     if layout and layout.get("role") == "footnote":
         return "FOOTNOTE", None
     m = _HEADING_NUMBERED_RE.match(line)
-    if m:
+    if m and _plausible_numbered_heading(line, m.group(1)):
+        if line[len(m.group(1)):].startswith(")"):
+            return "HEADING", _PAREN_NUMBER_LEVEL
         level = m.group(1).count(".") + 1
         return "HEADING", level
     if _HEADING_KOREAN_RE.match(line):
@@ -158,9 +242,17 @@ def _classify(
         return "HEADING", 1
     if _LIST_RE.match(line):
         return "LIST_ITEM", None
+    # 문서가 스스로 "개요 N" 스타일로 표시한 문단은 그 수준의 제목이다(HWPX, 전체 점검 2-12).
+    # 번호 패턴이 있으면 위에서 이미 정해졌고, 여기는 번호 없이 스타일만 쓴 제목을 받는다.
+    # 한글에서는 개요 스타일로 본문 문장을 쓰기도 하므로 제목 길이를 넘는 문단은 제외한다.
+    if layout and layout.get("heading_level") and len(line.strip()) <= _HEADING_MAX_CHARS:
+        return "HEADING", int(layout["heading_level"])
     # 정규식이 아무것도 못 찾았을 때만 폰트 신호로 폴백 승격한다(문서 파싱
     # 고도화 Phase 2) — 번호/장절조 패턴 없이 굵고 큰 글씨로만 된 제목을
     # 놓치지 않기 위함. 정규식이 뭔가를 판단했다면 항상 그 판단이 우선.
+    # 표지의 날짜("2025년 12월", "2025.12.21")는 굵고 크게 쓰여도 제목이 아니다(HWPX 실측, 2026-11-16)
+    if _DATE_ONLY_RE.match(line.strip()):
+        return "PARAGRAPH", None
     if layout and layout.get("is_bold") and body_font_size and layout.get("font_size"):
         if layout["font_size"] >= body_font_size + _HEADING_FONT_DELTA:
             level = 1 if layout["font_size"] >= body_font_size * _HEADING_LEVEL1_RATIO else 2
@@ -172,6 +264,7 @@ def _build_blocks(
     text: str,
     layout_entries: list[dict] | None = None,
     toc_offsets: set[int] | None = None,
+    page_map: list | None = None,
 ) -> list[tuple[str, int | None, int, int, str, dict | None]]:
     """줄 단위로 훑어 (node_type, level, span_start, span_end, block_text,
     layout) 튜플 목록을 만든다. HEADING/LIST_ITEM/TABLE(마커)/FOOTNOTE/TOC
@@ -189,6 +282,7 @@ def _build_blocks(
     toc_offsets = toc_offsets or set()
     body_font_size = _body_font_size(layout_entries) if layout_entries else None
     cursor = _LineLayoutCursor(layout_entries or [])
+    header_offsets = _running_header_offsets(text, page_map)
 
     def flush() -> None:
         nonlocal buf_type, buf_start, buf_end, buf_lines
@@ -223,6 +317,11 @@ def _build_blocks(
             # 않게 한다.
             flush()
             blocks.append(("TOC", None, line_start, line_end, line, layout))
+            continue
+
+        if line_start in header_offsets:
+            flush()
+            blocks.append(("HEADER", None, line_start, line_end, line, layout))
             continue
 
         node_type, level = _classify(line, layout, body_font_size)
@@ -319,6 +418,30 @@ def _build_blocks_from_elements(
         }
         blocks.append((node_type, level, el.get("span_start"), el.get("span_end"), text, layout))
     return blocks
+
+
+def _page_map_for_text(doc, text: str) -> list | None:
+    """page_map은 원문(parsed_text) 위치 기준이다. 구조 분석이 받은 텍스트가 원문과 다르면 쪽 끝 위치를 옮긴다."""
+    page_map = getattr(doc, "page_map", None)
+    parsed = getattr(doc, "parsed_text", None)
+    if not page_map or not parsed or parsed == text:
+        return page_map
+    from app.pipeline.page_alignment import OffsetMapper
+
+    mapper = OffsetMapper(parsed, text)
+    return [[mapper.map(end), page] for end, page in page_map]
+
+
+def _node_page_locator(doc, text: str):
+    """요소에 쪽 정보가 없는 경로(HWP/HWPX, 스캔 PDF OCR, legacy PDF)의 노드 쪽 번호를 page_map으로 찾는다.
+    예전에는 이 경로의 노드가 모두 쪽 번호 없이 저장돼 원문 대조가 되지 않았다(2026-11-16).
+    page_map 항목이 하나뿐이면(DOCX처럼 쪽을 모르는 형식) 모두 1쪽으로 보여 오해를 사므로 쓰지 않는다."""
+    page_map = getattr(doc, "page_map", None)
+    if not page_map or len(page_map) < 2:
+        return None
+    from app.pipeline.page_alignment import PageLocator
+
+    return PageLocator(getattr(doc, "parsed_text", None) or text, page_map, text)
 
 
 def _extract_title(
@@ -419,7 +542,16 @@ class StructureAnalyzeBlock(BaseBlock):
         # 1.7.0: Document.title 을 "첫 HEADING"이 아니라 title_resolver(내장 제목·표지 줄·글자 크기·
         # 파일명)로 정하고, 사용자가 고친 제목(user_edited_fields)은 덮어쓰지 않는다 — 캐시된 이전
         # 결과는 표지 연도·장 제목이 제목이 된 값이다.
-        return "1.10.0"
+        #
+        # 1.11.0: Docling 경로의 제목 레벨을 bbox 글자 크기로 다시 정하고, 목차 쪽 제목은 TOC로, 쪽 가장자리
+        # 반복 문구는 HEADER/FOOTER로 바꾸며, 한 글자 문단은 버린다(structure_refine.py, 2026-11-13).
+        #
+        # 1.12.0: 목차 쪽의 문단과 목록 항목도 다른 쪽 제목과 같으면 TOC로 바꾼다(2026-11-13).
+        #
+        # 1.13.0: 요소에 쪽 정보가 없는 경로의 노드 쪽 번호를 page_map으로 채운다(2026-11-16).
+        # 같은 날 legacy 경로의 번호 제목 판정을 좁히고(_plausible_numbered_heading), 여러 번 반복되는 짧은 줄을
+        # 쪽 가장자리에서 여러 쪽에 반복되는 짧은 줄을 머리말(HEADER)로 표시한다(_running_header_offsets).
+        return "1.14.0"
 
     @property
     def category(self) -> str:
@@ -477,11 +609,14 @@ class StructureAnalyzeBlock(BaseBlock):
             # 없으면(HWP/HWPX, 또는 legacy 엔진) 기존 정규식 경로로 완전히
             # 폴백한다 — 회귀 없음.
             built_blocks = (
-                _build_blocks_from_elements(doc.elements)
+                refine_element_blocks(
+                    _build_blocks_from_elements(doc.elements), doc.elements, cfg.heading_max_level
+                )
                 if doc.elements
-                else _build_blocks(text, layout_entries, toc_offsets)
+                else _build_blocks(text, layout_entries, toc_offsets, _page_map_for_text(doc, text))
             )
 
+            page_locator = _node_page_locator(doc, text)
             for node_type, level, span_start, span_end, block_text, layout in built_blocks:
                 if node_type == "HEADING" and not cfg.detect_headings:
                     node_type, level = "PARAGRAPH", None
@@ -532,7 +667,9 @@ class StructureAnalyzeBlock(BaseBlock):
                     level=level, sort_order=sort_order, parent_node_id=parent_id,
                     span_start=span_start, span_end=span_end,
                     text=block_text[:2000],
-                    page_number=layout.get("page_number") if layout else None,
+                    page_number=(layout or {}).get("page_number") or (
+                        page_locator.page_for(span_start) if page_locator and span_start is not None else None
+                    ),
                     style=style,
                     source_table_id=source_table_id,
                     # 메타 정보 생성 설계서(2026-07-23) Phase 4 — chunk_strategies.py가

@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 from app.core.config import settings
+from app.pipeline.formats import IMAGE_SUFFIXES
 from app.services.storage import storage_service
 
 logger = logging.getLogger(__name__)
@@ -160,17 +161,70 @@ def _hwpx_to_pdf(raw: bytes) -> bytes:
     return _soffice_to_pdf(_hwpx_to_html(raw).encode("utf-8"), ".html")
 
 
+def _image_to_pdf(suffix: str):
+    """이미지는 쪽마다 한 장인 PDF로 보여 준다(여러 장짜리 TIFF도 쪽을 넘기며 볼 수 있다)."""
+    def convert(raw: bytes) -> bytes:
+        from app.pipeline.adapters.image_adapter import image_to_pdf_bytes
+
+        with tempfile.TemporaryDirectory() as workdir:
+            path = Path(workdir) / f"input{suffix}"
+            path.write_bytes(raw)
+            return image_to_pdf_bytes(path)
+
+    return convert
+
+
+def _text_to_html(raw: bytes) -> str:
+    import html as html_mod
+
+    from app.pipeline.adapters.text_adapter import decode_text
+
+    body = f'<pre style="white-space:pre-wrap;font-family:inherit">{html_mod.escape(decode_text(raw))}</pre>'
+    return _HTML_WRAP.format(body=body)
+
+
+def _uploaded_html_to_html(raw: bytes) -> str:
+    """올린 HTML은 그대로 내보내지 않는다(스크립트가 실행된다). 추출한 글과 표만 다시 적는다."""
+    import html as html_mod
+
+    from app.pipeline.adapters.text_adapter import decode_text, parse_html
+
+    blocks, _tables, collector, _title = parse_html(decode_text(raw))
+    headings = {entry["text"] for entry in collector.line_layout if entry["style_name"]}
+    parts = []
+    for block in blocks:
+        text = html_mod.escape(block.text)
+        if block.block_type == "table":
+            parts.append(f'<pre style="white-space:pre-wrap">{text}</pre>')
+        elif block.text in headings:
+            parts.append(f"<h3>{text}</h3>")
+        else:
+            parts.append(f'<p style="white-space:pre-wrap">{text}</p>')
+    return _HTML_WRAP.format(body="".join(parts))
+
+
 _PDF_CONVERTERS = {
     ".docx": _docx_to_pdf,
     ".hwp": _hwp_to_pdf,
     ".hwpx": _hwpx_to_pdf,
+    ".xlsx": lambda raw: _soffice_to_pdf(raw, ".xlsx"),
+    ".pptx": lambda raw: _soffice_to_pdf(raw, ".pptx"),
+    **{suffix: _image_to_pdf(suffix) for suffix in sorted(IMAGE_SUFFIXES)},
 }
 
 _HTML_CONVERTERS = {
     ".docx": _docx_to_html,
     ".hwp": _hwp_to_html,
     ".hwpx": _hwpx_to_html,
+    ".txt": _text_to_html,
+    ".md": _text_to_html,
+    ".html": _uploaded_html_to_html,
+    ".htm": _uploaded_html_to_html,
 }
+
+# 원본을 그대로 옮긴 미리보기(원본과 다를 수 있다는 안내를 붙이지 않는다)
+_FAITHFUL_PDF_SUFFIXES = frozenset({".docx", ".pptx", ".xlsx"}) | IMAGE_SUFFIXES
+_FAITHFUL_HTML_SUFFIXES = frozenset({".txt", ".md"})
 
 
 def _generate_preview(suffix: str, raw: bytes) -> tuple[bytes, str, str]:
@@ -197,7 +251,8 @@ def _is_approximate(suffix: str, kind: str) -> bool:
     so their PDF is built from our own paragraph/table extraction and is a
     reconstruction, not the original layout. Any HTML fallback is likewise
     an approximation regardless of format."""
-    return not (suffix == ".docx" and kind == "pdf")
+    faithful = _FAITHFUL_PDF_SUFFIXES if kind == "pdf" else _FAITHFUL_HTML_SUFFIXES
+    return suffix not in faithful
 
 
 def pdf_pages_text_for(document_id: str) -> list[dict] | None:

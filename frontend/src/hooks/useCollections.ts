@@ -8,11 +8,13 @@ export interface SearchSettings {
   top_k: number
   rerank: boolean
   diversify: boolean
+  // Parent Retrieval: 채팅 답변 때 근거 청크의 같은 상위 절 앞뒤 청크를 함께 넘긴다
+  parent_context: boolean
   vector_weight: number
 }
 
 export const DEFAULT_SEARCH_SETTINGS: SearchSettings = {
-  mode: 'hybrid', top_k: 5, rerank: true, diversify: false, vector_weight: 0.6,
+  mode: 'hybrid', top_k: 5, rerank: true, diversify: false, vector_weight: 0.6, parent_context: true,
 }
 
 export interface Collection {
@@ -165,6 +167,28 @@ export function useReprocessCollection() {
     mutationFn: async (id: string) => {
       const { data } = await apiClient.post(`/collections/${id}/reprocess`)
       return data as { queued: number; skipped: number }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['collections'] })
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+    },
+  })
+}
+
+export interface ReprocessFromStartResult {
+  queued: number
+  skipped: number
+  /** 건너뛴 이유 → 건수(처리 중이거나 워크플로우로 처리된 적이 없는 문서) */
+  skipped_reasons: Record<string, number>
+}
+
+/** 컬렉션 문서를 워크플로우 최신 버전으로 추출부터 다시 처리한다. */
+export function useReprocessCollectionFromStart() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await apiClient.post(`/collections/${id}/reprocess-from-start`)
+      return data as ReprocessFromStartResult
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['collections'] })

@@ -19,6 +19,7 @@ from app.db.session import get_db
 from app.schemas.document import (
     DocumentUploadResponse,
 )
+from app.pipeline.formats import EXTENSION_CONTENT_TYPES, SUPPORTED_LABEL, SUPPORTED_SUFFIXES
 from app.services.access_policy import build_access_context
 from app.services.document_lifecycle import copy_access, new_version_fields
 from app.services.document_storage import release_original
@@ -28,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 
-_SUPPORTED_UPLOAD_SUFFIXES = {".pdf", ".docx", ".hwp", ".hwpx"}
+_SUPPORTED_UPLOAD_SUFFIXES = SUPPORTED_SUFFIXES
 # Safety caps for a ZIP-bulk upload — this endpoint decompresses attacker-
 # controllable archive content in memory, so both entry count and total
 # uncompressed size need hard limits (classic zip-bomb surface).
@@ -174,12 +175,8 @@ async def _start_workflow_or_mark_failed(
 _GENERIC_CONTENT_TYPES = frozenset({"", "application/octet-stream"})
 # 운영 컨테이너(python:3.11-slim)에는 시스템 MIME 테이블이 없어 mimetypes가 pdf 외의
 # 지원 형식(docx/hwp/hwpx)을 모른다 — 지원 확장자는 명시적으로 지정한다.
-_EXTENSION_CONTENT_TYPES = {
-    ".pdf": "application/pdf",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".hwp": "application/x-hwp",
-    ".hwpx": "application/haansofthwpx",
-}
+# 목록은 pipeline/formats.py에 있다. HTML과 마크다운은 text/plain으로 저장한다(아래 설명).
+_EXTENSION_CONTENT_TYPES = EXTENSION_CONTENT_TYPES
 
 
 def _resolve_content_type(filename: str, declared: str | None) -> str:
@@ -257,7 +254,7 @@ async def upload_document(
     if ext not in _SUPPORTED_UPLOAD_SUFFIXES:
         raise HTTPException(
             status_code=415,
-            detail=f"지원하지 않는 파일 형식입니다. 지원 형식: {', '.join(_SUPPORTED_UPLOAD_SUFFIXES)}",
+            detail=f"지원하지 않는 파일 형식입니다. 지원 형식: {SUPPORTED_LABEL}",
         )
 
     # Defect 4: Sanitize filename (remove path traversal)

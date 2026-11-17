@@ -67,3 +67,23 @@ async def test_search_endpoint_returns_429_once_account_limit_is_exceeded(redis)
         await search_api.search(request=SimpleNamespace(project_id=None, collection_id=None), db=None, current_user=user)
 
     assert caught.value.status_code == 429
+
+
+def _broken_client():
+    raise ConnectionError("redis down")
+
+
+def test_fails_open_by_default_when_redis_is_down(monkeypatch):
+    monkeypatch.setattr(rate_limit, "_get_client", _broken_client)
+
+    rate_limit.enforce_user_rate_limit("u1", "search", limit=1, window_seconds=60)
+
+
+def test_llm_buckets_refuse_requests_when_redis_is_down(monkeypatch):
+    """LLM을 부르는 요청은 제한을 확인하지 못하면 받지 않는다(전체 점검 2-10)."""
+    monkeypatch.setattr(rate_limit, "_get_client", _broken_client)
+
+    with pytest.raises(HTTPException) as exc:
+        rate_limit.enforce_user_rate_limit("u1", "chat_message", limit=1, window_seconds=60, fail_closed=True)
+
+    assert exc.value.status_code == 503

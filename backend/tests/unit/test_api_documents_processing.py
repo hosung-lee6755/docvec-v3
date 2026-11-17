@@ -315,6 +315,34 @@ async def test_nodes_empty_without_run(db_session):  # noqa: F811
     await assert_http_error(proc.list_document_nodes(doc.id, db_session, stranger_user()), 403)
 
 
+async def test_compact_nodes_truncate_text_and_drop_style(db_session):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "p-nodes-compact")
+    long_text = "가" * (proc.COMPACT_NODE_TEXT_CHARS + 20)
+    await _node(db_session, doc, run, sort_order=1, text=long_text, style={"font_size": 12.0})
+    await _node(db_session, doc, run, sort_order=2, text=None)
+
+    result = await proc.list_document_nodes(doc.id, db_session, owner_user(), compact=True)
+
+    first, second = result["nodes"]
+    assert first["text"] == long_text[: proc.COMPACT_NODE_TEXT_CHARS]
+    assert first["text_length"] == len(long_text)
+    assert first["style"] is None
+    assert (second["text"], second["text_length"]) == (None, None)
+
+
+async def test_get_node_returns_full_node_and_checks_access(db_session):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "p-node-get")
+    node = await _node(db_session, doc, run, text="전체 본문", style={"bold": True})
+    other, _ = await doc_with_run(db_session, "p-node-get-other")
+
+    result = await proc.get_document_node(doc.id, node.id, db_session, owner_user())
+
+    assert (result.text, result.style) == ("전체 본문", {"bold": True})
+    await assert_http_error(proc.get_document_node(other.id, node.id, db_session, owner_user()), 404)
+    await assert_http_error(proc.get_document_node(uuid4(), node.id, db_session, owner_user()), 404)
+    await assert_http_error(proc.get_document_node(doc.id, node.id, db_session, stranger_user()), 403)
+
+
 async def test_correct_node_updates_type_level_and_merges_style(db_session):  # noqa: F811
     doc, run = await doc_with_run(db_session, "p-node-fix")
     node = await _node(db_session, doc, run, style={"bold": True, "font_size": 10.0})
@@ -362,6 +390,18 @@ async def test_elements_default_to_empty_list_and_return_stored(db_session):  # 
     ]
     await assert_http_error(proc.list_document_elements(uuid4(), db_session, owner_user()), 404)
     await assert_http_error(proc.list_document_elements(filled.id, db_session, stranger_user()), 403)
+
+
+async def test_elements_page_by_offset_and_limit_with_totals(db_session):  # noqa: F811
+    elements = [{"id": f"e{i}", "user_corrected": i == 3} for i in range(5)]
+    doc = await add_doc(db_session, "p-el-page", elements=elements)
+
+    result = await proc.list_document_elements(doc.id, db_session, owner_user(), offset=2, limit=2)
+
+    assert [el["id"] for el in result["elements"]] == ["e2", "e3"]
+    assert (result["total"], result["offset"], result["corrected_count"]) == (5, 2, 1)
+    tail = await proc.list_document_elements(doc.id, db_session, owner_user(), offset=4)
+    assert [el["id"] for el in tail["elements"]] == ["e4"]
 
 
 async def test_correct_element_updates_content_and_metadata_only_for_target(db_session):  # noqa: F811

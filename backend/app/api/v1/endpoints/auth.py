@@ -3,6 +3,8 @@ import hmac
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,7 +25,8 @@ from app.schemas.auth import LoginRequest, LoginResponse, TokenResponse, UserCre
 from app.services.audit import log_audit
 from app.services.directory import get_directory_client
 from app.services.directory.ldap_client import DirectoryUnavailable
-from app.services.directory.provisioning import DirectoryConflict, provision_login
+from app.services.directory.provisioning import UNUSABLE_PASSWORD, DirectoryConflict, provision_login
+from app.services import oidc
 
 router = APIRouter()
 _bearer = HTTPBearer()
@@ -66,6 +69,8 @@ async def auth_options(db: AsyncSession = Depends(get_db)) -> dict:
         "self_signup_enabled": bool(settings.self_signup_enabled) and not directory,
         "admin_code_signup": admin_code,
         "directory_login": directory,
+        "oidc_login": oidc.is_enabled(),
+        "oidc_label": settings.oidc_button_label,
     }
 
 
@@ -206,6 +211,116 @@ async def _directory_login(db: AsyncSession, login_id: str, password: str, fail)
     except DirectoryConflict:
         await db.rollback()
         await fail(409, "같은 이메일을 쓰는 로컬 계정이 있습니다. 관리자에게 문의하세요.", reason="email_conflict")
+
+
+class OidcExchangeRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=200)
+
+
+def _oidc_redis():
+    from app.core.rate_limit import _get_client
+
+    return _get_client()
+
+
+def _oidc_return(fragment: str) -> RedirectResponse:
+    return RedirectResponse(f"{settings.oidc_post_login_path}#{fragment}", status_code=302)
+
+
+async def _oidc_user(db: AsyncSession, identity: oidc.OidcIdentity) -> User:
+    """통합 로그인 계정을 찾거나 만든다. 이메일이 같은 다른 출처의 계정과는 합치지 않는다."""
+    user = await db.scalar(select(User).where(User.external_id == identity.external_id))
+    if user is None:
+        if await db.scalar(select(User.id).where(func.lower(User.email) == identity.email.lower())):
+            raise oidc.OidcError("email_conflict")
+        user = User(
+            id=uuid4(), email=identity.email, username=identity.name, hashed_password=UNUSABLE_PASSWORD,
+            role="admin" if identity.is_admin else "viewer",
+            auth_source=oidc.AUTH_SOURCE_OIDC, external_id=identity.external_id,
+        )
+        db.add(user)
+        await db.flush()
+        return user
+    if settings.oidc_admin_claim and settings.oidc_admin_value:
+        # 관리자 여부는 로그인 서버의 클레임을 따른다. 다른 역할(editor 등)은 화면에서 정한 대로 둔다
+        if identity.is_admin:
+            user.role = "admin"
+        elif user.role == "admin":
+            user.role = "viewer"
+    return user
+
+
+@router.get("/oidc/login")
+async def oidc_login(http_request: Request):
+    """통합 로그인 서버로 보낸다(전체 점검 2-6)."""
+    if not oidc.is_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    enforce_rate_limit(http_request, "oidc_login", limit=20, window_seconds=60)
+
+    def _begin() -> str:
+        with oidc.http_client() as client:
+            return oidc.begin_login(_oidc_redis(), client)
+
+    try:
+        return RedirectResponse(await asyncio.to_thread(_begin), status_code=302)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="통합 로그인 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.") from exc
+
+
+@router.get("/oidc/callback")
+async def oidc_callback(
+    http_request: Request, code: str = "", state: str = "", error: str = "",
+    db: AsyncSession = Depends(get_db),
+):
+    """로그인 서버가 돌려보내는 곳. 성공하면 일회용 코드를, 실패하면 실패 표시만 화면에 넘긴다."""
+    if not oidc.is_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    enforce_rate_limit(http_request, "oidc_callback", limit=20, window_seconds=60)
+    ip = http_request.client.host
+
+    async def _fail(reason: str, user_id: str | None = None) -> RedirectResponse:
+        await db.rollback()
+        log_audit(db, user_id, "auth.login_failed", "user", user_id,
+                  detail={"source": oidc.AUTH_SOURCE_OIDC, "reason": reason[:200]}, ip_address=ip)
+        await db.commit()
+        return _oidc_return("sso_error=1")
+
+    if error or not code:
+        return await _fail(f"provider_error:{error}" if error else "missing_code")
+
+    def _complete() -> oidc.OidcIdentity:
+        with oidc.http_client() as client:
+            return oidc.complete_login(_oidc_redis(), client, state, code)
+
+    try:
+        identity = await asyncio.to_thread(_complete)
+        user = await _oidc_user(db, identity)
+    except oidc.OidcError as exc:
+        return await _fail(str(exc))
+    except Exception as exc:
+        return await _fail(f"unexpected:{type(exc).__name__}")
+    if not user.is_active:
+        return await _fail("disabled", str(user.id))
+
+    log_audit(db, str(user.id), "auth.login", "user", str(user.id),
+              detail={"source": oidc.AUTH_SOURCE_OIDC}, ip_address=ip)
+    await db.commit()
+    return _oidc_return(f"sso={oidc.issue_exchange_code(_oidc_redis(), str(user.id))}")
+
+
+@router.post("/oidc/exchange", response_model=LoginResponse)
+async def oidc_exchange(
+    body: OidcExchangeRequest, response: Response, http_request: Request, db: AsyncSession = Depends(get_db),
+):
+    """화면이 일회용 코드를 로그인 응답으로 바꾼다. 코드는 한 번만, 60초 안에만 쓸 수 있다."""
+    enforce_rate_limit(http_request, "oidc_exchange", limit=10, window_seconds=60)
+    user_id = await asyncio.to_thread(oidc.redeem_exchange_code, _oidc_redis(), body.code)
+    user = await db.get(User, user_id) if user_id else None
+    if user is None or not user.is_active or user.auth_source != oidc.AUTH_SOURCE_OIDC:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    access_token, refresh_token = session_tokens(user)
+    _set_refresh_cookie(response, refresh_token)
+    return LoginResponse(user=UserResponse.model_validate(user), access_token=access_token)
 
 
 @router.post("/refresh", response_model=TokenResponse)

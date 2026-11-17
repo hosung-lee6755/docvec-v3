@@ -6,6 +6,7 @@ import { useAuthStore } from '../store/authStore'
 import { useWaitingReviewCount, useFailedCount } from '../hooks/useDocuments'
 import { CountBadge } from './ui'
 import { CommandPalette } from './CommandPalette'
+import { NotificationBell } from './NotificationBell'
 import { HOME_ITEM, isNavItemActive, visibleNavGroups } from './navigation'
 import type { NavItem } from './navigation'
 
@@ -94,6 +95,7 @@ export default function Layout() {
           <div className="ds-user">
             <span className="ds-avatar" aria-hidden="true">{initialOf(user?.email)}</span>
             <span className="ds-user__name" title={user?.email}>{user?.email}</span>
+            <NotificationBell />
             <Link
               to="/settings"
               title="계정 설정"

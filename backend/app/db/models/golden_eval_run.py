@@ -43,4 +43,7 @@ class GoldenEvalRun(Base):
     search_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # 답변까지 평가한 실행인지와, 기대 사실이 있는 질의의 사실 적중률 평균(2026-11-16)
+    with_answers: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    mean_fact_recall: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)

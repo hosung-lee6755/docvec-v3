@@ -105,6 +105,7 @@ function buildFacts(data: NonNullable<ReturnType<typeof useAnswerTrace>['data']>
     // 캐시 재사용이면 모델을 부르지 않았으므로 모델 칸이 비어 있다. 빈 칸 대신 그 사실을 적는다.
     ['모델', data.cache_hit ? '캐시 재사용(모델 호출 없음)' : `${data.model_key ?? '-'} (${data.provider ?? '-'}) · 검증 모델 ${data.verifier_model ?? '-'}`],
     ['근거 검증', `${data.grounding ? GROUNDING_LABELS[data.grounding] : '-'}${data.broadened ? ' · 재검색함' : ''}${data.cache_hit ? ' · 캐시 재사용' : ''}`],
+    ['사용자 평가', data.feedback ? `${FEEDBACK_LABELS[data.feedback]}${data.feedback_note ? ` · ${data.feedback_note}` : ''}` : '없음'],
     ['시스템 프롬프트', PROMPT_SOURCE_LABELS[data.system_prompt_source ?? ''] ?? '-'],
     ['토큰·응답 시간', `${formatTokens(data.input_tokens, data.output_tokens)} · ${formatLatency(data.latency_ms)}`],
   ]
@@ -155,16 +156,21 @@ function TraceDetail({ traceId, onClose }: { traceId: string; onClose: () => voi
   )
 }
 
+type FeedbackFilter = 'up' | 'down' | 'any'
+const FEEDBACK_LABELS: Record<'up' | 'down', string> = { up: '도움이 됨', down: '도움이 안 됨' }
+
 export default function AnswerTracesPage() {
   const currentUser = useAuthStore((s) => s.user)
   const [searchParams] = useSearchParams()
   const [grounding, setGrounding] = useState<Grounding | ''>('')
+  const [feedback, setFeedback] = useState<FeedbackFilter | ''>('')
   const [documentId, setDocumentId] = useState(searchParams.get('document_id') ?? '')
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
 
   const { data, isLoading, isError, error, refetch } = useAnswerTraces({
     grounding: grounding || undefined,
+    feedback: feedback || undefined,
     document_id: documentId.trim() || undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
@@ -203,6 +209,7 @@ export default function AnswerTracesPage() {
                 <th scope="col">질문</th>
                 <th scope="col">근거 검증</th>
                 <th scope="col">근거·인용</th>
+                <th scope="col">사용자 평가</th>
                 <th scope="col">모델</th>
               </tr>
             </thead>
@@ -225,6 +232,11 @@ export default function AnswerTracesPage() {
                     {t.cache_hit && t.grounding ? ' · 캐시' : ''}
                   </td>
                   <td>{t.source_count}건 중 {t.cited_count}건 인용</td>
+                  <td>
+                    {t.feedback
+                      ? <Badge tone={t.feedback === 'down' ? 'danger' : 'success'} isPlain>{FEEDBACK_LABELS[t.feedback]}</Badge>
+                      : <span className="ds-cell-muted">-</span>}
+                  </td>
                   <td className="ds-cell-muted">{t.cache_hit ? '캐시 재사용' : t.model_key ?? '-'}</td>
                 </tr>
               ))}
@@ -265,6 +277,17 @@ export default function AnswerTracesPage() {
         >
           <option value="">근거 검증 전체</option>
           {Object.entries(GROUNDING_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </Select>
+        <Select
+          controlSize="sm"
+          aria-label="사용자 평가"
+          value={feedback}
+          onChange={(e) => { setFeedback(e.target.value as FeedbackFilter | ''); setPage(0) }}
+        >
+          <option value="">사용자 평가 전체</option>
+          <option value="down">도움이 안 됨</option>
+          <option value="up">도움이 됨</option>
+          <option value="any">평가가 달린 답</option>
         </Select>
         <SearchInput
           label="근거 문서 ID로 찾기"

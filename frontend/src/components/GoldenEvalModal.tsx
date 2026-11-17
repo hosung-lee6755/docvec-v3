@@ -9,11 +9,12 @@ import {
   useRunGoldenEval,
   useSetGoldenBaseline,
   isGoldenRunActive,
+  parseExpectedFacts,
   type GoldenEvalRun,
 } from '../hooks/useGoldenQueries'
 import { useDocuments } from '../hooks/useDocuments'
 import { apiErrorDetail, explainFailure } from '../lib/apiError'
-import { Alert, Badge, Button, ErrorText, Field, Input, Modal } from './ui'
+import { Alert, Badge, Button, ErrorText, Field, Input, Modal, Textarea } from './ui'
 import GoldenRunDetail from './golden/GoldenRunDetail'
 import GoldenQueryList from './golden/GoldenQueryList'
 import { RUN_STATUS_LABELS, RUN_TRIGGER_LABELS, formatPercent } from './golden/goldenLabels'
@@ -67,6 +68,7 @@ function RunHistoryTable({
             <th scope="col">상태</th>
             <th scope="col">실행 방식</th>
             <th scope="col">적중률</th>
+            <th scope="col">사실 적중률</th>
             <th scope="col">표시</th>
             <th scope="col"><span className="sr-only">작업</span></th>
           </tr>
@@ -80,6 +82,7 @@ function RunHistoryTable({
                 <td>{RUN_STATUS_LABELS[run.status]}</td>
                 <td className="ds-cell-muted">{RUN_TRIGGER_LABELS[run.trigger]}</td>
                 <td className="ds-cell-num">{formatPercent(run.mean_hit_rate)}</td>
+                <td className="ds-cell-num">{run.with_answers ? formatPercent(run.mean_fact_recall) : '-'}</td>
                 <td>
                   <span style={{ display: 'inline-flex', gap: 'var(--space-1)' }}>
                     {run.is_baseline && <Badge tone="info">기준</Badge>}
@@ -119,6 +122,8 @@ export default function GoldenEvalModal({ collectionId, collectionName, onClose 
 
   const [newQuery, setNewQuery] = useState('')
   const [newExpectedIds, setNewExpectedIds] = useState<Set<string>>(new Set())
+  const [newFacts, setNewFacts] = useState('')
+  const [withAnswers, setWithAnswers] = useState(false)
   // 비워 두면 컬렉션의 검색 설정 top-k를 따른다.
   const [topKInput, setTopKInput] = useState('')
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
@@ -142,9 +147,11 @@ export default function GoldenEvalModal({ collectionId, collectionName, onClose 
     await createGoldenQuery.mutateAsync({
       query: newQuery.trim(),
       expected_document_ids: Array.from(newExpectedIds),
+      expected_facts: parseExpectedFacts(newFacts),
     })
     setNewQuery('')
     setNewExpectedIds(new Set())
+    setNewFacts('')
   }
 
   const filenameFor = (docId: string) => {
@@ -158,8 +165,10 @@ export default function GoldenEvalModal({ collectionId, collectionName, onClose 
 
   const handleRun = () => {
     if (!topK.isValid) return
-    runEval.mutate(topK.value)
+    runEval.mutate({ topK: topK.value, withAnswers })
   }
+
+  const factQueryCount = (goldenData?.items ?? []).filter((q) => q.expected_facts?.length).length
 
   return (
     <Modal
@@ -208,6 +217,11 @@ export default function GoldenEvalModal({ collectionId, collectionName, onClose 
                 <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>이 컬렉션에 문서가 없습니다.</span>
               )}
             </div>
+            <Field label="기대 사실 (선택, 한 줄에 하나)" hint="답에 그대로 나와야 하는 숫자, 날짜, 이름을 적습니다. 예: 5억, 2026.4.27">
+              {(id) => (
+                <Textarea id={id} rows={2} value={newFacts} onChange={(e) => setNewFacts(e.target.value)} />
+              )}
+            </Field>
             <div>
               <Button
                 type="submit"
@@ -256,6 +270,15 @@ export default function GoldenEvalModal({ collectionId, collectionName, onClose 
                 />
               )}
             </Field>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)' }}>
+              <input
+                type="checkbox"
+                checked={withAnswers}
+                disabled={factQueryCount === 0}
+                onChange={(e) => setWithAnswers(e.target.checked)}
+              />
+              답변까지 평가 (기대 사실이 있는 질문 {factQueryCount}개, 질문마다 답을 만들어 시간이 걸립니다)
+            </label>
             <Button
               variant="primary"
               onClick={handleRun}

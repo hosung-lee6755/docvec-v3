@@ -190,8 +190,8 @@ def _db_with_keys(project_key=None, user_key=None):
 def test_resolve_vision_credentials_prefers_project_key():
     db = _db_with_keys(project_key=SimpleNamespace(encrypted_key="P"),
                        user_key=SimpleNamespace(encrypted_key="U"))
-    db.get.return_value = SimpleNamespace(project_id="p1")
-    doc = SimpleNamespace(collection_id="c1", created_by="u1")
+    db.get.return_value = SimpleNamespace(project_id="p1", default_security_level=None)
+    doc = SimpleNamespace(collection_id="c1", created_by="u1", security_level=None)
 
     with patch("app.core.crypto.decrypt_secret", side_effect=lambda v: f"dec-{v}"):
         out = proc._resolve_vision_credentials(db, doc)
@@ -202,7 +202,7 @@ def test_resolve_vision_credentials_prefers_project_key():
 def test_resolve_vision_credentials_falls_back_to_user_key():
     db = _db_with_keys(user_key=SimpleNamespace(encrypted_key="U"))
     db.get.return_value = None  # collection missing -> no project scope
-    doc = SimpleNamespace(collection_id="c1", created_by="u1")
+    doc = SimpleNamespace(collection_id="c1", created_by="u1", security_level=None)
 
     with patch("app.core.crypto.decrypt_secret", return_value="plain"):
         out = proc._resolve_vision_credentials(db, doc)
@@ -212,7 +212,7 @@ def test_resolve_vision_credentials_falls_back_to_user_key():
 
 def test_resolve_vision_credentials_empty_when_no_keys():
     db = _db_with_keys()
-    doc = SimpleNamespace(collection_id=None, created_by="u1")
+    doc = SimpleNamespace(collection_id=None, created_by="u1", security_level=None)
 
     assert proc._resolve_vision_credentials(db, doc) == {}
 
@@ -712,3 +712,24 @@ def test_chunk_text_falls_back_to_a_space_before_a_hard_cut():
 
     for chunk_text, _start, _end in chunks[:-1]:
         assert chunk_text.endswith(" ")
+
+
+def test_resolve_vision_credentials_never_sends_high_level_documents_to_the_cloud():
+    """등급이 높은 문서는 키가 있어도 클라우드 VLM을 쓰지 않는다(전체 점검 2-11)."""
+    db = _db_with_keys(user_key=SimpleNamespace(encrypted_key="U"))
+    db.get.return_value = SimpleNamespace(project_id=None, default_security_level="Confidential")
+    doc = SimpleNamespace(collection_id="c1", created_by="u1", security_level=None)
+
+    assert proc._resolve_vision_credentials(db, doc) == {}
+
+
+def test_recognize_document_images_uses_the_block_setting_for_the_cap_and_says_what_it_skipped():
+    datas = [_png(70, 70) for _ in range(5)]
+    parsed = _parsed_with_images(*datas)
+
+    with patch("app.services.storage.storage_service", MagicMock()), \
+         patch.object(proc, "_recognize_figure_text", return_value=""):
+        records = proc._recognize_document_images("d", parsed, {}, max_figures=2)
+
+    assert len(records) == 2
+    assert "5개 가운데 앞의 2개만" in parsed.warnings[0]

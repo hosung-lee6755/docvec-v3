@@ -98,7 +98,7 @@ async def test_dismiss_suggestion_removes_only_that_tag_and_never_touches_qdrant
 
 
 # ---------------------------------------------------------------- metadata
-async def test_update_metadata_applies_only_fields_present_in_request(db_session):  # noqa: F811
+async def test_update_metadata_applies_only_fields_present_in_request(db_session, qdrant):  # noqa: F811
     doc = await add_doc(db_session, "m-meta", author="홍길동", organization="기존 조직")
     body = DocumentMetadataUpdateRequest(security_level="Confidential", organization=None)
 

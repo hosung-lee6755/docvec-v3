@@ -252,6 +252,10 @@ def _fail_document(db, run, error_message: str) -> None:
     doc.status = "FAILED"
     doc.error_message = error_message[:500]
     doc.active_run_id = run.id
+    # 올린 사람과 관리자에게 알린다(전체 점검 2-7). 알림 오류는 처리를 막지 않는다
+    from app.services.notifications import notify_document_failed
+
+    notify_document_failed(db, doc, error_message)
 
 
 def _find_paused_step(db, run_id: str) -> "WorkflowRunStep | None":
@@ -416,6 +420,9 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
                 doc = db.get(Document, run.document_id)
                 if doc is not None:
                     doc.status = "WAITING_REVIEW"
+                    from app.services.notifications import notify_review_waiting
+
+                    notify_review_waiting(db, doc)
             db.commit()
             return {"status": "WAITING_REVIEW", "output": resolved_output}
 
@@ -475,6 +482,17 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
         db.close()
 
 
+def _dispatch_default_analysis(document_id: str) -> None:
+    """기본 분석 워크플로우가 없는 컬렉션의 문서에 요약과 메타데이터(키워드, 분류) 작업을 보낸다.
+    예전 고정 파이프라인은 색인 뒤 두 작업을 보냈지만 워크플로우 경로는 보내지 않아, 분석 워크플로우를
+    지정하지 않은 컬렉션은 요약, 추천 태그, 분류가 계속 비어 있었다(2026-11-16 점검)."""
+    from app.pipeline.tasks.metadata import extract_metadata
+    from app.pipeline.tasks.summary import generate_summary
+
+    generate_summary.delay(document_id)
+    extract_metadata.delay(document_id)
+
+
 def _maybe_trigger_analysis(db, run) -> None:
     """A PREPROCESS run that just completed on a document in a collection with
     Collection.default_analysis_workflow_id set kicks off that ANALYSIS workflow
@@ -495,10 +513,11 @@ def _maybe_trigger_analysis(db, run) -> None:
         return
 
     document = db.get(Document, run.document_id)
-    if document is None or not document.collection_id:
+    if document is None:
         return
-    collection = db.get(Collection, document.collection_id)
+    collection = db.get(Collection, document.collection_id) if document.collection_id else None
     if collection is None or not collection.default_analysis_workflow_id:
+        _dispatch_default_analysis(str(document.id))
         return
 
     analysis_version_query = db.query(WorkflowVersion).filter(

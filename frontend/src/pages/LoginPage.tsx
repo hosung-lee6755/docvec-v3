@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import axios from 'axios'
@@ -8,6 +8,15 @@ import type { AuthOptions } from '../hooks/useAccounts'
 import { Alert, Button, Field, Input } from '../components/ui'
 import { describeError } from '../lib/apiError'
 import '../styles/screens/user.css'
+
+const SSO_LOGIN_ERROR = '통합 로그인에 실패했습니다. 다시 시도하고, 계속 안 되면 관리자에게 문의하세요.'
+const SSO_LOGIN_URL = '/api/v1/auth/oidc/login'
+
+/** 통합 로그인을 마치고 돌아오면 주소의 # 뒤에 일회용 코드(sso)나 실패 표시(sso_error)가 붙어 있다. */
+function readSsoFragment(hash: string): { code: string | null; failed: boolean } {
+  const params = new URLSearchParams(hash.replace(/^#/, ''))
+  return { code: params.get('sso'), failed: params.has('sso_error') }
+}
 
 const GENERIC_LOGIN_ERROR = "로그인하지 못했습니다. 아이디(이메일)와 비밀번호를 확인하세요."
 
@@ -59,6 +68,28 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const setAuth = useAuthStore((s) => s.setAuth)
   const { data: options } = useAuthOptions()
+  const [ssoFailed, setSsoFailed] = useState(false)
+  // 일회용 코드는 한 번만 바꿀 수 있다. 개발 모드의 이중 실행으로 두 번 보내지 않게 막는다
+  const ssoHandled = useRef(false)
+
+  useEffect(() => {
+    if (ssoHandled.current) return
+    const { code, failed } = readSsoFragment(window.location.hash)
+    if (!code && !failed) return
+    ssoHandled.current = true
+    // 코드가 주소 표시줄과 방문 기록에 남지 않게 바로 지운다
+    window.history.replaceState(null, '', window.location.pathname)
+    if (!code) {
+      setSsoFailed(true)
+      return
+    }
+    axios.post('/api/v1/auth/oidc/exchange', { code })
+      .then(({ data }) => {
+        setAuth(data.user, data.access_token)
+        navigate('/', { replace: true })
+      })
+      .catch(() => setSsoFailed(true))
+  }, [navigate, setAuth])
 
   const loginMutation = useMutation({
     mutationFn: async () => {
@@ -104,6 +135,15 @@ export default function LoginPage() {
             {loginMutation.isPending ? '로그인 중...' : '로그인'}
           </Button>
         </form>
+        {ssoFailed && <Alert tone="danger">{SSO_LOGIN_ERROR}</Alert>}
+        {options?.oidc_login && (
+          <Button
+            type="button" variant="secondary" isBlock
+            onClick={() => { window.location.href = SSO_LOGIN_URL }}
+          >
+            {options.oidc_label || '통합 로그인(SSO)'}
+          </Button>
+        )}
         <SignupHint options={options} />
       </div>
     </div>

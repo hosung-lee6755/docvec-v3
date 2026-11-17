@@ -19,6 +19,7 @@ from app.services.bm25_service import bm25_rerank
 from app.services.chunk_stats import record_hits
 from app.services.dictionary_service import expand_query
 from app.services.embedding import get_embedding_provider
+from app.services.lexical_index import hybrid_query_vector
 from app.services.mmr_service import mmr_rerank
 from app.services.qdrant_service import qdrant_service
 from app.services.retrieval_evidence import matched_terms, ocr_evidence, page_confidences
@@ -97,6 +98,8 @@ async def perform_search(
         limit=fetch_limit,
         with_vectors=diversify,
         query_filter=qdrant_access_filter(ctx, scope, extra=request.filters),
+        lexical=await asyncio.to_thread(hybrid_query_vector, expanded_query, mode),
+        lexical_scope=scope,
     )
     if hits:
         facts = await load_document_facts(db, {h["payload"].get("document_id") for h in hits})

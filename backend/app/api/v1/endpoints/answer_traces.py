@@ -8,6 +8,7 @@
 상세 조회는 감사 로그(`answer_trace.view`)에 남는다.
 """
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user, require_admin
 from app.db.models.answer_trace import AnswerTrace, AnswerTraceSource
+from app.db.models.chat_message import ChatMessage
 from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
 from app.db.models.user import User
@@ -111,6 +113,17 @@ async def _source_counts(db: AsyncSession, trace_ids: list) -> dict[str, tuple[i
     return {str(t): (int(n), int(c or 0)) for t, n, c in rows.all()}
 
 
+async def _feedback_by_message(db: AsyncSession, message_ids: list) -> dict[str, tuple[str | None, str | None]]:
+    """메시지 id → (평가, 메모). 평가가 없는 메시지는 넣지 않는다."""
+    if not message_ids:
+        return {}
+    rows = await db.execute(
+        select(ChatMessage.id, ChatMessage.feedback, ChatMessage.feedback_note)
+        .where(ChatMessage.id.in_(message_ids), ChatMessage.feedback.isnot(None))
+    )
+    return {str(i): (rating, note) for i, rating, note in rows.all()}
+
+
 @router.get("/admin/answer-traces")
 async def list_answer_traces(
     user_id: UUID | None = None,
@@ -121,6 +134,7 @@ async def list_answer_traces(
     grounding: str | None = None,
     status: str | None = None,
     cache_hit: bool | None = None,
+    feedback: Annotated[str | None, Query(pattern="^(up|down|any)$")] = None,
     limit: int = Query(50, gt=0, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -141,6 +155,13 @@ async def list_answer_traces(
         user_id, from_date, to_date, document_id, collection_id, grounding, status, cache_hit
     )
 
+    if feedback is not None:
+        # 사용자 평가가 달린 답만 본다. any는 좋아요와 싫어요 모두
+        rated = select(ChatMessage.id).where(
+            ChatMessage.feedback.isnot(None) if feedback == "any" else ChatMessage.feedback == feedback
+        )
+        filters = [*filters, AnswerTrace.chat_message_id.in_(rated)]
+
     total = await db.scalar(select(func.count(AnswerTrace.id)).where(*filters)) or 0
     traces = list((
         await db.scalars(
@@ -153,6 +174,7 @@ async def list_answer_traces(
     ).all())
     counts = await _source_counts(db, [t.id for t in traces])
     rows = [(t, *counts.get(str(t.id), (0, 0))) for t in traces]
+    feedback_of = await _feedback_by_message(db, [t.chat_message_id for t in traces if t.chat_message_id])
 
     return {
         "total": total,
@@ -172,6 +194,7 @@ async def list_answer_traces(
                 "model_key": t.model_key,
                 "source_count": n,
                 "cited_count": cited,
+                "feedback": feedback_of.get(str(t.chat_message_id), (None, None))[0],
             }
             for t, n, cited in rows
         ],
@@ -279,9 +302,14 @@ async def get_answer_trace(
     )
     await db.commit()
 
+    feedback_of = await _feedback_by_message(db, [trace.chat_message_id] if trace.chat_message_id else [])
+    rating, feedback_note = feedback_of.get(str(trace.chat_message_id), (None, None))
+
     return {
         "id": str(trace.id),
         "created_at": trace.created_at,
+        "feedback": rating,
+        "feedback_note": feedback_note,
         "chat_message_id": str(trace.chat_message_id) if trace.chat_message_id else None,
         "conversation_id": str(trace.conversation_id) if trace.conversation_id else None,
         "user_id": str(trace.user_id) if trace.user_id else None,

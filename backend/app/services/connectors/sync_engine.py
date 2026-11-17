@@ -63,7 +63,11 @@ from app.services.connectors.smb_client import RemoteFile, SourceClient
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_SUFFIXES = frozenset({".pdf", ".docx", ".hwp", ".hwpx"})
+from app.pipeline import formats  # noqa: E402
+
+# 공유 폴더에는 로고, 사진, 화면 갈무리가 많다. 이미지까지 가져오면 전부 OCR 대상이 되므로
+# 커넥터는 문서 형식만 가져온다. 이미지는 직접 올릴 때만 받는다.
+SUPPORTED_SUFFIXES = formats.SUPPORTED_SUFFIXES - formats.IMAGE_SUFFIXES
 COUNT_KEYS = (
     "added", "content_changed", "acl_changed", "unchanged", "deleted", "held", "skipped", "deferred", "errors",
 )
@@ -379,6 +383,12 @@ async def _finish(db, connector_id, run_id, counts: dict, status: str, error: st
         update(SourceConnector).where(SourceConnector.id == connector_id)
         .values(last_sync_at=now, last_status=status)
     )
+    if status == RUN_FAILED:
+        # 관리자에게 알린다(전체 점검 2-7). 알림 오류는 동기화 결과 기록을 막지 않는다
+        from app.services.notifications import notify_sync_failed
+
+        connector = await db.get(SourceConnector, connector_id)
+        await notify_sync_failed(db, connector_id, connector.name if connector else str(connector_id), error)
     await db.commit()
     run = await db.get(ConnectorRun, run_id)
     await db.refresh(run)

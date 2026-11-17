@@ -23,6 +23,12 @@ interface ChunksTabProps {
   onActivateTab: (tab: TabKey) => void
 }
 
+// Parent Retrieval의 뜻. 검색은 작은 청크로 정확하게 찾고, 답변을 만들 때만 같은 상위 절의 앞뒤 청크를 함께 넘긴다.
+const PARENT_RETRIEVAL_HINT =
+  '상위 청크는 이 청크가 속한 상위 절의 연속 청크를 묶은 것입니다. 검색은 이 청크로 하고, 채팅 답변을 만들 때 ' +
+  '같은 상위 절의 앞뒤 청크(검색 제외된 청크는 빼고, 근거마다 약 1,200자 안)를 함께 넘겨 문맥을 보완합니다. ' +
+  '컬렉션 검색 설정에서 끌 수 있습니다.'
+
 export default function ChunksTab({
   documentId,
   isLoading,
@@ -100,7 +106,9 @@ export default function ChunksTab({
               opacity: chunk.disabled ? 0.55 : 1,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 'var(--space-2)', flexWrap: 'wrap' }}>
+            {/* 메타 정보는 줄바꿈되고, 오른쪽 버튼 묶음은 한 줄로 고정한다(2026-11-13) */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 'var(--space-2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
               <span style={{ fontSize: 12, fontWeight: 600 }}>
                 청크 #{chunk.chunk_index + 1}
                 {isPdfDoc && chunk.page_number ? ` · ${chunk.page_number}쪽` : ''}
@@ -154,7 +162,8 @@ export default function ChunksTab({
                   조회 {chunk.hit_count}회{chunk.hit_count === 0 ? ' · 미조회' : ''}
                 </span>
               )}
-              <span style={{ flex: 1 }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, whiteSpace: 'nowrap' }}>
               {chunk.page_number != null && (
                 <button
                   onClick={() => { onOriginalPageChange(chunk.page_number as number); onActivateTab('original') }}
@@ -196,6 +205,7 @@ export default function ChunksTab({
                 </>
               )}
             </div>
+            </div>
             {(chunk.prev_chunk_id || chunk.next_chunk_id) && (
               <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--color-text-muted)', marginBottom: 'var(--space-2)' }}>
                 {chunk.prev_chunk_id && (
@@ -224,6 +234,7 @@ export default function ChunksTab({
                   onClick={() => onExpandedParentChunkIdChange(expandedParentChunkId === chunk.id ? null : chunk.id)}
                   className="ds-btn ds-btn--ghost ds-btn--sm"
                   style={{ cursor: 'pointer', fontSize: 11, padding: 0, color: 'var(--color-text-muted)' }}
+                  title={PARENT_RETRIEVAL_HINT}
                 >
                   {expandedParentChunkId === chunk.id ? '▾' : '▸'} 상위 청크 보기 (Parent Retrieval)
                 </button>
@@ -236,6 +247,9 @@ export default function ChunksTab({
                   }}>
                     {chunk.parent_chunk_text}
                   </pre>
+                )}
+                {expandedParentChunkId === chunk.id && (
+                  <p style={{ fontSize: 11, color: 'var(--color-text-muted)', margin: '4px 0 0' }}>{PARENT_RETRIEVAL_HINT}</p>
                 )}
               </div>
             )}

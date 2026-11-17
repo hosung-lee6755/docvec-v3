@@ -14,8 +14,11 @@ import {
   type ChatMessage,
   type ConversationSummary,
 } from '../hooks/useChat'
+import { useAnswerStream } from '../hooks/useAnswerStream'
 import { DeepSearchProgress, DeepSearchSteps, DeepSearchToggle } from '../components/chat/DeepSearch'
 import { CitationEvidence, LowOcrBadge } from '../components/chat/CitationEvidence'
+import { CitationLocation } from '../components/chat/CitationLocation'
+import { AnswerFeedback } from '../components/chat/AnswerFeedback'
 import { Alert, Badge, Button, ErrorAlert, ErrorText, IconButton, Input, Page, PageTitle, Select, buttonClass } from '../components/ui'
 import { explainFailure } from '../lib/apiError'
 import { useStickToBottom } from '../hooks/useStickToBottom'
@@ -237,7 +240,9 @@ function NewConversationForm({ projectId, onCreated }: { projectId?: string; onC
 }
 
 function ConversationView({ conversationId }: { conversationId: string }) {
-  const { data: conversation, isError: isConvError, error: convError, refetch: refetchConv } = useConversation(conversationId)
+  const [pendingMessageId, setPendingMessageId] = useState<string | null>(null)
+  const isStreaming = useAnswerStream(conversationId, pendingMessageId)
+  const { data: conversation, isError: isConvError, error: convError, refetch: refetchConv } = useConversation(conversationId, isStreaming)
   const sendMessage = useSendMessage(conversationId)
   const [query, setQuery] = useState('')
   const [isDeep, setIsDeep] = useState(false)
@@ -247,6 +252,8 @@ function ConversationView({ conversationId }: { conversationId: string }) {
   const isBusy = lastMessage
     ? lastMessage.status === 'PENDING' || lastMessage.status === 'GENERATING'
     : sendMessage.isPending
+  const lastPendingId = lastMessage && isBusy ? lastMessage.id : null
+  if (lastPendingId !== pendingMessageId) setPendingMessageId(lastPendingId)
 
   // 새 질문, 답변 진행 단계, 이어 써지는 답변이 바뀔 때마다 맨 아래를 따라간다
   const contentKey = [
@@ -389,6 +396,7 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
             <p className="user-chat__text">
               {chat.answer ? renderAnswer(chat.answer) : null}
             </p>
+            <AnswerFeedback key={chat.id} message={chat} />
           </div>
 
           {!!chat.expanded_terms?.length && (
@@ -442,6 +450,14 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
                         {c.page_number ? <span>{c.page_number}쪽</span> : null}
                         <LowOcrBadge evidence={c.evidence} />
                         <span className="user-chat__spacer" />
+                        {c.document_id && c.chunk_id && (
+                          <CitationLocation
+                            documentId={c.document_id}
+                            chunkId={c.chunk_id}
+                            filename={c.filename}
+                            index={c.index}
+                          />
+                        )}
                         {c.document_id && (
                           <Button
                             variant="ghost"

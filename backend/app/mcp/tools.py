@@ -305,7 +305,7 @@ async def ask(ctx: ToolContext, args: AskArgs) -> dict:
     ]
     _documents(ctx, [s["document_id"] for s in sources])
     result = {
-        "answer": answer, "sources": sources, "untrusted_content": True,
+        "answer": answer, "sources": sources, "untrusted_content": True, "ai_generated": True,
         "note": "답변은 AI가 사내 문서를 근거로 만든 것이다. 본문의 [n]은 sources의 index다.",
     }
     if steps:

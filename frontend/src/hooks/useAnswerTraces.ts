@@ -23,6 +23,8 @@ export interface AnswerTraceItem {
   mode?: string
   source_count: number
   cited_count: number
+  // 질문한 사람이 남긴 평가. 없으면 null
+  feedback?: 'up' | 'down' | null
 }
 
 export interface AnswerTraceSource {
@@ -46,6 +48,9 @@ export interface AnswerTraceSource {
 export interface AnswerTraceDetail {
   id: string
   created_at: string
+  // 질문한 사람이 남긴 평가와 메모
+  feedback?: 'up' | 'down' | null
+  feedback_note?: string | null
   username: string | null
   user_role: string | null
   clearance_level: string | null
@@ -77,6 +82,8 @@ export interface AnswerTraceDetail {
 }
 
 export interface AnswerTraceFilters {
+  // any는 좋아요와 싫어요 모두
+  feedback?: 'up' | 'down' | 'any'
   document_id?: string
   grounding?: Grounding
   from_date?: string

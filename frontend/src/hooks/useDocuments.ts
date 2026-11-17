@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
 import { PROCESSING_STATUSES } from '../lib/documentStatus'
+import type { TableSpan } from '../lib/tableSpans'
 
 export interface Document {
   id: string
@@ -191,6 +192,7 @@ export function useDocumentContent(id: string, enabled: boolean) {
 export interface DocumentTable {
   page_number: number
   rows: string[][]
+  spans?: TableSpan[] | null
 }
 
 export interface DocumentTablesResult {

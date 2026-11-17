@@ -4,7 +4,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,11 +41,16 @@ class ChatCitation(BaseModel):
     hidden: bool = False
     # v3 마일스톤 6: 근거가 된 이유(점수, 질문과 겹친 낱말, 쪽의 OCR 신뢰도). 가린 인용에는 없다
     evidence: dict | None = None
+    # 원문 위치 표시에 쓰는 청크 id(2026-11-16). 예전 답변과 가린 인용에는 없다
+    chunk_id: str | None = None
 
 
 class ChatMessageResponse(BaseModel):
     id: UUID
     status: str
+    # 답변은 AI가 만든 것이다. 화면 밖에서 API로 답을 가져다 쓰는 쪽도 이 표시를 함께 보여야 한다
+    # (AI 기본법의 생성물 표시, 전체 점검 2-11)
+    ai_generated: bool = True
     query: str
     answer: str | None
     citations: list[ChatCitation] | None
@@ -60,9 +65,18 @@ class ChatMessageResponse(BaseModel):
     progress: dict | None = None
     # v3 마일스톤 6: 사전의 검색어 확장으로 질문에 덧붙여 찾은 낱말
     expanded_terms: list[str] | None = None
+    # 사용자 평가(2026-11-16): "up", "down" 또는 평가 전이면 null
+    feedback: str | None = None
+    feedback_note: str | None = None
 
     class Config:
         from_attributes = True
+
+
+class MessageFeedbackRequest(BaseModel):
+    # null을 보내면 평가를 지운다
+    rating: Literal["up", "down"] | None = None
+    note: str | None = Field(None, max_length=1000)
 
 
 _partial_redis = None
@@ -105,7 +119,7 @@ def _as_uuid(value: str | None) -> str | None:
 def _masked(citation: ChatCitation) -> ChatCitation:
     return citation.model_copy(update={
         "hidden": True, "document_id": None, "collection_id": None, "collection_name": None,
-        "filename": None, "page_number": None, "text": "", "evidence": None,
+        "filename": None, "page_number": None, "text": "", "evidence": None, "chunk_id": None,
     })
 
 
@@ -229,6 +243,14 @@ async def _get_owned_conversation(
     return conversation
 
 
+def _is_model_available(spec, pulled: set[str], registered: set[str]) -> bool:
+    if spec["backend"] == "local":
+        return spec["repo_id"] in pulled
+    if spec["backend"] == "openai_compatible":
+        return True
+    return spec["backend"] in registered
+
+
 @router.get("/chat/models")
 async def list_chat_models(
     project_id: UUID | None = None,
@@ -253,6 +275,12 @@ async def list_chat_models(
                 )
             ).all()
         )
+    import asyncio
+
+    from app.services import llm as llm_service
+
+    # 로컬 모델은 추론 서버에 받아 둔 것만 고를 수 있다. 서버가 꺼져 있으면 모두 '사용 불가'다(2026-11-13).
+    pulled = await asyncio.to_thread(llm_service.pulled_local_models)
     return {
         "default_system_prompt": _SYSTEM_PROMPT,
         "items": [
@@ -260,9 +288,9 @@ async def list_chat_models(
                 "key": key,
                 "label": spec["label"],
                 "backend": spec["backend"],
-                # Local models are always usable; cloud models require the user to
-                # have already registered that provider's API key.
-                "available": spec["backend"] == "local" or spec["backend"] in registered,
+                # 클라우드 모델은 그 제공자의 API 키를 등록해 둔 경우에만 쓸 수 있다.
+                # 사내 추론 서버(openai_compatible)는 설정에 적은 것 자체가 쓰겠다는 뜻이므로 늘 고를 수 있다.
+                "available": _is_model_available(spec, pulled, registered),
             }
             for key, spec in LLM_MODEL_REGISTRY.items()
         ]
@@ -277,9 +305,9 @@ _DEEP_MESSAGES_PER_MINUTE = 5
 def _enforce_chat_rate_limit(user: User, mode: str) -> None:
     from app.core.rate_limit import enforce_user_rate_limit
 
-    enforce_user_rate_limit(str(user.id), "chat_message", limit=_CHAT_MESSAGES_PER_MINUTE, window_seconds=60)
+    enforce_user_rate_limit(str(user.id), "chat_message", limit=_CHAT_MESSAGES_PER_MINUTE, window_seconds=60, fail_closed=True)
     if mode == "deep":
-        enforce_user_rate_limit(str(user.id), "chat_deep", limit=_DEEP_MESSAGES_PER_MINUTE, window_seconds=60)
+        enforce_user_rate_limit(str(user.id), "chat_deep", limit=_DEEP_MESSAGES_PER_MINUTE, window_seconds=60, fail_closed=True)
 
 
 @router.post("/chat/conversations", response_model=ConversationDetailResponse)
@@ -420,6 +448,68 @@ async def create_message(
     generate_answer.delay(str(msg.id))
 
     return msg
+
+
+@router.put("/chat/{chat_message_id}/feedback", response_model=ChatMessageResponse)
+async def set_message_feedback(
+    chat_message_id: UUID,
+    data: MessageFeedbackRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """답에 좋아요나 싫어요를 남긴다. 질문한 사람만, 답이 끝난 메시지에만 남길 수 있다.
+    관리자는 답변 추적 화면에서 평가가 달린 답을 모아 본다."""
+    msg = await db.scalar(select(ChatMessage).where(ChatMessage.id == chat_message_id))
+    if not msg:
+        raise HTTPException(status_code=404, detail="Chat message not found")
+    conversation = await db.scalar(
+        select(ChatConversation).where(ChatConversation.id == msg.conversation_id)
+    )
+    if not conversation or str(conversation.user_id) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if msg.status != "DONE":
+        raise HTTPException(status_code=409, detail="답변이 끝난 뒤에 평가할 수 있습니다")
+    msg.feedback = data.rating
+    msg.feedback_note = (data.note or "").strip() or None if data.rating else None
+    msg.feedback_at = datetime.now(timezone.utc) if data.rating else None
+    await db.commit()
+    await db.refresh(msg)
+    [item] = await _mask_hidden_citations(db, current_user, [_message_with_partial(msg)])
+    return item
+
+
+@router.get("/chat/{chat_message_id}/stream")
+async def stream_chat_message(
+    chat_message_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """만들고 있는 답변을 SSE로 밀어 준다(전체 점검 2-5). 권한은 메시지 조회와 같다: 자기 대화만 본다.
+    스트림이 도는 동안 DB 연결을 붙잡지 않도록 상태 확인은 그때마다 짧은 세션으로 한다."""
+    from fastapi.responses import StreamingResponse
+
+    from app.db.session import async_session_maker
+    from app.services.chat_stream import SSE_HEADERS, answer_events
+
+    msg = await db.scalar(select(ChatMessage).where(ChatMessage.id == chat_message_id))
+    if not msg:
+        raise HTTPException(status_code=404, detail="Chat message not found")
+    conversation = await db.scalar(
+        select(ChatConversation).where(ChatConversation.id == msg.conversation_id)
+    )
+    if not conversation or str(conversation.user_id) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    async def _read_status() -> str | None:
+        async with async_session_maker() as session:
+            return await session.scalar(select(ChatMessage.status).where(ChatMessage.id == chat_message_id))
+
+    events = answer_events(
+        read_partial=lambda: _partial_answer_for(chat_message_id),
+        read_progress=lambda: _progress_for(chat_message_id),
+        read_status=_read_status,
+    )
+    return StreamingResponse(events, media_type="text/event-stream", headers=SSE_HEADERS)
 
 
 @router.get("/chat/{chat_message_id}", response_model=ChatMessageResponse)
