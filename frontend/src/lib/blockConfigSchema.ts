@@ -33,6 +33,7 @@ const FIELD_OVERRIDES: Record<string, Record<string, { label: string; help?: str
       { value: '.hwp', label: '한글 (.hwp)' },
       { value: '.hwpx', label: '한글 (.hwpx)' },
       { value: '.xlsx', label: 'Excel (.xlsx)' },
+      { value: '.csv', label: 'CSV (.csv)' },
       { value: '.pptx', label: 'PowerPoint (.pptx)' },
       { value: '.txt', label: '텍스트 (.txt)' },
       { value: '.md', label: '마크다운 (.md)' },

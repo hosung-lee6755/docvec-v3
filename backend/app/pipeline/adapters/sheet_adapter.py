@@ -106,7 +106,8 @@ class SheetAdapter(BaseAdapter):
     @staticmethod
     def _page(collector: BlockCollector, page_number: int, title: str, rows: list[list[str]]) -> RawPage:
         blocks, tables = [], []
-        collector.text(blocks, title, page_number, heading_level=1)
+        if title:
+            collector.text(blocks, title, page_number, heading_level=1)
         for region in _regions(rows):
             filled = sum(1 for row in region for cell in row if cell)
             if filled < _MIN_TABLE_CELLS:
@@ -116,6 +117,74 @@ class SheetAdapter(BaseAdapter):
         return RawPage(
             page_number=page_number, width=PAGE_WIDTH, height=PAGE_HEIGHT,
             text_blocks=blocks, table_candidates=tables, image_regions=[], native_text_coverage=1.0,
+        )
+
+    def extract_metadata(self, file_path: Path) -> dict:
+        return {"file_path": str(file_path)}
+
+
+# CSV 구분자로 받아들이는 문자. 쉼표가 기본이고, 유럽식 ; 와 탭, | 도 흔하다
+_CSV_DELIMITERS = ",;\t|"
+_CSV_SNIFF_CHARS = 8192
+
+
+def parse_csv_rows(raw: bytes) -> tuple[list[list[str]], bool]:
+    """CSV 바이트를 행 목록으로 바꾼다. 두 번째 값은 행 상한에 걸려 잘렸는지 여부다."""
+    import csv
+    import io
+
+    from app.pipeline.adapters.text_adapter import decode_text
+
+    text = decode_text(raw)
+    try:
+        delimiter = csv.Sniffer().sniff(text[:_CSV_SNIFF_CHARS], delimiters=_CSV_DELIMITERS).delimiter
+    except csv.Error:
+        delimiter = ","
+
+    rows: list[list[str]] = []
+    for index, values in enumerate(csv.reader(io.StringIO(text), delimiter=delimiter)):
+        if index >= MAX_ROWS_PER_SHEET:
+            return rows, True
+        rows.append(_trim([v.strip() for v in values[:MAX_COLUMNS]]))
+    return rows, False
+
+
+class CsvAdapter(BaseAdapter):
+    """CSV 어댑터. 파일 전체를 시트 하나처럼 한 쪽으로 보고, 빈 행으로 나뉜 구역을 각각 표로 만든다."""
+
+    @property
+    def format_id(self) -> str:
+        return "csv"
+
+    @property
+    def capabilities(self) -> AdapterCapabilities:
+        return AdapterCapabilities(
+            native_text=True, native_table=True, native_image=False, native_structure=True,
+            bbox_available=False, reading_order=True, ocr_required=False,
+        )
+
+    def can_handle(self, file_path: Path, mime_type: str) -> bool:
+        return file_path.suffix.lower() == ".csv"
+
+    def extract(self, file_path: Path, options: dict) -> RawParsedDocument:
+        try:
+            raw = Path(file_path).read_bytes()
+        except OSError as exc:
+            return failed("csv", f"CSV 파일을 열지 못했습니다: {exc}")
+        rows, truncated = parse_csv_rows(raw)
+        if not any(rows):
+            return failed("csv", "CSV 파일에 읽을 내용이 없습니다.")
+
+        # 처리 단계는 임시 파일로 넘기므로 제목은 원래 파일 이름에서만 가져온다. 없으면 제목 줄을 두지 않는다
+        original = (options or {}).get("original_filename")
+        title = Path(original).stem if original else ""
+        collector = BlockCollector()
+        page = SheetAdapter._page(collector, 1, title, rows)
+        warnings = [f"CSV는 {MAX_ROWS_PER_SHEET}행까지만 읽었습니다."] if truncated else []
+        return RawParsedDocument(
+            format_id="csv", page_count=1, pages=[page],
+            metadata={"line_layout": collector.line_layout, "document_title": title or None},
+            warnings=warnings,
         )
 
     def extract_metadata(self, file_path: Path) -> dict:

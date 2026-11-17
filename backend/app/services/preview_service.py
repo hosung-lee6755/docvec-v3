@@ -183,6 +183,22 @@ def _text_to_html(raw: bytes) -> str:
     return _HTML_WRAP.format(body=body)
 
 
+def _csv_to_html(raw: bytes) -> str:
+    """CSV는 LibreOffice를 거치지 않고 바로 표로 그린다. 처리 단계와 같은 규칙(parse_csv_rows)으로 읽는다."""
+    import html as html_mod
+
+    from app.pipeline.adapters.sheet_adapter import parse_csv_rows
+
+    rows, truncated = parse_csv_rows(raw)
+    width = max((len(row) for row in rows), default=0)
+    body_rows = "".join(
+        "<tr>" + "".join(f"<td>{html_mod.escape(cell)}</td>" for cell in row + [""] * (width - len(row))) + "</tr>"
+        for row in rows
+    )
+    note = "<p>앞부분만 표시했습니다.</p>" if truncated else ""
+    return _HTML_WRAP.format(body=f"<table>{body_rows}</table>{note}")
+
+
 def _uploaded_html_to_html(raw: bytes) -> str:
     """올린 HTML은 그대로 내보내지 않는다(스크립트가 실행된다). 추출한 글과 표만 다시 적는다."""
     import html as html_mod
@@ -216,6 +232,7 @@ _HTML_CONVERTERS = {
     ".docx": _docx_to_html,
     ".hwp": _hwp_to_html,
     ".hwpx": _hwpx_to_html,
+    ".csv": _csv_to_html,
     ".txt": _text_to_html,
     ".md": _text_to_html,
     ".html": _uploaded_html_to_html,
@@ -224,7 +241,7 @@ _HTML_CONVERTERS = {
 
 # 원본을 그대로 옮긴 미리보기(원본과 다를 수 있다는 안내를 붙이지 않는다)
 _FAITHFUL_PDF_SUFFIXES = frozenset({".docx", ".pptx", ".xlsx"}) | IMAGE_SUFFIXES
-_FAITHFUL_HTML_SUFFIXES = frozenset({".txt", ".md"})
+_FAITHFUL_HTML_SUFFIXES = frozenset({".csv", ".txt", ".md"})
 
 
 def _generate_preview(suffix: str, raw: bytes) -> tuple[bytes, str, str]:

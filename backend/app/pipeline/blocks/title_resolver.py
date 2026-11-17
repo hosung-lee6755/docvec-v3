@@ -25,7 +25,7 @@ _DOC_TYPE_SUFFIXES = (
     "가이드라인", "가이드", "사례집", "공고문", "공고", "지침", "계획", "방안", "연구", "분석", "현황", "안내",
     "개요", "결과", "전략", "리포트",
 )
-_KNOWN_EXTENSIONS = ("pdf", "docx", "doc", "hwpx", "hwp", "txt", "pptx", "ppt", "xlsx", "xls", "md", "html")
+_KNOWN_EXTENSIONS = ("pdf", "docx", "doc", "hwpx", "hwp", "txt", "pptx", "ppt", "xlsx", "xls", "csv", "md", "html")
 _GENERIC_EMBEDDED_TITLES = {
     "untitled", "제목 없음", "제목없음", "powerpoint 프레젠테이션", "powerpoint presentation", "document", "slide 1",
 }

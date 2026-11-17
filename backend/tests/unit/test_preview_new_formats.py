@@ -1,6 +1,7 @@
 """새 형식의 원문 미리보기(전체 점검 1-2)."""
 import io
 
+import pytest
 from PIL import Image
 
 from app.services import preview_service as ps
@@ -33,6 +34,17 @@ def test_image_preview_is_a_pdf():
 
     assert (kind, content_type) == ("pdf", "application/pdf") and content.startswith(b"%PDF-")
     assert ps._is_approximate(".png", "pdf") is False
+
+
+def test_csv_preview_is_an_html_table_without_libreoffice(monkeypatch):
+    monkeypatch.setattr(ps, "_soffice_to_pdf", lambda raw, suffix: pytest.fail("CSV must not go through LibreOffice"))
+
+    content, kind, content_type = ps._generate_preview(".csv", "이름,부서\n홍길동,<총무>\n".encode("cp949"))
+
+    html = content.decode("utf-8")
+    assert kind == "html" and content_type.startswith("text/html")
+    assert "<table>" in html and "<td>홍길동</td>" in html and "&lt;총무&gt;" in html
+    assert ps._is_approximate(".csv", "html") is False
 
 
 def test_office_formats_use_libreoffice_and_keep_old_rules(monkeypatch):

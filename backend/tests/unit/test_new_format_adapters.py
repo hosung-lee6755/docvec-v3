@@ -18,7 +18,7 @@ def _texts(parsed):
 @pytest.mark.parametrize("name, adapter", [
     ("a.xlsx", "SheetAdapter"), ("a.PPTX", "SlideAdapter"), ("a.txt", "TextAdapter"), ("a.md", "TextAdapter"),
     ("a.html", "HtmlAdapter"), ("a.htm", "HtmlAdapter"), ("a.png", "ImageAdapter"), ("a.JPG", "ImageAdapter"),
-    ("a.tiff", "ImageAdapter"), ("a.pdf", "PDFAdapter"), ("a.docx", "DOCXAdapter"),
+    ("a.tiff", "ImageAdapter"), ("a.pdf", "PDFAdapter"), ("a.docx", "DOCXAdapter"), ("a.CSV", "CsvAdapter"),
 ])
 def test_get_adapter_routes_by_extension(name, adapter):
     assert type(get_adapter(Path(name), "")).__name__ == adapter
@@ -138,6 +138,71 @@ def test_xlsx_row_limit_is_reported(tmp_path, monkeypatch):
     parsed = SheetAdapter().extract(path, {})
 
     assert len(parsed.pages[0].table_candidates[0].rows) == 2 and "2행까지만" in parsed.warnings[0]
+
+
+def test_csv_is_a_supported_format_stored_as_plain_text():
+    assert is_supported("목록.CSV") and EXTENSION_CONTENT_TYPES[".csv"] == "text/plain"
+
+
+def test_csv_becomes_one_page_with_tables_split_on_blank_rows(tmp_path):
+    from app.pipeline.adapters.sheet_adapter import CsvAdapter
+
+    # 처리 단계는 임시 파일 이름으로 넘기므로, 제목은 원래 파일 이름(options)에서 가져온다
+    path = tmp_path / "tmpk3x9.csv"
+    path.write_text("﻿분기,금액\n1분기,1200\n\n비고: 잠정치\n\n담당,부서\n김,\"영업, 1팀\"\n", encoding="utf-8")
+
+    parsed = CsvAdapter().extract(path, {"original_filename": "매출.csv"})
+
+    assert parsed.format_id == "csv" and parsed.page_count == 1 and not parsed.warnings
+    page = parsed.pages[0]
+    assert [t.rows for t in page.table_candidates] == [[["분기", "금액"], ["1분기", "1200"]], [["담당", "부서"], ["김", "영업, 1팀"]]]
+    assert [b.text.split("\n")[0] for b in page.text_blocks] == ["매출", "[표 1]", "비고: 잠정치", "[표 2]"]
+
+
+@pytest.mark.parametrize("delimiter", [";", "\t", "|"])
+def test_csv_reads_cp949_and_other_delimiters(tmp_path, delimiter):
+    from app.pipeline.adapters.sheet_adapter import CsvAdapter
+
+    path = tmp_path / "a.csv"
+    path.write_bytes(delimiter.join(["이름", "부서"]).encode("cp949") + b"\r\n" + delimiter.join(["홍길동", "총무"]).encode("cp949"))
+
+    parsed = CsvAdapter().extract(path, {})
+
+    assert parsed.pages[0].table_candidates[0].rows == [["이름", "부서"], ["홍길동", "총무"]]
+
+
+def test_csv_row_limit_is_reported(tmp_path, monkeypatch):
+    from app.pipeline.adapters import sheet_adapter
+
+    monkeypatch.setattr(sheet_adapter, "MAX_ROWS_PER_SHEET", 2)
+    path = tmp_path / "a.csv"
+    path.write_text("\n".join(f"{i},{i}" for i in range(5)), encoding="utf-8")
+
+    parsed = sheet_adapter.CsvAdapter().extract(path, {})
+
+    assert len(parsed.pages[0].table_candidates[0].rows) == 2 and "2행까지만" in parsed.warnings[0]
+
+
+def test_csv_without_original_name_has_no_title_line(tmp_path):
+    from app.pipeline.adapters.sheet_adapter import CsvAdapter
+
+    path = tmp_path / "tmpk3x9.csv"
+    path.write_text("이름,부서\n홍길동,총무\n", encoding="utf-8")
+
+    parsed = CsvAdapter().extract(path, {})
+
+    assert [b.text.split("\n")[0] for b in parsed.pages[0].text_blocks] == ["[표 1]"]
+
+
+def test_empty_csv_returns_a_warning(tmp_path):
+    from app.pipeline.adapters.sheet_adapter import CsvAdapter
+
+    path = tmp_path / "a.csv"
+    path.write_bytes(b"")
+
+    parsed = CsvAdapter().extract(path, {})
+
+    assert parsed.pages == [] and parsed.warnings
 
 
 def test_broken_files_return_a_warning_instead_of_raising(tmp_path):

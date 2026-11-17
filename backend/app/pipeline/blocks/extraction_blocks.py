@@ -633,6 +633,8 @@ class TextExtractBlock(BaseBlock):
                     **vision_options,
                     "detect_implicit_tables": cfg.detect_implicit_tables,
                     "extract_font_signals": cfg.extract_font_signals,
+                    # 어댑터는 임시 파일을 받으므로, 파일 이름이 제목이 되는 형식(CSV)을 위해 원래 이름을 함께 넘긴다
+                    "original_filename": doc.original_filename or doc.filename,
                 }
                 parsed = adapter.extract(tmp_path, adapter_options)
                 if routing_note:

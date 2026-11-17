@@ -296,7 +296,7 @@ async def test_zip_reports_per_entry_outcomes(db_session, storage, started, monk
     monkeypatch.setattr(up, "_ZIP_MAX_ENTRY_UNCOMPRESSED_BYTES", 20)
     archive = _zip({
         "docs/ok.pdf": b"%PDF ok",
-        "notes.csv": b"text",
+        "notes.rtf": b"text",
         "noext": b"data",
         "huge.pdf": b"z" * 21,
         "__MACOSX/._ok.pdf": b"meta",
@@ -308,7 +308,7 @@ async def test_zip_reports_per_entry_outcomes(db_session, storage, started, monk
     by_name = {r["filename"]: r for r in result["results"]}
     assert result["total_entries"] == 4 and result["queued"] == 1
     assert by_name["ok.pdf"]["status"] == "queued"
-    assert by_name["notes.csv"]["status"] == "skipped" and ".csv" in by_name["notes.csv"]["detail"]
+    assert by_name["notes.rtf"]["status"] == "skipped" and ".rtf" in by_name["notes.rtf"]["detail"]
     assert "확장자 없음" in by_name["noext"]["detail"]
     assert by_name["huge.pdf"]["status"] == "skipped" and "너무 큽니다" in by_name["huge.pdf"]["detail"]
     assert [call[0] for call in started] == [str(by_name["ok.pdf"]["document_id"])]

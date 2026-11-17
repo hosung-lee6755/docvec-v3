@@ -19,13 +19,13 @@ def get_adapter(file_path: Path, mime_type: str, engine: str = "legacy") -> Base
     from app.pipeline.adapters.hwp_adapter import HWPAdapter
     from app.pipeline.adapters.image_adapter import ImageAdapter
     from app.pipeline.adapters.pdf_adapter import PDFAdapter
-    from app.pipeline.adapters.sheet_adapter import SheetAdapter
+    from app.pipeline.adapters.sheet_adapter import CsvAdapter, SheetAdapter
     from app.pipeline.adapters.slide_adapter import SlideAdapter
     from app.pipeline.adapters.text_adapter import HtmlAdapter, TextAdapter
 
     adapters = (
         PDFAdapter(), HWPAdapter(), DOCXAdapter(),
-        SheetAdapter(), SlideAdapter(), TextAdapter(), HtmlAdapter(), ImageAdapter(),
+        SheetAdapter(), CsvAdapter(), SlideAdapter(), TextAdapter(), HtmlAdapter(), ImageAdapter(),
     )
     for adapter in adapters:
         if adapter.can_handle(file_path, mime_type):

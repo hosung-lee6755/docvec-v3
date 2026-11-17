@@ -17,6 +17,7 @@ EXTENSION_CONTENT_TYPES = {
     ".hwpx": "application/haansofthwpx",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".csv": "text/plain",
     ".txt": "text/plain",
     ".md": "text/plain",
     ".html": "text/plain",
@@ -31,7 +32,7 @@ EXTENSION_CONTENT_TYPES = {
 }
 
 SUPPORTED_SUFFIXES = frozenset(EXTENSION_CONTENT_TYPES)
-SUPPORTED_LABEL = "PDF, DOCX, HWP, HWPX, XLSX, PPTX, TXT, MD, HTML, 이미지(PNG, JPG, TIFF, BMP, WEBP)"
+SUPPORTED_LABEL = "PDF, DOCX, HWP, HWPX, XLSX, CSV, PPTX, TXT, MD, HTML, 이미지(PNG, JPG, TIFF, BMP, WEBP)"
 
 
 def suffix_of(filename: str) -> str:

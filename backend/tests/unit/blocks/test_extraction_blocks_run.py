@@ -23,7 +23,7 @@ def _ctx(config=None, document_id="doc-1", upstream=None):
 
 def _doc(**kw):
     base = dict(
-        id="doc-1", filename="보고서.PDF", file_size=1 * MB, file_hash="h", collection_id="c1",
+        id="doc-1", filename="보고서.PDF", original_filename="보고서.PDF", file_size=1 * MB, file_hash="h", collection_id="c1",
         minio_key="k", mime_type="application/pdf", parsed_text=None,
     )
     base.update(kw)
@@ -518,3 +518,12 @@ def test_text_extract_overwrites_language_when_not_user_edited():
     doc = _doc(language="en", user_edited_fields=["category"])
     _extract(doc)
     assert doc.language == "ko"
+
+
+def test_text_extract_passes_the_original_filename_to_the_adapter():
+    # 어댑터는 임시 파일을 받으므로, 파일 이름을 제목으로 쓰는 CSV를 위해 원래 이름을 함께 넘긴다
+    doc = _doc(original_filename="매출.csv", filename="a1b2.csv")
+
+    _result, _db, _job, adapter, _ = _extract(doc)
+
+    assert adapter.extract.call_args.args[1]["original_filename"] == "매출.csv"
