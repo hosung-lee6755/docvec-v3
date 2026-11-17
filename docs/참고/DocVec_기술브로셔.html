@@ -337,17 +337,17 @@
       <div class="pipe-step">
         <div class="n mono">01</div>
         <div class="t">업로드</div>
-        <div class="d">문서를 컬렉션에 등록, 비동기 큐로 전달</div>
+        <div class="d">PDF, DOCX, HWP/HWPX, XLSX, PPTX, 이미지 등을 컬렉션에 등록하고 비동기 큐로 전달</div>
       </div>
       <div class="pipe-step">
         <div class="n mono">02</div>
         <div class="t">청크 · 임베딩</div>
-        <div class="d">토큰 단위 청크 분할 후 다국어 임베딩 생성</div>
+        <div class="d">문서 구조와 문장 경계를 따라 청크를 나누고 다국어 임베딩 생성</div>
       </div>
       <div class="pipe-step">
         <div class="n mono">03</div>
         <div class="t">벡터 인덱싱</div>
-        <div class="d">Qdrant 벡터 DB에 저장, 상태 실시간 추적</div>
+        <div class="d">Qdrant 벡터와 키워드 색인에 저장하고 처리 상태를 단계별로 추적</div>
       </div>
       <div class="pipe-step">
         <div class="n mono">04</div>
@@ -375,6 +375,7 @@
           <div class="cap-tag mono">Hybrid LLM Architecture</div>
           <div class="cap-title">로컬 모델 + 클라우드 모델, 작업 단위로 선택</div>
           <p class="cap-desc">온프레미스 로컬 모델로 민감 데이터를 처리하고, 필요할 때만 OpenAI·Anthropic 등 클라우드 모델을 사용합니다.
+            문서 보안등급이 허용 기준을 넘으면 클라우드 모델로는 답변을 만들지 않습니다.
             API 키는 프로젝트 또는 개인 단위로 암호화 보관되어 비용과 데이터 주권을 함께 통제합니다.</p>
         </div>
       </div>
@@ -394,7 +395,7 @@
         </svg>
         <div class="cap-tag mono">Grounded Answers</div>
         <div class="cap-title">출처 인용 RAG 채팅</div>
-        <p class="cap-desc">모든 답변에 근거가 된 문서·페이지·컬렉션을 함께 표시해 추적과 검증이 가능합니다.</p>
+        <p class="cap-desc">근거가 있는 답변마다 근거가 된 문서·페이지·컬렉션을 함께 표시해 추적과 검증이 가능합니다. 근거를 찾지 못하면 모른다고 답합니다.</p>
       </div>
 
       <div class="cap-tile">
@@ -412,7 +413,7 @@
         </svg>
         <div class="cap-tag mono">Governance</div>
         <div class="cap-title">역할 기반 접근 제어</div>
-        <p class="cap-desc">Owner · Editor · Viewer 권한 체계로 문서와 컬렉션 접근을 세밀하게 통제합니다.</p>
+        <p class="cap-desc">Owner · Editor · Viewer 권한 체계로 컬렉션 접근을 통제하고, 문서별 보안등급(Public, Internal, Confidential)과 접근 목록(ACL)으로 문서 단위까지 세밀하게 나눕니다.</p>
       </div>
 
       <div class="cap-tile">
@@ -421,7 +422,7 @@
         </svg>
         <div class="cap-tag mono">Async Pipeline</div>
         <div class="cap-title">비동기 처리 아키텍처</div>
-        <p class="cap-desc">작업 큐 기반으로 대용량 문서를 백그라운드에서 처리하고, 처리 상태를 실시간으로 추적합니다.</p>
+        <p class="cap-desc">작업 큐 기반으로 대용량 문서를 백그라운드에서 처리하고, 처리 상태를 단계별로 추적합니다. 검토 대기, 처리 실패, 동기화 실패는 알림으로 전합니다.</p>
       </div>
 
     </div>

@@ -1,6 +1,8 @@
 # adapter_interface_spec.md
 # Document Vectorization Platform - Adapter Interface Specification
 
+> **기록 문서 안내(2026-11-17).** 이 문서는 최초 설계 시점의 기획 기록이며, 현재 구현에 맞춰 고치지 않는다. 현재 구현은 `docs/design/`의 현행 설계서와 `docs/기술문서_시스템_아키텍처.md`, `docs/유지보수_가이드.md`를 기준으로 본다. 문서 사이의 우선순위는 `docs/README.md`에 적혀 있다.
+
 ## 1. 문서 목적
 
 본 문서는 문서 포맷별 파싱 어댑터가 준수해야 하는 공통 계약(contract)을 정의한다.

@@ -1,107 +1,120 @@
-**최종 갱신**: 2026-07-28 — 아래 내용은 실제 구현 완료 상태를 반영함
+**최종 갱신**: 2026-11-17 (코드 HEAD 0f38033 기준으로 필드마다 대조함)
 
-**Phase 0~1. Document Metadata(문서 메타정보) — 완료**
+이 문서는 메타 정보 설계 항목을 실제 코드와 대조한 결과다. 각 항목의 상태는 다음 뜻이다. 구현은 코드에 있고 값이 채워진다. 부분 구현은 일부 경로나 조건에서만 값이 채워진다. 별칭은 다른 컬럼이 같은 값을 담고 있다. 미구현은 코드가 없다. 절 번호는 코드 주석과 `문서데이터 전처리 방안.md`가 참조하므로 바꾸지 않는다.
+
+---
+
+**1절. 문서 메타정보 (Phase 0~1)**
 위치: `backend/app/db/models/document.py`
 
-| 필드             | 설명                           | 검색 활용 |
-| -------------- | ---------------------------- | ----- |
-| document_id    | 문서 UUID                      | 문서 고유 ID|
-| file_name      | 원본 파일명                       | 출처    |
-| source_path    | 저장 경로                        | 다운로드  |
-| file_type      | pdf/docx/hwp/hwpx            | 필터    |
-| title          | 문서 제목                        | 검색    |
-| summary          | 문서 요약                        | 문서 탐색, 라우팅    |
-| author         | 작성자                          | 필터    |
-| organization   | 부서/기관                        | 필터    |
-| created_at     | 작성일                          | 정렬    |
-| modified_at    | 수정일                          | 정렬    |
-| language       | ko/en                        | 검색    |
-| page_count     | 총 페이지                        | UI    |
-| checksum       | SHA256                       | 중복 제거 |
-| parser_version | 파서 버전                        | 재색인   |
-| ingestion_time | DB 저장 시각                     | 관리    |
-| tags           | 태그                           | 필터    |
-| category       | 계약서/보고서/매뉴얼                  | 필터    |
-| security_level | Public/Internal/Confidential | 권한    |
-| source_system  | SharePoint, S3 등             | 관리    |
+| 필드 | 설명 | 검색 활용 | 상태 | 코드 기준 |
+|---|---|---|---|---|
+| document_id | 문서 UUID | 문서 고유 ID | 구현 | `documents.id` |
+| file_name | 원본 파일명 | 출처 | 구현 | `filename`, `original_filename` |
+| source_path | 저장 경로 | 다운로드 | 별칭 | `minio_key`가 같은 역할을 한다 |
+| file_type | pdf/docx/hwp/hwpx | 필터 | 별칭 | `mime_type`에 MIME 값으로 저장한다. pdf, docx처럼 짧은 형식명을 담는 컬럼은 없다 |
+| title | 문서 제목 | 검색 | 구현 | `title` 컬럼이 있다. 값을 채우는 경로는 이번 점검에서 확인하지 못했다 |
+| summary | 문서 요약 | 문서 탐색, 라우팅 | 구현 | `summary`와 `summary_status`(PENDING, GENERATING, DONE, FAILED)로 관리한다. 생성은 `tasks/summary.py`의 `generate_summary`가 맡는다. 요약 색인은 4절을 본다 |
+| author | 작성자 | 필터 | 구현 | 사용자 입력 |
+| organization | 부서/기관 | 필터 | 구현 | 사용자 입력 |
+| created_at | 작성일 | 정렬 | 주의 | `created_at`은 DB 저장 시각이다. 문서의 작성일은 `document_created_at`(사용자 입력)에 있다 |
+| modified_at | 수정일 | 정렬 | 미구현 | 수정일 컬럼이 없다. `updated_at`은 행이 갱신된 시각이다 |
+| language | ko/en | 검색 | 구현 | `language` 컬럼이 있다. 값을 채우는 경로는 이번 점검에서 확인하지 못했다 |
+| page_count | 총 페이지 | UI | 구현 | `page_count` 컬럼이 있다. HWP/HWPX와 DOCX의 쪽 수 산정은 21.1.1절을 본다 |
+| checksum | SHA256 | 중복 제거 | 구현 | `file_hash`(업로드 원본의 SHA-256 hexdigest). 같은 사용자의 중복 업로드 검사에 쓴다 |
+| parser_version | 파서 버전 | 재색인 | 미구현 | `pipeline_version` 컬럼은 있으나 값을 쓰는 코드가 없다 |
+| ingestion_time | DB 저장 시각 | 관리 | 별칭 | `created_at`이 같은 값이다 |
+| tags | 태그 | 필터 | 구현 | `tags` 컬럼. 추천 태그(`suggested_tags`)는 수락하거나 무시할 수 있다 |
+| category | 계약서/보고서/매뉴얼 | 필터 | 구현 | `category` 컬럼이 있다. 값을 채우는 경로는 이번 점검에서 확인하지 못했다 |
+| security_level | Public/Internal/Confidential | 권한 | 구현 | 사용자 입력. `security_level` 컬럼 |
+| source_system | SharePoint, S3 등 | 관리 | 구현 | 사용자 입력. `source_system` 컬럼 |
 
+---
 
-**Phase 8. Summary Index — 완료**
-위치: `backend/app/services/summary_index.py` (신규 Qdrant 컬렉션)
+**2절. 요소 및 구조 노드 메타정보 (Phase 3~5)**
+위치: 요소는 `Document.elements`(JSON, `backend/app/pipeline/adapters/docling_adapter.py`가 만든다), 구조 노드는 `document_nodes` 테이블(`backend/app/db/models/document_node.py`)
 
-문서 전체 요약을 별도 벡터로 생성, Document/Section 레벨 정보로 관리, 문서 레벨 검색 단위로 활용
+**2-1. 요소 (Element)**
 
-Summary Index 컬렉션
+| 필드 | 설명 | 상태 | 코드 기준 |
+|---|---|---|---|
+| element_id | 요소 ID | 구현 | 요소의 `id`. Docling 경로에서 UUID를 부여한다. 구조 노드의 `element_id` 컬럼(`document_node.py`)은 노드가 속한 레이아웃 요소 ID를 담고, 청크 생성 때 청크의 `element_id`로 복사된다 |
+| document_id | 문서 ID | 구현 | 요소는 `Document.elements`에 속하므로 문서 ID로 조회한다 |
+| page | 페이지 | 구현 | 요소의 `page` 키 |
+| order | 읽기 순서 | 구현 | 요소의 `order` 키 |
+| type | heading, paragraph, table, image 등 | 구현 | 요소의 `type` 키. Docling 라벨과 `table`, `picture`, `vlm_ocr` 값을 쓴다 |
+| bbox | 위치 | 구현 | 요소의 `bbox` 키. 위치 정보가 없으면 None이다 |
+| parent_section | 상위 섹션 | 별칭 | `section_path` 배열이 같은 역할을 한다 |
+| heading_level | H1~H6 | 부분 구현 | 요소 JSON에는 별도 키가 없다. 제목 수준은 구조 노드의 `level`에 저장한다. HWP와 HWPX는 구조 분석 레이아웃의 `heading_level`에서 얻는다 |
+| style | Normal, Heading1 등 | 부분 구현 | Docling 경로는 None이다. 스타일 정보가 있는 DOCX 등에서 채운다 |
+| font_size | 글자 크기 | 부분 구현 | DOCX, PDF, HWPX, HWP에서 채운다. Docling 경로는 None이다 |
+| font_name | 글꼴 | 부분 구현 | DOCX와 PDF(Legacy 엔진)에서 채운다. Docling 경로는 라이브러리가 글꼴을 노출하지 않아 비어 있다 |
+| is_header | Header 여부 | 부분 구현 | 키는 있다. 값을 정하는 기준은 7.5절의 반복 머리글 판정을 따른다 |
+| is_footer | Footer 여부 | 부분 구현 | 키는 있다. 값을 정하는 기준은 7.5절의 반복 꼬리글 판정을 따른다 |
+| is_caption | Caption 여부 | 구현 | Docling 라벨이 캡션에 해당하면 true다 |
+| image_path | 이미지 파일 | 부분 구현 | 그림은 `images/{문서 ID}/{번호}.png`로 아티팩트 버킷에 저장된다. 요소의 `image_path`는 `_match_image_paths`가 그림 인식 결과와 맞춰 채운다. 실제 저장 값은 이번 점검에서 확인하지 못했다 |
+| table_rows | 행 개수 | 구현 | 표 요소의 `table_rows` |
+| table_cols | 열 개수 | 구현 | 표 요소의 `table_cols` |
 
-{
- document_id,
- summary,
- summary_embedding
-}
+**2-2. 구조 노드 (Phase 4, DocumentNode)**
 
-**Phase 3~5. Element Metadata (Docling Layout Parser 결과) — 완료**
-위치: `backend/app/db/models/document_node.py::element_id` 컬럼 + Document.tables[*]["id"]
+| 필드 | 설명 | 상태 | 코드 기준 |
+|---|---|---|---|
+| node_type | 노드 유형 | 구현 | `node_type` 컬럼. 값은 DOCUMENT, COVER, TOC, SECTION, HEADING, PARAGRAPH, SENTENCE, LIST, LIST_ITEM, TABLE, TABLE_ROW, TABLE_CELL, IMAGE, CAPTION, FOOTNOTE, HEADER, FOOTER, PAGE_NUMBER, FORM_FIELD 중 하나다 |
+| level | 제목 수준 | 구현 | `level` 컬럼 |
+| span_start, span_end | 파싱 텍스트(`parsed_text`) 기준 오프셋 | 구현 | `span_start`, `span_end` 컬럼 |
+| user_corrected | 사용자 보정 여부 | 구현 | `user_corrected` 컬럼 |
+| correction_type | 보정 항목(쉼표로 나열) | 구현 | 설계 초안에 없던 항목이다. 보정한 필드명으로 서버가 자동으로 채운다 |
+| correction_notes | 보정 사유 메모 | 구현 | 설계 초안에 없던 항목이다. 사용자가 적는다 |
 
-| 필드             | 설명                                  |
-| -------------- | ----------------------------------- |
-| element_id     | Element ID (Docling 엔진 부여)         |
-| document_id    | 문서 ID                               |
-| page           | 페이지                                 |
-| order          | 읽기 순서                               |
-| type           | heading / paragraph / table / image |
-| bbox           | 위치                                  |
-| parent_section | 상위 Section                          |
-| heading_level  | H1~H6                               |
-| style          | Normal / Heading1                   |
-| font_size      | 글자 크기                               |
-| font_name      | 글꼴                                  |
-| is_header      | Header 여부                           |
-| is_footer      | Footer 여부                           |
-| is_caption     | Caption 여부                          |
-| image_path     | 이미지 파일                              |
-| table_rows     | 행 개수                                |
-| table_cols     | 열 개수                                |
+---
 
-**Phase 4. Document Structure Tree — 완료**
-`DocumentNode` 모델로 구조 트리 영속화 (`backend/app/db/models/document_node.py`)
-- node_type (HEADING/PARAGRAPH/TABLE/IMAGE/etc.)
-- level (제목 레벨)
-- span_start/span_end (parsed_text 오프셋)
-- user_corrected (사용자 보정 레이어)
-
-
-**Phase 2~9. Chunk Metadata (Vector DB + DB) — 완료**
+**3절. 청크 메타정보 (Phase 2~9)**
 위치: `backend/app/db/models/document_chunk.py`
 
-| 필드              | 추천    | 설명                    |
-| --------------- | ----- | --------------------- |
-| chunk_id        | ⭐⭐⭐⭐⭐ | PK (Qdrant point id와 동일) |
-| document_id     | ⭐⭐⭐⭐⭐ | 문서 연결                 |
-| element_id      | ⭐⭐⭐⭐⭐ | 원본 Element (Phase 5)  |
-| page_start      | ⭐⭐⭐⭐⭐ | 시작 페이지                |
-| page_end        | ⭐⭐⭐⭐⭐ | 끝 페이지                 |
-| chunk_order     | ⭐⭐⭐⭐⭐ | 순서 (chunk_index)      |
-| section_path    | ⭐⭐⭐⭐⭐ | 섹션명 배열 (Phase 3)   |
-| heading_path    | ⭐⭐⭐⭐⭐ | 제목 경로 (section_path와 동일) |
-| chunk_type      | ⭐⭐⭐⭐⭐ | paragraph/table/image (Phase 4) |
-| token_count     | ⭐⭐⭐⭐  | 토큰 수                  |
-| char_count      | ⭐⭐⭐   | 문자 수 (Phase 7)       |
-| language        | ⭐⭐⭐   | 언어 (Phase 7)         |
-| prev_chunk_id   | ⭐⭐⭐⭐  | 이전 청크 UUID            |
-| next_chunk_id   | ⭐⭐⭐⭐  | 다음 청크 UUID            |
-| parent_chunk_id | ⭐⭐⭐⭐  | Parent Retrieval (Phase 9) |
-| chunk_tier      | ⭐⭐⭐⭐  | parent \| child (Phase 9) |
-| keywords        | ⭐⭐⭐   | 키워드 배열 (Phase 6)    |
-| embedding_model | ⭐⭐⭐   | 모델명 (Phase 8)        |
-| version         | ⭐⭐⭐   | 임베딩 차원수 (Phase 8)    |
-| source_file     | ⭐⭐⭐   | 파일명 (Phase 7)        |
-| source_node_ids | ⭐⭐⭐⭐  | 원본 노드 ID 배열 (Phase 3) |
-| span_start      | ⭐⭐⭐   | parsed_text 오프셋 시작 |
-| span_end        | ⭐⭐⭐   | parsed_text 오프셋 끝  |
-| excluded_pii    | ⭐⭐⭐   | PII 제외 여부            |
-| workflow_version| ⭐⭐⭐   | 워크플로우 버전            |
-| dictionary_version| ⭐⭐⭐ | 사전 버전                |
+| 필드 | 추천 | 설명 | 상태 | 코드 기준 |
+|---|---|---|---|---|
+| chunk_id | ⭐⭐⭐⭐⭐ | PK | 구현 | `id`(UUID). Qdrant 점 ID와 같은 값을 쓴다 |
+| document_id | ⭐⭐⭐⭐⭐ | 문서 연결 | 구현 | `document_id` |
+| element_id | ⭐⭐⭐⭐⭐ | 원본 요소 (Phase 5) | 구현 | `element_id` |
+| page_start | ⭐⭐⭐⭐⭐ | 시작 페이지 | 구현 | `page_start` |
+| page_end | ⭐⭐⭐⭐⭐ | 끝 페이지 | 구현 | `page_end` |
+| chunk_order | ⭐⭐⭐⭐⭐ | 순서 | 구현 | `chunk_order`(설계의 chunk_index에 해당) |
+| section_path | ⭐⭐⭐⭐⭐ | 섹션명 배열 (Phase 3) | 구현 | `section_path`. 조상 제목 텍스트 배열이다 |
+| heading_path | ⭐⭐⭐⭐⭐ | 제목 경로 | 별칭 | 별도 컬럼이 없다. 응답 스키마에서 `section_path`를 이 이름으로 보여 준다 |
+| chunk_type | ⭐⭐⭐⭐⭐ | paragraph, table, image 등 (Phase 4) | 구현 | `chunk_type` |
+| token_count | ⭐⭐⭐⭐ | 토큰 수 | 구현 | 추정치다. 한글은 1자당 1, 그 밖의 문자는 4자당 1로 계산한다 |
+| char_count | ⭐⭐⭐ | 문자 수 (Phase 7) | 구현 | `char_count`(로드된 청크 텍스트 길이를 복사) |
+| language | ⭐⭐⭐ | 언어 (Phase 7) | 구현 | `language`(문서 값을 복사) |
+| prev_chunk_id | ⭐⭐⭐⭐ | 이전 청크 ID | 구현 | `prev_chunk_id` |
+| next_chunk_id | ⭐⭐⭐⭐ | 다음 청크 ID | 구현 | `next_chunk_id` |
+| parent_chunk_id | ⭐⭐⭐⭐ | 부모 청크 (Parent Retrieval, Phase 9) | 구현 | 자식 청크만 값을 가진다. 부모 행은 None이다 |
+| chunk_tier | ⭐⭐⭐⭐ | parent 또는 child (Phase 9) | 구현 | 임베딩 대상은 child뿐이고 parent는 검색 시 문맥으로 쓴다 |
+| keywords | ⭐⭐⭐ | 키워드 배열 (Phase 6) | 부분 구현 | 키워드 분석 블록(`extract_keywords`)의 출력에서만 채운다. 기본 전처리 체인에는 이 블록이 없다 |
+| embedding_model | ⭐⭐⭐ | 모델명 (Phase 8) | 구현 | `embedding_model` |
+| version | ⭐⭐⭐ | 임베딩 차원수 (Phase 8) | 구현 | 임베딩 차원수를 문자열로 저장한다 |
+| source_file | ⭐⭐⭐ | 파일명 (Phase 7) | 구현 | `source_file`(문서 파일명을 복사) |
+| source_node_ids | ⭐⭐⭐⭐ | 원본 노드 ID 배열 (Phase 3) | 구현 | `source_node_ids` |
+| span_start | ⭐⭐⭐ | 텍스트 오프셋 시작 | 구현 | `span_start`. 정제 텍스트 기준이다 |
+| span_end | ⭐⭐⭐ | 텍스트 오프셋 끝 | 구현 | `span_end`. 정제 텍스트 기준이다 |
+| excluded_pii | ⭐⭐⭐ | 개인정보 제외 여부 | 구현 | `excluded_pii` |
+| workflow_version | ⭐⭐⭐ | 워크플로우 버전 | 구현 | `workflow_version`(실행 버전을 스탬프) |
+| dictionary_version | ⭐⭐⭐ | 사전 버전 | 구현 | `dictionary_version`(실행 사전 버전을 스탬프) |
 
-**Phase 9. Chunk 계층형 Parent Retrieval — 완료**
-- `parent_chunk_id`: child가 속한 parent 청크
-- `chunk_tier`: "parent" | "child" (임베딩 대상은 child만, parent는 검색 메타데이터)
+**Phase 9. Parent Retrieval 구현 내용**
+- 부모 청크는 자식 청크 5개를 평면 그룹으로 묶어 만든다(`group_children_into_parents`). 부모 길이 상한은 자식 길이 상한의 4배다(`_PARENT_SIZE_MULTIPLIER`).
+- 검색 결과에 붙이는 부모 문맥은 `services/parent_context.py`가 최대 1200자까지 덧붙인다(`PARENT_CONTEXT_MAX_CHARS`). 설정 `parent_context`의 기본값은 켜짐이다.
+- 품질 검증과 재처리 영향도는 부모 청크를 세지 않는다(자식 청크만 센다).
+
+---
+
+**4절. 요약 색인 (Phase 8)**
+위치: `backend/app/services/summary_index.py`(Qdrant 컬렉션 `document_summaries`)
+
+| 필드 | 설명 | 상태 |
+|---|---|---|
+| document_id | 문서 ID (점 ID와 같은 값) | 구현 |
+| summary | 문서 요약 텍스트 | 구현 |
+| summary_embedding | 요약 임베딩 벡터 | 구현 |
+
+요약 색인은 문서 전체를 대표하는 벡터로, 문서 단위 검색에 쓴다. 기록 경로는 두 곳이다. `output` 블록의 출력과 `tasks/summary.py`의 `generate_summary`다. 요약 생성에 쓰는 모델은 qwen2.5-3b다.
