@@ -15,6 +15,7 @@ backend/.coverage
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/*.tsbuildinfo
 
 # Data / large binaries not meant for source control
 backups/
