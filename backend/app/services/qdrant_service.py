@@ -27,6 +27,16 @@ LEXICAL_SUFFIX = "_lex"
 LEXICAL_VECTOR = "text"
 _LEXICAL_PAYLOAD_FIELDS = ("collection_id", "document_id")
 
+# 한 번의 upsert 요청에 담는 점의 수. Qdrant는 요청 본문이 32MB를 넘으면 400으로 거절한다.
+# 511쪽 PDF의 검색용 청크 5,584개를 한 요청에 담았더니 128MB가 되어 실패했다(2026-11-17). 그때 점 하나가
+# 평균 약 23KB(1024차원 벡터와 본문)였으므로 256개면 약 5.9MB로 한도보다 넉넉히 작다.
+_UPSERT_BATCH_SIZE = 256
+
+
+def _batches(items: list) -> list[list]:
+    size = max(1, _UPSERT_BATCH_SIZE)
+    return [items[start:start + size] for start in range(0, len(items), size)]
+
 
 class QdrantService:
     def __init__(self) -> None:
@@ -81,8 +91,8 @@ class QdrantService:
                 vector={LEXICAL_VECTOR: SparseVector(indices=indices, values=values)},
                 payload={field: payload.get(field) for field in _LEXICAL_PAYLOAD_FIELDS},
             ))
-        if rows:
-            self._client.upsert(collection_name=name, points=rows)
+        for batch in _batches(rows):
+            self._client.upsert(collection_name=name, points=batch)
         if empty_ids:
             self._client.delete(collection_name=name, points_selector=empty_ids)
         return len(rows)
@@ -195,7 +205,8 @@ class QdrantService:
             for p in points
         ]
         if qdrant_points:
-            self._client.upsert(collection_name=collection, points=qdrant_points)
+            for batch in _batches(qdrant_points):
+                self._client.upsert(collection_name=collection, points=batch)
             self._mirror_to_lexical(collection, lambda _name: self.upsert_lexical(collection, points), "upsert")
 
     def search(

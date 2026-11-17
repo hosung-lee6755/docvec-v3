@@ -80,6 +80,30 @@ def test_upsert_mirrors_chunk_points_into_lexical_collection(qdrant):
     qdrant._client.delete.assert_called_once_with(collection_name=LEX, points_selector=["p2"])
 
 
+def test_upsert_points_sends_large_documents_in_batches(qdrant, monkeypatch):
+    # 검색용 청크 5,584개를 한 요청에 담으면 128MB가 되어 Qdrant 한도(32MB)를 넘었다(2026-11-17, 511쪽 PDF)
+    monkeypatch.setattr(qs, "_UPSERT_BATCH_SIZE", 2)
+    points = [_point(f"p{i}", f"본문{i}") for i in range(5)]
+
+    qdrant.upsert_points("summaries", points)
+
+    sent = [c.kwargs["points"] for c in qdrant._client.upsert.call_args_list]
+    assert [len(batch) for batch in sent] == [2, 2, 1]
+    assert [p.id for batch in sent for p in batch] == [f"p{i}" for i in range(5)]
+
+
+def test_lexical_mirror_is_also_sent_in_batches(qdrant, monkeypatch):
+    monkeypatch.setattr(qs, "_UPSERT_BATCH_SIZE", 2)
+    qdrant._client.collection_exists.return_value = True
+
+    qdrant.upsert_points(CHUNKS, [_point(f"p{i}", f"본문{i}") for i in range(5)])
+
+    by_target = {}
+    for c in qdrant._client.upsert.call_args_list:
+        by_target.setdefault(c.kwargs["collection_name"], []).append(len(c.kwargs["points"]))
+    assert by_target == {CHUNKS: [2, 2, 1], LEX: [2, 2, 1]}
+
+
 def test_other_collections_are_not_mirrored(qdrant):
     qdrant.upsert_points("summaries", [_point("p1", "본문")])
     qdrant.delete_points("summaries", ["p1"])
