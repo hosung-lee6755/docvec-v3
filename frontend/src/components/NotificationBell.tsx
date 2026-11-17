@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, Bell, ClipboardCheck, ServerCrash, X } from 'lucide-react'
+import { AlertTriangle, Bell, ClipboardCheck, MessageSquare, ServerCrash, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
   useDeleteNotification,
@@ -18,6 +18,9 @@ const KIND_VIEW: Record<NotificationKind, { icon: LucideIcon; tone: 'danger' | '
   document_failed: { icon: AlertTriangle, tone: 'danger' },
   review_waiting: { icon: ClipboardCheck, tone: 'warning' },
   sync_failed: { icon: ServerCrash, tone: 'danger' },
+  inquiry_created: { icon: MessageSquare, tone: 'warning' },
+  inquiry_replied: { icon: MessageSquare, tone: 'warning' },
+  inquiry_followup: { icon: MessageSquare, tone: 'warning' },
 }
 
 export function NotificationBell() {

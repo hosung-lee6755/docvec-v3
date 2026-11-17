@@ -1,10 +1,10 @@
-import { LayoutDashboard, FileText, FolderKanban, FolderOpen, Search, Users, MessageSquare, ScrollText, DollarSign, BookOpen, GitBranch, AlertTriangle, XCircle, Activity, Eraser, ShieldCheck, Route, FileCheck, HardDrive, Plug, Settings } from 'lucide-react'
+import { LayoutDashboard, FileText, FolderKanban, FolderOpen, Search, Users, MessageSquare, ScrollText, DollarSign, BookOpen, GitBranch, AlertTriangle, XCircle, Activity, Eraser, ShieldCheck, Route, FileCheck, HardDrive, Plug, Settings, LifeBuoy } from 'lucide-react'
 
 export interface NavItem {
   to: string
   icon: typeof FileText
   label: string
-  badge?: 'waitingReview' | 'failed'
+  badge?: 'waitingReview' | 'failed' | 'inquiry'
   adminOnly?: boolean
 }
 
@@ -34,6 +34,12 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/review-queue', icon: AlertTriangle, label: '검토 대기', badge: 'waitingReview' },
       { to: '/failures', icon: XCircle, label: '실패', badge: 'failed' },
       { to: '/processing-status', icon: Activity, label: '처리 현황' },
+    ],
+  },
+  {
+    section: '문의',
+    items: [
+      { to: '/inquiries', icon: LifeBuoy, label: '관리자 문의', badge: 'inquiry' },
     ],
   },
   {

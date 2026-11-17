@@ -4,7 +4,13 @@ import { apiClient } from '../lib/apiClient'
 // 전체 점검 2-7 — 문서 처리 실패, 검토 대기, 파일 서버 동기화 실패 알림.
 // 서버가 밀어 주지 않으므로 주기적으로 다시 읽는다. 창으로 돌아올 때도 한 번 읽는다.
 
-export type NotificationKind = 'document_failed' | 'review_waiting' | 'sync_failed'
+export type NotificationKind =
+  | 'document_failed'
+  | 'review_waiting'
+  | 'sync_failed'
+  | 'inquiry_created'
+  | 'inquiry_replied'
+  | 'inquiry_followup'
 
 export interface AppNotification {
   id: string

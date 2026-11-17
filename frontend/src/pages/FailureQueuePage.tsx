@@ -180,6 +180,13 @@ function FailureRow({ item, isSelected, isBusy, onToggle, onRetry }: {
       <td>
         <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           <Link to={`/documents/${item.document_id}?tab=history`} className={buttonClass('secondary', 'sm')}>처리 이력</Link>
+          <Link
+            to="/inquiries/new"
+            state={{ documentId: item.document_id, documentName: item.filename, category: 'error' }}
+            className={buttonClass('secondary', 'sm')}
+          >
+            관리자에게 문의
+          </Link>
           <Button
             size="sm" variant="ghost" disabled={!item.can_retry || isBusy} onClick={onRetry}
             title={item.can_retry ? undefined : '실패한 단계가 기록되지 않아 이어서 처리할 수 없습니다. 문서 상세에서 전체 재처리를 하세요.'}

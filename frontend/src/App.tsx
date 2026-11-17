@@ -27,6 +27,7 @@ import WorkflowRunsPage from './pages/WorkflowRunsPage'
 import ProcessingStatusPage from './pages/ProcessingStatusPage'
 import CleaningRulesPage from './pages/CleaningRulesPage'
 import AccessTokensPage from './pages/AccessTokensPage'
+import InquiriesPage from './pages/InquiriesPage'
 import ReviewQueuePage from './pages/ReviewQueuePage'
 import FailureQueuePage from './pages/FailureQueuePage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -86,6 +87,9 @@ export default function App() {
         <Route path="groups" element={<GroupsPage />} />
         <Route path="connectors" element={<ConnectorsPage />} />
         <Route path="access-tokens" element={<AccessTokensPage />} />
+        <Route path="inquiries" element={<InquiriesPage />} />
+        <Route path="inquiries/new" element={<InquiriesPage />} />
+        <Route path="inquiries/:inquiryId" element={<InquiriesPage />} />
         <Route path="audit-logs" element={<AuditLogPage />} />
         <Route path="answer-traces" element={<AnswerTracesPage />} />
         <Route path="governance-report" element={<GovernanceReportPage />} />

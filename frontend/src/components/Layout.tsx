@@ -4,6 +4,7 @@ import { Outlet, Link, useLocation } from 'react-router-dom'
 import { LogOut, Menu, Search, Settings, X } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { useWaitingReviewCount, useFailedCount } from '../hooks/useDocuments'
+import { useOpenInquiryCount } from '../hooks/useInquiries'
 import { CountBadge } from './ui'
 import { CommandPalette } from './CommandPalette'
 import { NotificationBell } from './NotificationBell'
@@ -24,6 +25,7 @@ export default function Layout() {
   // 좁은 화면(860px 이하)에서만 쓰는 메뉴 펼침 상태. 화면을 옮기면 접는다.
   const [isNavOpen, setIsNavOpen] = useState(false)
   const isAdmin = user?.role === 'admin'
+  const openInquiryCount = useOpenInquiryCount(isAdmin).data?.total ?? 0
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -48,6 +50,7 @@ export default function Layout() {
         <span className="ds-nav__label">{label}</span>
         {badge === 'waitingReview' && <CountBadge count={waitingReviewCount} tone="warning" label="검토 대기" />}
         {badge === 'failed' && <CountBadge count={failedCount} tone="danger" label="실패" />}
+        {badge === 'inquiry' && <CountBadge count={openInquiryCount} tone="warning" label="접수 대기 문의" />}
       </Link>
     )
   }

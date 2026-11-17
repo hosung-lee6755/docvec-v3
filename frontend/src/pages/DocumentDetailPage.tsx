@@ -30,7 +30,7 @@ import { toBlocksJson, type TabKey } from '../components/document-detail/documen
 import OcrConfidencePanel from '../components/document-detail/OcrConfidencePanel'
 import VersionHistoryPanel from '../components/document-detail/VersionHistoryPanel'
 import { SECURITY_LEVEL_LABELS } from '../hooks/useAccess'
-import { Alert, Button, ErrorAlert, IconButton, Page, PageHeader, SecurityLevelBadge, Split, StatusBadge, Tabs, Textarea } from '../components/ui'
+import { Alert, Button, ErrorAlert, IconButton, Page, PageHeader, SecurityLevelBadge, Split, StatusBadge, Tabs, Textarea, buttonClass } from '../components/ui'
 import { errorCause, explainFailure } from '../lib/apiError'
 
 // 문서 요약(doc.summary)·추천 태그는 분석 워크플로우 산출물이라 탭이 아니라
@@ -366,6 +366,13 @@ export default function DocumentDetailPage() {
                     {explainFailure(doc.error_message)}
                   </pre>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
+                    <Link
+                      to="/inquiries/new"
+                      state={{ documentId: doc.id, documentName: doc.original_filename, category: 'error' }}
+                      className={buttonClass('secondary', 'sm')}
+                    >
+                      관리자에게 문의
+                    </Link>
                     <Button
                       variant="secondary"
                       size="sm"

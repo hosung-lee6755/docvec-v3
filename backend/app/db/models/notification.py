@@ -16,6 +16,9 @@ from app.db.types import UTCDateTime
 KIND_DOCUMENT_FAILED = "document_failed"
 KIND_REVIEW_WAITING = "review_waiting"
 KIND_SYNC_FAILED = "sync_failed"
+KIND_INQUIRY_CREATED = "inquiry_created"
+KIND_INQUIRY_REPLIED = "inquiry_replied"
+KIND_INQUIRY_FOLLOWUP = "inquiry_followup"
 
 
 class Notification(Base):
