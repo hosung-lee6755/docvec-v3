@@ -10,7 +10,10 @@ vi.mock('../../hooks/useAccess', async () => {
   return {
     ...actual,
     useDocumentAcl: () => aclState,
-    useGroups: () => ({ data: { items: [{ id: 'g-1', name: '품질팀', description: null, member_count: 2, created_at: '' }] } }),
+    useGroups: () => ({ data: { items: [
+      { id: 'g-1', name: '품질팀', description: null, member_count: 2, created_at: '' },
+      { id: 'g-sys', name: 'Account Operators', description: null, member_count: 0, created_at: '', is_system: true },
+    ] } }),
     useReplaceDocumentAcl: () => ({ mutate, isPending: false, isError: false }),
   }
 })
@@ -59,6 +62,19 @@ describe('AccessPanel', () => {
     expect(screen.queryByLabelText('허용 목록에 추가할 사용자 또는 그룹')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /허용 해제/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '제한 해제' })).not.toBeInTheDocument()
+  })
+
+  it('leaves AD default groups out of the picker', () => {
+    aclState = {
+      isError: false,
+      data: {
+        document_id: 'doc-1', security_level: null, effective_security_level: 'Internal', restricted: false,
+        entries: [],
+      },
+    }
+    renderPanel()
+    expect(screen.getByRole('option', { name: '품질팀' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Account Operators' })).not.toBeInTheDocument()
   })
 
   it('adds a group by replacing the whole list', () => {

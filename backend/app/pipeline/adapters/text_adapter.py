@@ -23,7 +23,10 @@ _MD_TABLE_DIVIDER_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|
 _MD_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _FALLBACK_ENCODINGS = ("utf-8-sig", "cp949", "utf-16")
 _HTML_HEADINGS = {f"h{level}": level for level in range(1, 7)}
-_HTML_SKIPPED = {"script", "style", "noscript", "template", "head", "svg", "iframe", "object", "embed"}
+# button·select 는 화면 조작 요소다. 목차 접기 버튼의 "목차"가 제목에 붙어 "…보고서목차"가 됐다(2026-11-19)
+_HTML_SKIPPED = {
+    "script", "style", "noscript", "template", "head", "svg", "iframe", "object", "embed", "button", "select",
+}
 _HTML_BLOCKS = {
     "p", "div", "section", "article", "main", "header", "footer", "nav", "aside", "li", "ul", "ol", "dl", "dt",
     "dd", "blockquote", "pre", "figure", "figcaption", "form", "address", "details", "summary", "tr", "body", "html",

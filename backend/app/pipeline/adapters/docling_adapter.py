@@ -15,6 +15,7 @@ content.markdown/metadata 형태)만 얹는다.
 방어적으로 값을 꺼낸다 — 실제 docling 패키지가 설치된 뒤(컨테이너 리빌드
 후) 실제 문서로 재검증 필요."""
 import io
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -220,6 +221,24 @@ def _table_caption(item, doc) -> str | None:
         return None
     caption = " ".join((caption or "").split())
     return caption or None
+
+
+# 표 바로 위 줄이 표 제목인지 보는 머리("[별표 1]", "<표 3-1>", "[표 2]", "별표 4", "표 9")
+_CAPTION_LINE_RE = re.compile(
+    r"^(?:\[\s*별\s*표\s*[\d\-]+\s*\]|<\s*표\s*[\d\-.]+\s*>|\[\s*표\s*[\d\-.]+\s*\]|별\s*표\s*[\d\-]+|표\s*[\d\-.]+)\s*\S"
+)
+_CAPTION_MAX_CHARS = 80
+
+
+def _preceding_caption(page: RawPage) -> str | None:
+    """캡션이 없는 표의 제목으로 쓸, 같은 쪽에서 바로 앞에 나온 제목 줄. 기계설비 매뉴얼에서 제목 없는 표 169개 중
+    50개가 "[별표 1] 표 2 냉·난방설비의 …" 같은 줄을 바로 위에 두었다(2026-11-19)."""
+    if not page.text_blocks or page.text_blocks[-1].block_type == "table":
+        return None
+    line = " ".join(page.text_blocks[-1].text.split())
+    if len(line) > _CAPTION_MAX_CHARS or not _CAPTION_LINE_RE.match(line):
+        return None
+    return line
 
 
 def _emit_table(page: RawPage, elements: list[dict], section_path: list[str], rows: list[list[str]],
@@ -466,14 +485,14 @@ class DoclingAdapter(BaseAdapter):
                     continue  # 앞의 Docling 표와 같은 선 표다. 이미 그 결과로 냈다
                 if ruled is not None:
                     # 선으로 그린 표는 선 그대로 읽은 결과를 쓴다. 칸 안의 작은 표는 바로 뒤에 따로 낸다
-                    caption = _table_caption(item, doc)
+                    caption = _table_caption(item, doc) or _preceding_caption(page)
                     tables = [
                         (t.rows, None, "ruled_lines", t.title or (caption if t is ruled else None))
                         for t in (ruled, *ruled.nested)
                     ]
                 else:
                     rows, spans = _table_grid(item)
-                    tables = [(rows, spans, "docling_table", _table_caption(item, doc))]
+                    tables = [(rows, spans, "docling_table", _table_caption(item, doc) or _preceding_caption(page))]
                 for rows, spans, detected_as, title in tables:
                     table_ordinal += 1
                     _emit_table(page, elements, section_path, rows, spans, bbox, detected_as, title)

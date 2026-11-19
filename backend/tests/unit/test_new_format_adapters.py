@@ -269,3 +269,16 @@ def test_image_is_converted_to_pdf_and_sent_through_the_pdf_adapter(tmp_path, mo
 
     assert seen == {"suffix": ".pdf", "head": b"%PDF-", "options": {"x": 1}}
     assert parsed.format_id == "image" and parsed.page_count == 1
+
+
+def test_html_buttons_are_page_controls_not_document_text():
+    # 고도화보고서: 목차 머리의 <a>제목</a><button>목차</button>이 "…보고서목차"로 붙어 첫 청크가 됐다(2026-11-19)
+    from app.pipeline.adapters.text_adapter import parse_html
+
+    html = (
+        '<body><nav><div class="toc-head"><a href="#top">분석 보고서</a>'
+        '<button type="button">목차</button></div></nav>'
+        '<p>본문 <select><option>선택</option></select>입니다.</p></body>'
+    )
+    blocks, _tables, _collector, _title = parse_html(html)
+    assert [b.text for b in blocks] == ["분석 보고서", "본문 입니다."]

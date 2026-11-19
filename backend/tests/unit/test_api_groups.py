@@ -135,3 +135,18 @@ async def test_delete_group_keeps_acl_entries_fail_closed(db_session):  # noqa: 
         select(UserGroupMember).where(UserGroupMember.group_id == group.id)
     )).all()
     assert members == []
+
+
+def test_ad_default_groups_are_marked_as_system_groups():
+    # 문서 접근 허용 선택 목록에 "Account Operators" 같은 AD 기본 그룹 38개가 섞여 고르기 어려웠다(2026-11-19)
+    from types import SimpleNamespace
+
+    from app.api.v1.endpoints.groups import _is_ad_system_group
+
+    def group(name, dn, source="ldap"):
+        return SimpleNamespace(name=name, external_dn=dn, source=source)
+
+    assert _is_ad_system_group(group("Account Operators", "CN=Account Operators,CN=Builtin,DC=docvec,DC=local"))
+    assert _is_ad_system_group(group("Domain Admins", "CN=Domain Admins,CN=Users,DC=docvec,DC=local"))
+    assert not _is_ad_system_group(group("sales", "CN=sales,CN=Users,DC=docvec,DC=local"))
+    assert not _is_ad_system_group(group("Domain Admins", None, source="local"))

@@ -237,7 +237,8 @@ def test_stale_runs_are_failed_and_stop_blocking_auto_scheduling(world):
     with patch.object(ge, "enqueue_run"):
         # 오래된 대기 실행은 새 자동 예약을 막지 않는다
         assert ge.schedule_golden_eval_sync(world.db, str(world.coll.id), "lifecycle") is not None
-    assert ge.fail_stale_runs_sync(world.db) == 1
+    # 정리는 DB 전체가 대상이라 앞선 테스트가 커밋해 둔 오래된 실행도 함께 셀 수 있다. 개수 대신 두 실행의 상태로 본다
+    assert ge.fail_stale_runs_sync(world.db) >= 1
 
     world.db.refresh(old)
     world.db.refresh(fresh)

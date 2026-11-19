@@ -23,6 +23,8 @@ export interface Group {
   source?: "local" | "ldap"
   // AD에서 다시 생긴 그룹이라 예전 그룹의 문서 권한을 이어받을지 정해야 한다
   has_previous_permissions?: boolean
+  // AD가 스스로 만드는 기본 그룹(Domain Admins 등). 문서 접근 허용 선택 목록에서 숨긴다
+  is_system?: boolean
 }
 
 /** 다시 생긴 AD 그룹이 이어받을 수 있는 예전 그룹의 문서 권한 */

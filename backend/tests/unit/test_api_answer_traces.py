@@ -25,6 +25,8 @@ from tests.unit.api_pg_helpers import (  # noqa: F401
 
 pytestmark = pytest.mark.asyncio
 
+_PAST = datetime(2001, 1, 1, tzinfo=timezone.utc)
+
 
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -70,9 +72,10 @@ async def world(db_session):  # noqa: F811
         dict(document_id=gone_id, filename="gone.txt", security_level="Public",
              source_kind="chunk", chunk_ref=str(uuid4()), text_sha256=_sha("x")),
     ]
-    main = await _trace(db, asker, query="근거 질문", sources=sources)
+    # 다른 테스트가 커밋해 남긴 추적과 섞이지 않도록 지난 시점(2001년)에 둔다
+    main = await _trace(db, asker, query="근거 질문", sources=sources, created_at=_PAST + timedelta(days=3))
     other = await _trace(db, owner, query="다른 질문", grounding="failed",
-                         created_at=datetime.now(timezone.utc) - timedelta(days=3))
+                         created_at=_PAST)
     await db.commit()
     return dict(db=db, owner=owner, admin=admin, asker=asker, col=col, pub=pub, conf=conf,
                 gone_id=gone_id, main=main, other=other)
@@ -94,7 +97,8 @@ async def test_non_admin_cannot_list_or_read_traces(world):
 
 
 async def test_list_returns_newest_first_with_counts(world):
-    result = await _list(world)
+    result = await _list(world, from_date=_PAST - timedelta(days=1), to_date=_PAST + timedelta(days=30))
+    assert result["total"] == 2
     ids = [i["id"] for i in result["items"]]
     assert ids.index(str(world["main"].id)) < ids.index(str(world["other"].id))
     item = next(i for i in result["items"] if i["id"] == str(world["main"].id))

@@ -60,7 +60,8 @@ export default function AccessPanel({ documentId, collectionId, securityLevel }:
     setCandidate('')
   }
 
-  const groupOptions = (groups.data?.items ?? []).filter((g) => !current.has(`group:${g.id}`))
+  // AD 기본 그룹(Account Operators 등 38개)은 고를 일이 거의 없어 목록에서 뺀다
+  const groupOptions = (groups.data?.items ?? []).filter((g) => !g.is_system && !current.has(`group:${g.id}`))
   const userOptions = (members.data?.items ?? []).filter((m) => !current.has(`user:${m.user_id}`))
   const effective = acl.data.effective_security_level
   // 접근을 넓히는 변경(제한 해제, 허용 대상 추가, 마지막 항목 제거)은 업로더·컬렉션 소유자만 할 수 있다.

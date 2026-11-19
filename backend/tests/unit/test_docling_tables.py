@@ -96,3 +96,26 @@ def test_multi_row_headers_become_one_row_so_split_parts_keep_every_column_name(
     rows, _spans = _table_grid(table)
 
     assert rows == [["도시명", "냉방 건구온도", "냉방 습구온도", "난방 건구온도"], ["서울", "31.2", "25.5", "-11.3"]]
+
+
+def test_a_table_without_caption_takes_the_title_line_right_above_it():
+    # 기계설비 매뉴얼: 캡션 없는 표 바로 위 줄이 "[별표 1] 표 2 …" 같은 제목이다. 잘라 나눈 조각마다 제목을
+    # 붙이려면 표 제목으로 받아야 한다(2026-11-19, 제목 없는 표 169개 중 50개가 이런 줄을 가짐)
+    from app.pipeline.adapters.base import RawPage, RawTextBlock
+    from app.pipeline.adapters.docling_adapter import _preceding_caption
+
+    def page(*texts, last_type="paragraph"):
+        blocks = [RawTextBlock(text=t, page_number=1) for t in texts]
+        if blocks:
+            blocks[-1].block_type = last_type
+        return RawPage(page_number=1, width=1, height=1, text_blocks=blocks, table_candidates=[], image_regions=[])
+
+    assert _preceding_caption(page("본문", "[별표 1] 표 2 냉·난방설비의 설계 외기온·습도 기준")) == (
+        "[별표 1] 표 2 냉·난방설비의 설계 외기온·습도 기준"
+    )
+    assert _preceding_caption(page("<표 3-1> 실내 온도 기준")) == "<표 3-1> 실내 온도 기준"
+    assert _preceding_caption(page("표 9 덕트 보온두께")) == "표 9 덕트 보온두께"
+    assert _preceding_caption(page("설계 기준은 아래 표와 같다.")) is None
+    assert _preceding_caption(page("[별표 1] 이전 표", last_type="table")) is None
+    assert _preceding_caption(page("표 1 " + "가" * 120)) is None
+    assert _preceding_caption(page()) is None

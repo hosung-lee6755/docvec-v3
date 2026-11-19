@@ -35,6 +35,8 @@ class GroupResponse(BaseModel):
     source: str = "local"
     # AD에서 다시 생긴 그룹이라 예전 그룹의 문서 권한을 이어받을지 정해야 한다
     has_previous_permissions: bool = False
+    # AD 가 스스로 만드는 기본 그룹(Domain Admins, CN=Builtin 등). 문서 접근 허용 선택 목록에서 숨긴다
+    is_system: bool = False
 
 
 class GroupMemberAdd(BaseModel):

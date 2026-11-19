@@ -65,11 +65,30 @@ async def _members(db: AsyncSession, group_id) -> list[GroupMemberResponse]:
     ]
 
 
+# AD 가 도메인을 만들 때 CN=Users 에 넣는 기본 그룹. CN=Builtin 의 그룹은 DN 으로 가린다
+_AD_DEFAULT_USERS_GROUPS = frozenset({
+    "Allowed RODC Password Replication Group", "Cert Publishers", "Cloneable Domain Controllers",
+    "Denied RODC Password Replication Group", "DnsAdmins", "DnsUpdateProxy", "Domain Admins", "Domain Computers",
+    "Domain Controllers", "Domain Guests", "Domain Users", "Enterprise Admins", "Enterprise Key Admins",
+    "Enterprise Read-only Domain Controllers", "Group Policy Creator Owners", "Key Admins", "Protected Users",
+    "RAS and IAS Servers", "Read-only Domain Controllers", "Schema Admins",
+})
+
+
+def _is_ad_system_group(group) -> bool:
+    """AD 가 스스로 만드는 기본 그룹인지. 문서 접근 허용 선택 목록에서 숨기는 데 쓴다(지우지는 않는다)."""
+    if (group.source or "local") != "ldap":
+        return False
+    dn = (group.external_dn or "").upper()
+    return ",CN=BUILTIN," in dn or group.name in _AD_DEFAULT_USERS_GROUPS
+
+
 def _group_response(group: UserGroup, member_count: int) -> GroupResponse:
     return GroupResponse(
         id=group.id, name=group.name, description=group.description,
         member_count=member_count, created_at=group.created_at, source=group.source or "local",
         has_previous_permissions=group.previous_group_id is not None,
+        is_system=_is_ad_system_group(group),
     )
 
 
