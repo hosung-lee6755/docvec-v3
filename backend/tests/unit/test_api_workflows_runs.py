@@ -463,6 +463,55 @@ async def test_run_whose_document_was_deleted_is_admin_only_and_hidden_from_othe
 
 
 @pytest.mark.asyncio
+async def _review_gate(db, world, run_status="WAITING_REVIEW"):
+    from app.db.models.quality_report import QualityReport
+
+    doc = await make_document(db, world["owner"], world["collection"])
+    doc.status = "WAITING_REVIEW"
+    doc.quality_status = "REVIEW_REQUIRED"
+    run = await _make_run(db, world["version"], run_status, document_id=str(doc.id))
+    report = QualityReport(run_id=run.id, document_id=doc.id, status="REVIEW_REQUIRED", warnings=["짧은 청크"])
+    db.add(report)
+    await db.flush()
+    return doc, run, report
+
+
+@pytest.mark.asyncio
+async def test_resume_run_records_who_approved_the_quality_review(world, dispatched):
+    # 승인한 사람과 시각이 품질 보고서와 감사 로그에 남아야 한다. 남지 않으면 승인한 문서도 계속 "검토 필요"로 보인다
+    from app.db.models.audit_log import AuditLog
+
+    db = world["db"]
+    doc, run, report = await _review_gate(db, world)
+
+    await runs_api.resume_run(U(run.id), db, world["owner"])
+
+    await db.refresh(report)
+    await db.refresh(doc)
+    assert str(report.reviewed_by) == str(world["owner"].id) and report.reviewed_at is not None
+    assert report.review_note == "승인"
+    assert report.status == "REVIEW_REQUIRED"  # 품질 판정 기록은 그대로 둔다
+    assert doc.quality_status == "SUCCESS_WITH_WARNING"
+    logs = (await db.scalars(select(AuditLog).where(AuditLog.resource_id == str(run.id)))).all()
+    assert [log.action for log in logs] == ["workflow_run.approve"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_records_who_rejected_the_quality_review(world):
+    from app.db.models.audit_log import AuditLog
+
+    db = world["db"]
+    doc, run, report = await _review_gate(db, world)
+
+    await runs_api.cancel_run(U(run.id), db, world["owner"])
+
+    await db.refresh(report)
+    assert str(report.reviewed_by) == str(world["owner"].id) and report.review_note == "반려"
+    logs = (await db.scalars(select(AuditLog).where(AuditLog.resource_id == str(run.id)))).all()
+    assert [log.action for log in logs] == ["workflow_run.reject"]
+
+
+@pytest.mark.asyncio
 async def test_resume_run_takes_the_document_off_the_review_queue_right_away(world, dispatched):
     # 실행은 워커가 이어 가므로, 승인 직후 다시 받은 검토 대기 목록에서 바로 빠지도록 문서 상태를 먼저 바꾼다
     db = world["db"]

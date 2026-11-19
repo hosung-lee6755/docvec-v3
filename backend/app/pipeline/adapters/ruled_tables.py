@@ -12,6 +12,7 @@ Docling 어댑터는 Docling이 찾은 표와 위치가 겹치는 표가 여기 
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from pdfplumber.table import Table
@@ -86,7 +87,40 @@ def _touches_vertical(horizontal: dict, verticals: list[dict]) -> bool:
 
 def _clean_rows(raw: list[list[str | None]]) -> list[list[str]]:
     rows = [[(cell or "").strip() for cell in row] for row in raw]
-    return [row for row in rows if any(row)]
+    split = [piece for row in rows for piece in _split_stacked_row(row)]
+    return [row for row in split if any(row)]
+
+
+# 한 칸에 이만큼 이상의 줄이 쌓였을 때만 가로 선 없는 여러 행으로 본다(두 줄은 긴 글이 접힌 경우가 많다)
+MIN_STACKED_LINES = 3
+# 숫자 하나(소수점은 한 번). 날짜("2024.01.05")와 절 번호("1.2.3")는 숫자 칸으로 보지 않는다
+_NUMERIC_LINE_RE = re.compile(r"^[-−+]?\d[\d,]*(?:\.\d+)?%?$")
+# 숫자 열이 하나뿐이면 다른 칸의 줄이 이만큼 짧을 때(공백 제외)만 나눈다. 긴 글이 마침 같은 줄 수로 접힌
+# 경우를 피한다("750 초과 1500 이하"는 11자)
+MAX_STACKED_LABEL_CHARS = 12
+
+
+def _split_stacked_row(row: list[str]) -> list[list[str]]:
+    """가로 선 없이 여러 행이 한 행으로 읽힌 경우를 줄마다 나눈다. 내용이 있는 칸이 모두 같은 줄 수이고,
+    그중 한 칸이라도 줄마다 숫자 하나뿐이어야 한다(설계 외기온·습도 표 실측, 2026-11-19). 긴 글이 접힌 칸은
+    줄 수가 칸마다 다르거나 숫자 열이 없어서 나누지 않는다."""
+    lines = [[line.strip() for line in cell.split("\n") if line.strip()] if cell else [] for cell in row]
+    filled = [cell_lines for cell_lines in lines if cell_lines]
+    if len(filled) < 2:
+        return [row]
+    count = len(filled[0])
+    if count < MIN_STACKED_LINES or any(len(cell_lines) != count for cell_lines in filled):
+        return [row]
+    numeric = [all(_NUMERIC_LINE_RE.match(line.replace(" ", "")) for line in cell_lines) for cell_lines in filled]
+    if not any(numeric):
+        return [row]
+    labels_short = all(
+        len(line.replace(" ", "")) <= MAX_STACKED_LABEL_CHARS
+        for cell_lines, is_numeric in zip(filled, numeric) if not is_numeric for line in cell_lines
+    )
+    if sum(numeric) < 2 and not labels_short:
+        return [row]
+    return [[cell_lines[index] if cell_lines else "" for cell_lines in lines] for index in range(count)]
 
 
 def _is_table(rows: list[list[str]]) -> bool:

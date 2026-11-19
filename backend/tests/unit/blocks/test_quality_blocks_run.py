@@ -85,6 +85,15 @@ def test_score_from_ratio_boundaries():
     assert qb._score_from_ratio(0.1, warn_above=0) == 0.0
 
 
+def test_unmatched_toc_entries_ignores_whitespace_differences():
+    # 목차 링크는 "7[D7] …", 본문 제목은 "7 [D7] …"로 띄어쓰기만 다르다(완료보고서 실측, 2026-11-19)
+    toc = ["7[D7] AI 리포트 생성 과정 및 결과", "1.2 개요 ........ 15"]
+    headings = ["7 [D7] AI 리포트 생성 과정 및 결과", "1.2 개요"]
+    assert qb._unmatched_toc_entries(toc, headings) == []
+    assert qb._toc_heading_match_ratio(toc, headings) == 1.0
+    assert qb._unmatched_toc_entries(["부록 A. 용어"], ["부록 B. 테이블"]) == ["부록 A. 용어"]
+
+
 def test_normalize_heading_like_strips_numbers_and_leaders():
     assert qb._normalize_heading_like("1.2 개요 ........ 15") == "개요"
     assert qb._normalize_heading_like("제3장 결과") == "결과"
@@ -277,7 +286,7 @@ def test_run_carries_upstream_output():
 def test_block_metadata():
     block = qb.QualityCheckBlock()
     assert block.block_type == "quality_check"
-    assert block.block_version == "1.7.0"
+    assert block.block_version == "1.8.0"
     assert block.category == "품질·제어"
     assert block.config_schema is qb.QualityCheckConfig
     with pytest.raises(Exception):

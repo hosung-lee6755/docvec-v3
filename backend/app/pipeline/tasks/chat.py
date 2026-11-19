@@ -100,6 +100,15 @@ _INTENT_SYSTEM_PROMPT = (
 )
 
 
+# 로컬 모델이 "원인과 조치는 무엇인가?" 같은 구체적인 질문도 요약으로 분류한다(관리자매뉴얼 채팅 실측,
+# 2026-11-19). 요약 경로는 문서 요약만 근거로 쓰므로, 요약을 바라는 말이 있을 때만 그 판정을 받아들인다
+_SUMMARY_CUE_RE = re.compile(
+    r"요약|개요|핵심|주요\s?내용|전체적|전반|대략|간략|정리해|무슨\s?내용|어떤\s?내용|뭘\s?다루|무엇을\s?다루"
+    r"|summar|overview",
+    re.IGNORECASE,
+)
+
+
 def _classify_intent(provider, query: str) -> str:
     try:
         verdict = provider.generate(
@@ -110,7 +119,8 @@ def _classify_intent(provider, query: str) -> str:
         if "TABLE_QUERY" in upper:
             return "table_query"
         if "SUMMARY_LOOKUP" in upper:
-            return "summary_lookup"
+            # 요약 경로는 본문 청크를 찾지 않으므로, 질문에 요약을 바라는 말이 있을 때만 따른다
+            return "summary_lookup" if _SUMMARY_CUE_RE.search(query) else "chunk_search"
         return "chunk_search"
     except Exception:
         logger.exception("chat intent classification failed; defaulting to chunk_search")
@@ -926,7 +936,8 @@ def generate_answer(self, chat_message_id: str) -> dict:
             pass
 
         try:
-            if use_cache:
+            # 근거 확인에 실패한 답은 저장하지 않는다. 저장하면 같은 질문에 틀린 답이 캐시 수명 동안 계속 나간다
+            if use_cache and grounding != GROUNDING_FAILED:
                 redis_client.setex(
                     cache_key,
                     _ANSWER_CACHE_TTL_SECONDS,

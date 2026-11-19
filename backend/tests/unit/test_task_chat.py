@@ -81,7 +81,28 @@ def test_classify_intent_maps_labels(verdict, expected):
     provider = MagicMock()
     provider.generate.return_value = verdict
 
-    assert chat._classify_intent(provider, "q") == expected
+    assert chat._classify_intent(provider, "이 문서 요약해줘") == expected
+
+
+@pytest.mark.parametrize("query", [
+    "AIDE 설치 중 Linger 확인 결과가 Linger=no로 나오면 원인과 조치는 무엇인가?",
+    "서울의 냉방 설계 외기 건구온도는?",
+])
+def test_classify_intent_ignores_summary_label_for_specific_questions(query):
+    # 요약 경로는 본문 청크를 찾지 않는다. 로컬 모델이 구체적인 질문을 요약으로 잘못 분류하면 매뉴얼의 조치 표를
+    # 두고 문서 요약만 근거로 일반론을 답했다(관리자매뉴얼 채팅 실측, 2026-11-19)
+    provider = MagicMock()
+    provider.generate.return_value = "SUMMARY_LOOKUP"
+
+    assert chat._classify_intent(provider, query) == "chunk_search"
+
+
+@pytest.mark.parametrize("query", ["이 문서 요약해줘", "주요 내용이 뭐야", "전체적으로 어떤 내용이야", "보고서 개요 알려줘"])
+def test_classify_intent_keeps_summary_label_for_summary_requests(query):
+    provider = MagicMock()
+    provider.generate.return_value = "SUMMARY_LOOKUP"
+
+    assert chat._classify_intent(provider, query) == "summary_lookup"
 
 
 def test_classify_intent_defaults_to_chunk_search_on_provider_error():
@@ -680,7 +701,7 @@ def test_generate_answer_truncates_long_error_message(chat_env):
 
 
 def test_generate_answer_routes_summary_questions_to_summaries(chat_env):
-    _conv, msg = chat_env.build()
+    _conv, msg = chat_env.build(query="이 문서 요약해줘")
     table, summary = MagicMock(return_value=[CHUNK]), MagicMock(return_value=[CHUNK])
 
     _result, chunk_search = chat_env.run(
@@ -721,7 +742,7 @@ def test_generate_answer_uses_table_rows_when_chunk_search_finds_nothing_for_a_t
 
 def test_generate_answer_falls_back_to_chunk_search_when_summary_retrieval_is_empty(chat_env):
     # 요약이 없는 문서에 "요약 조회"로 잘못 분류되면 근거 0건으로 답을 지어냈다(2026-11-12 실측)
-    _conv, msg = chat_env.build()
+    _conv, msg = chat_env.build(query="이 문서 요약해줘")
     empty = MagicMock(return_value=[])
 
     _result, chunk_search = chat_env.run(msg.id, ScriptedProvider(intent="SUMMARY_LOOKUP"), summary=empty)
@@ -1091,4 +1112,18 @@ def test_generate_answer_stores_section_path_and_page_end_in_citations(chat_env)
     assert stored.citations[0]["chunk_id"] == ref
     assert stored.citations[0]["section_path"] == ["2장 운영", "2.1 백업"]
     assert stored.citations[0]["page_end"] == 4
+    db.close()
+
+
+def test_generate_answer_does_not_cache_an_answer_that_failed_the_grounding_check(chat_env):
+    # 근거 확인에 실패한 답을 캐시에 두면, 고친 뒤에도 같은 질문에 틀린 답이 그대로 나온다(관리자매뉴얼 채팅 실측,
+    # 2026-11-19)
+    _conv, msg = chat_env.build()
+    provider = ScriptedProvider(grounded=("INSUFFICIENT",))
+
+    chat_env.run(msg.id, provider)
+
+    stored, db = chat_env.reload(msg.id)
+    assert stored.status == "DONE"
+    assert not [c for c in chat_env.redis.setex.call_args_list if c.args[0].startswith("rag_answer:")]
     db.close()

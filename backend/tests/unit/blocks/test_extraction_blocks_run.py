@@ -425,7 +425,7 @@ def test_block_metadata(block, btype, schema):
 
 
 def test_text_extract_block_version():
-    assert eb.TextExtractBlock().block_version == "1.28.0"
+    assert eb.TextExtractBlock().block_version == "1.29.1"
 
 
 def test_config_defaults_and_validation():

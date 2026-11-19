@@ -93,13 +93,40 @@ def _label_name(candidate: str, has_delimiter: bool) -> str | None:
     return name
 
 
+_GENERIC_NAME_LABEL_RE = re.compile(r"이\s?름")
+# 사람이나 역할을 가리키는 낱말의 끝(담당자, 신청인, 직원, 팀장, 고객님, 학생, 고객, 예금주)
+_PERSON_WORD_ENDINGS = ("자", "인", "원", "장", "님", "생", "객", "주", "씨")
+
+
+def _is_name_of_something(text: str, match: re.Match) -> bool:
+    """"유형 이름", "화면 이름", "코드와 이름"처럼 앞 낱말에 붙은 "이름"은 사람 이름 표지가 아니다. 사람 이름
+    표지는 칸이나 줄의 맨 앞에 온다("| 이름 | 홍길동", "이름: 홍길동"). 표의 머리글에서 다음 칸을 이름으로
+    잡아 "유형별", "이벤트" 같은 말을 가리던 문제(고도화·완료보고서 실측, 2026-11-19)."""
+    label_end = match.start(1)
+    label = text[match.start():label_end]
+    if not _GENERIC_NAME_LABEL_RE.fullmatch(label):
+        return False
+    before = text[:match.start()].rstrip(" \t")
+    if not before or not ("가" <= before[-1] <= "힣"):
+        return False
+    # "담당자 이름: 홍길동", "신청인 이름"처럼 앞 낱말이 사람을 가리키면 사람 이름 표지다(미탐이 오탐보다 위험)
+    return not before.endswith(_PERSON_WORD_ENDINGS)
+
+
 def name_matches(text: str) -> list[Match]:
     """표지("성명: 홍길동")나 호칭("홍길동 과장") 옆의 이름. 표지 쪽을 더 믿는다."""
     found: dict[int, tuple[int, float]] = {}
-    for match in _NAME_LABEL_RE.finditer(text):
-        name = _label_name(match.group(2), has_delimiter=bool(match.group(1).strip()))
+    position = 0
+    while (match := _NAME_LABEL_RE.search(text, position)) is not None:
+        name = None if _is_name_of_something(text, match) else _label_name(
+            match.group(2), has_delimiter=bool(match.group(1).strip())
+        )
         if name:
             found[match.start(2)] = (match.start(2) + len(name), _LABEL_CONFIDENCE)
+            position = match.end()
+        else:
+            # "담당자 이름: 홍길동"처럼 표지 뒤가 또 표지면 그 표지부터 다시 찾는다
+            position = match.start() + 1
     for match in _NAME_TITLE_RE.finditer(text):
         candidate = match.group(1)
         if match.start(1) not in found and is_plausible_name(candidate) and candidate[-1] not in _ORG_ENDINGS:

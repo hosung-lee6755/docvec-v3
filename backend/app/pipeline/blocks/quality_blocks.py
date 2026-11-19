@@ -87,9 +87,22 @@ def _toc_heading_match_ratio(toc_texts: list[str], heading_texts: list[str]) -> 
     자체가 성립하지 않으므로 None(경고 대상 아님)."""
     if not toc_texts:
         return None
-    normalized_headings = {_normalize_heading_like(h) for h in heading_texts}
-    matched = sum(1 for t in toc_texts if _normalize_heading_like(t) in normalized_headings)
+    heading_keys = _all_heading_keys(heading_texts)
+    matched = sum(1 for t in toc_texts if _heading_keys(t) & heading_keys)
     return matched / len(toc_texts)
+
+
+def _heading_keys(text: str) -> set[str]:
+    """목차 항목과 제목을 맞대는 열쇠. 번호를 뗀 형태와 떼지 않은 형태를 모두 쓰고, 띄어쓰기는 무시한다
+    (목차 링크 "7[D7] …"와 본문 제목 "7 [D7] …"처럼 띄어쓰기만 다른 경우, 완료보고서 실측 2026-11-19)."""
+    with_number = _TOC_TRAILING_LEADER_RE.sub("", text or "")
+    return {
+        key for key in (re.sub(r"\s+", "", _normalize_heading_like(text)), re.sub(r"\s+", "", with_number)) if key
+    }
+
+
+def _all_heading_keys(heading_texts: list[str]) -> set[str]:
+    return {key for heading in heading_texts for key in _heading_keys(heading)}
 
 
 # 경고가 가리키는 대상을 화면이 짚어 줄 수 있게 품질 보고서에 함께 남기는 목록의 상한
@@ -99,8 +112,8 @@ MAX_TOC_UNMATCHED_LISTED = 30
 
 def _unmatched_toc_entries(toc_texts: list[str], heading_texts: list[str]) -> list[str]:
     """제목으로 확인되지 않은 목차 항목. "목차-제목 일치율" 경고가 어느 항목 때문인지 보여 주는 데 쓴다."""
-    normalized_headings = {_normalize_heading_like(h) for h in heading_texts}
-    return [t.strip() for t in toc_texts if _normalize_heading_like(t) not in normalized_headings]
+    heading_keys = _all_heading_keys(heading_texts)
+    return [t.strip() for t in toc_texts if not _heading_keys(t) & heading_keys]
 
 
 def _empty_pages(page_numbers: set[int], max_page: int) -> list[int]:
@@ -247,7 +260,8 @@ class QualityCheckBlock(BaseBlock):
         #
         # 1.7.0: 경고 대상을 화면이 짚을 수 있게 빈 쪽 번호(empty_pages)와 제목으로 확인되지 않은 목차
         # 항목(toc_unmatched)을 metrics에 남긴다(2026-11-17).
-        return "1.7.0"
+        # 1.8.0: 목차-제목 대조가 띄어쓰기 차이를 무시하고, 번호를 뗀 형태와 떼지 않은 형태를 모두 맞대 본다(2026-11-19).
+        return "1.8.0"
 
     @property
     def category(self) -> str:

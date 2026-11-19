@@ -109,3 +109,34 @@ def test_page_header_and_footer_rules_do_not_wrap_the_page_in_a_fake_table(neste
         tables = find_ruled_tables(pdf.pages[0])
 
     assert len(tables) == 1 and tables[0].rows[0] == ["No", "Criteria", "Basis", "Docs"]
+
+
+def test_rows_stacked_without_rules_in_one_cell_are_split_by_line():
+    # 기계설비기술기준 매뉴얼의 설계 외기온·습도 표: 도시마다 가로 선이 없어 17개 도시가 한 칸에 줄로 쌓인다.
+    # 나누지 않으면 "서 울 인 천 … | 31.2 30.1 …"이 되어 서울의 값을 짚을 수 없다(채팅 오답 실측, 2026-11-19)
+    from app.pipeline.adapters.ruled_tables import _clean_rows
+
+    raw = [
+        ["", "도시명", "건구온도(℃)", "습구온도(℃)"],
+        ["", "서 울\n인 천\n수 원", "31.2\n30.1\n31.2", "25.5\n25.0\n- 8.7"],
+    ]
+    assert _clean_rows(raw) == [
+        ["", "도시명", "건구온도(℃)", "습구온도(℃)"],
+        ["", "서 울", "31.2", "25.5"],
+        ["", "인 천", "30.1", "25.0"],
+        ["", "수 원", "31.2", "- 8.7"],
+    ]
+
+
+def test_wrapped_text_in_cells_is_not_split_into_rows():
+    from app.pipeline.adapters.ruled_tables import _clean_rows
+
+    raw = [["항목", "설명"], ["환기 설비", "실내 공기를\n바깥 공기로\n바꾸는 설비"]]
+    assert _clean_rows(raw) == [["항목", "설명"], ["환기 설비", "실내 공기를\n바깥 공기로\n바꾸는 설비"]]
+
+
+def test_year_column_next_to_prose_folded_into_the_same_line_count_is_not_split():
+    from app.pipeline.adapters.ruled_tables import _clean_rows
+
+    raw = [["연도", "내용"], ["2023\n2024\n2025", "설비 교체 공사를 마치고 시운전을\n거쳐 준공 검사를 받은 뒤 운영을\n시작했으며 점검 주기를 정했다"]]
+    assert _clean_rows(raw)[1][0] == "2023\n2024\n2025"

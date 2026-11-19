@@ -190,7 +190,9 @@ class PiiDetectBlock(BaseBlock):
     @property
     def block_version(self) -> str:
         # 1.1.0 — 문맥 기반 이름, 주소, 운전면허, 여권, 사업자등록번호(선택) 탐지
-        return "1.1.0"
+        # 1.2.0 — "유형 이름"처럼 앞 낱말에 붙은 "이름"은 사람 이름 표지로 보지 않는다(2026-11-19)
+        # 1.2.1 — 앞 낱말이 사람을 가리키면("담당자 이름") 표지로 보고, 겹친 표지("담당자 이름: …")도 찾는다
+        return "1.2.1"
 
     @property
     def config_schema(self):

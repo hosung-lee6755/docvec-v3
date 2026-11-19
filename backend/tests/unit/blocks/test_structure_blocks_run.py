@@ -64,6 +64,103 @@ def test_layout_cursor_matches_in_order_within_lookahead():
     assert cursor.match("zzz") is None
 
 
+def test_layout_cursor_splits_multiline_entries_so_alignment_survives():
+    # HTML 의 한 블록이 여러 줄을 담은 글꼴 항목으로 오는 경우(고도화보고서 실측, 2026-11-19).
+    # 줄마다 나눠 짝짓지 않으면 앞쪽 몇 줄만 보다 짝을 잃고, 뒤의 큰 글씨 제목이 모두 문단이 된다.
+    entries = [
+        {"text": "차이가 생기는 이유\n본문 설명 한 줄\n또 한 줄", "font_size": 11.0},
+        *({"text": f"문단 {i}", "font_size": 11.0} for i in range(8)),
+        {"text": "부록 A. 용어", "font_size": 22.0, "is_bold": True},
+    ]
+    cursor = sb._LineLayoutCursor(entries)
+    for line in ["차이가 생기는 이유", "본문 설명 한 줄", "또 한 줄", *(f"문단 {i}" for i in range(8))]:
+        assert cursor.match(line) is not None
+    matched = cursor.match("부록 A. 용어")
+    assert matched is not None and matched["font_size"] == 22.0
+
+
+def test_build_blocks_keeps_large_bold_heading_after_multiline_layout_entry():
+    # 실측처럼 여러 줄 항목이 연달아 와서, 다음 한 줄 항목이 앞쪽 5개 범위 밖으로 밀리는 경우
+    groups = [[f"설명 {g} 제목", f"설명 {g} 본문입니다."] for g in range(6)]
+    explain = [line for group in groups for line in group]
+    entries = [
+        *({"text": "\n".join(group), "font_size": 11.0} for group in groups),
+        *({"text": f"본문 문장 {i}입니다.", "font_size": 11.0} for i in range(8)),
+        {"text": "부록 A. 용어", "font_size": 22.0, "is_bold": True},
+        {"text": "용어 설명 본문입니다.", "font_size": 11.0},
+    ]
+    text = "\n".join(
+        [*explain, *(f"본문 문장 {i}입니다." for i in range(8)), "", "부록 A. 용어", "용어 설명 본문입니다."]
+    )
+    blocks = sb._build_blocks(text, entries)
+    headings = [b[4] for b in blocks if b[0] == "HEADING"]
+    assert headings == ["부록 A. 용어"]
+
+
+def test_build_blocks_nests_font_only_headings_under_larger_preceding_heading():
+    # HTML 의 h2/h3/h4 는 글자 크기 22/20/18 로 옮겨 온다(simple_layout). 번호 없는 제목을 모두 수준 1로 두면
+    # 번호 제목 "2.3 …" 아래의 h4 소제목이 최상위로 빠져 청크의 섹션 경로가 끊긴다(고도화보고서 실측, 2026-11-19).
+    def head(text, size):
+        return {"text": text, "font_size": size, "is_bold": True}
+
+    def body(text):
+        return {"text": text, "font_size": 11.0}
+
+    entries = [
+        head("2 다섯 가지 방안", 22.0), head("2.3 모델 구조", 20.0), head("운전성향 유형(D2)", 18.0),
+        body("본문입니다."), head("2.3.1 학습 과정", 18.0), head("세부 항목", 16.0), body("본문입니다."),
+        head("부록 C. 설정", 22.0), head("C.1 설정 테이블", 20.0), head("cfg_event_catalog", 18.0), body("본문입니다."),
+    ]
+    text = "\n".join(e["text"] for e in entries)
+    headings = [(b[4], b[1]) for b in sb._build_blocks(text, entries, max_level=3) if b[0] == "HEADING"]
+    assert headings == [
+        ("2 다섯 가지 방안", 1), ("2.3 모델 구조", 2), ("운전성향 유형(D2)", 3),
+        ("2.3.1 학습 과정", 3), ("세부 항목", 3),
+        ("부록 C. 설정", 1), ("C.1 설정 테이블", 2), ("cfg_event_catalog", 3),
+    ]
+
+
+def test_build_blocks_gives_unnumbered_heading_the_level_of_same_size_numbered_heading():
+    # 완료보고서: h1 문서 제목 뒤의 h2 "완료 결과 요약"과 h2 "1 사업 개요"는 같은 수준이어야 한다(2026-11-19)
+    entries = [
+        {"text": "완료 보고서", "font_size": 24.0, "is_bold": True},
+        {"text": "완료 결과 요약", "font_size": 22.0, "is_bold": True},
+        *({"text": f"본문 {i}입니다.", "font_size": 11.0} for i in range(4)),
+        {"text": "1 사업 개요", "font_size": 22.0, "is_bold": True},
+        {"text": "1-1 추진 배경", "font_size": 20.0, "is_bold": True},
+        # 같은 20pt 에 수준이 엇갈리는 번호 제목이 있으면 20pt 는 기준으로 쓰지 않는다
+        {"text": "1. 목록형 알림", "font_size": 18.0, "is_bold": True},
+        {"text": "2.3.1 세부 절", "font_size": 18.0, "is_bold": True},
+        {"text": "세부 소제목", "font_size": 18.0, "is_bold": True},
+    ]
+    text = "\n".join(e["text"] for e in entries)
+    headings = [(b[4], b[1]) for b in sb._build_blocks(text, entries, max_level=3, markup_headings=True) if b[0] == "HEADING"]
+    assert headings == [
+        ("완료 보고서", 1), ("완료 결과 요약", 1), ("1 사업 개요", 1), ("1-1 추진 배경", 2),
+        # 장 제목(22pt)보다 작은 "1. …"은 번호가 1단계여도 앞선 더 큰 제목 아래에 둔다
+        ("1. 목록형 알림", 3), ("2.3.1 세부 절", 3), ("세부 소제목", 3),
+    ]
+
+
+def test_build_blocks_markup_format_ignores_numbered_body_lines_and_nests_small_numbered_headings():
+    # HTML: 제목은 태그로 표시된다. 본문 글씨의 "01 … 적습니다." 문장은 제목이 아니고, 절 안 h5 "1. … 알림"은
+    # 장("7 운영")과 같은 수준이 아니라 그 아래다(고도화보고서 실측, 2026-11-19)
+    entries = [
+        {"text": "2 고도화 방안", "font_size": 22.0, "is_bold": True},
+        {"text": "01 화면 관리 차량 수가 등록 대수보다 적습니다(회사 5).", "font_size": 11.0, "is_bold": False},
+        *({"text": f"본문 {i}입니다.", "font_size": 11.0} for i in range(4)),
+        {"text": "7 운영 준비", "font_size": 22.0, "is_bold": True},
+        {"text": "7.3 알림과 대응", "font_size": 20.0, "is_bold": True},
+        {"text": "1. 원천 테이블 구조 변경 알림", "font_size": 16.0, "is_bold": True},
+    ]
+    text = "\n".join(e["text"] for e in entries)
+    headings = [(b[4], b[1]) for b in sb._build_blocks(text, entries, max_level=3, markup_headings=True) if b[0] == "HEADING"]
+    assert headings == [("2 고도화 방안", 1), ("7 운영 준비", 1), ("7.3 알림과 대응", 2), ("1. 원천 테이블 구조 변경 알림", 3)]
+    # 제목 태그가 없는 형식(PDF 등)에서는 지금처럼 번호 줄도 제목 후보로 둔다
+    plain = [b[4] for b in sb._build_blocks(text, entries, max_level=3) if b[0] == "HEADING"]
+    assert "01 화면 관리 차량 수가 등록 대수보다 적습니다(회사 5)." in plain
+
+
 def test_resolve_source_table_id_edges():
     tables = [{"id": "t1"}, {"id": "t2"}]
     assert sb._resolve_source_table_id("[표 2]\n...", tables) == "t2"
@@ -245,7 +342,7 @@ def test_run_elements_path_keeps_toc_when_enabled():
 def test_block_metadata():
     block = sb.StructureAnalyzeBlock()
     assert block.block_type == "structure_analyze"
-    assert block.block_version == "1.16.0"
+    assert block.block_version == "1.17.0"
     assert block.category == "구조·보호"
     assert block.config_schema is sb.StructureAnalyzeConfig
     assert sb.StructureAnalyzeConfig().heading_max_level == 3
@@ -321,3 +418,11 @@ def test_repeated_body_lines_away_from_page_edges_stay_in_body():
 def test_without_page_map_nothing_is_marked_header():
     text = "\n\n".join(f"{n} 2022 서울 데이터 펠로우십 분석보고서\n본문" for n in (6, 8, 10))
     assert not [b for b in sb._build_blocks(text) if b[0] == "HEADER"]
+
+
+def test_markup_numbered_list_lines_stay_list_items():
+    # 마크다운 "1. 항목"은 제목이 아니라 목록 항목이다. 문단으로 합쳐지면 안 된다(리뷰 지적, 2026-11-19)
+    entries = [{"text": t, "font_size": 11.0} for t in ["1. 첫째 항목", "2. 둘째 항목", "본문입니다.", "본문 둘", "본문 셋"]]
+    text = "\n".join(e["text"] for e in entries)
+    blocks = sb._build_blocks(text, entries, max_level=3, markup_headings=True)
+    assert [(b[0], b[4]) for b in blocks[:2]] == [("LIST_ITEM", "1. 첫째 항목"), ("LIST_ITEM", "2. 둘째 항목")]

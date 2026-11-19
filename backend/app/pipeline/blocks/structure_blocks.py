@@ -114,6 +114,20 @@ def _leader_toc_offsets(text: str) -> set[int]:
     return set(run) if len(run) >= _TOC_MIN_RUN else set()
 
 
+def _split_multiline_entries(entries: list[dict]) -> list[dict]:
+    """여러 줄을 담은 글꼴 항목을 줄마다 같은 글꼴의 항목으로 나눈다. 본문 텍스트는 줄 단위로 짝을 찾으므로,
+    나누지 않으면 그런 항목이 몇 개만 이어져도 짝을 잃고 뒤쪽 줄 전체가 글꼴 정보 없이 분류된다
+    (HTML 고도화보고서 실측: 1095개 중 144개만 짝지어져 번호 없는 큰 제목이 모두 문단이 됨, 2026-11-19)."""
+    split: list[dict] = []
+    for entry in entries:
+        lines = [line for line in (entry.get("text") or "").split("\n") if line.strip()]
+        if len(lines) <= 1:
+            split.append(entry)
+            continue
+        split.extend({**entry, "text": line} for line in lines)
+    return split
+
+
 class _LineLayoutCursor:
     """text.split("\n")로 훑는 줄과 extraction_layout 항목을 순차 정렬한다
     (완전한 문자 오프셋 대조 대신, 작은 lookahead 창 안에서 텍스트가 일치하는
@@ -121,7 +135,7 @@ class _LineLayoutCursor:
     있어도 깨지지 않는다)."""
 
     def __init__(self, entries: list[dict]):
-        self._entries = entries
+        self._entries = _split_multiline_entries(entries)
         self._pos = 0
 
     def match(self, stripped_line: str) -> dict | None:
@@ -291,14 +305,105 @@ def _classify(
     return "PARAGRAPH", None
 
 
+def _is_font_only_heading(line: str, layout: dict | None) -> bool:
+    """번호·장절·제목 표시 없이 글자 크기와 굵기만으로 제목이 된 줄인지. _classify 의 판정 순서를 따른다."""
+    numbered = _HEADING_NUMBERED_RE.match(line)
+    if numbered and _plausible_numbered_heading(line, numbered.group(1)):
+        return False
+    if _HEADING_KOREAN_RE.match(line) or _HEADING_SQUARE_BULLET_RE.match(line):
+        return False
+    return not (layout and layout.get("heading_level"))
+
+
+class _FontHeadingNester:
+    """글꼴로만 잡힌 제목의 수준을 앞선 제목과의 글자 크기 비교로 정한다. 자기보다 글자가 큰 가장 가까운
+    앞선 제목의 한 단계 아래에 두고, 최대 수준을 넘으면 최대 수준에 맞춘다(문단으로 떨어뜨리지 않음).
+    번호 제목은 번호가 정한 수준을 그대로 쓰고 기준점으로만 쌓는다(HTML h2~h5 실측, 2026-11-19)."""
+
+    def __init__(self, numbered_sizes: dict[float, int] | None = None, sizes_follow_markup: bool = False) -> None:
+        self._stack: list[tuple[int, float | None]] = []
+        # 글자 크기가 제목 태그에서 온 형식(HTML, 마크다운)만 크기로 번호 제목의 수준을 고친다. HWPX·PDF 의
+        # 글자 크기는 단계를 그대로 반영하지 않는다(UIUX 보고서 "2. 과업 내용"이 절로 내려가는 오판, 2026-11-19)
+        self._sizes_follow_markup = sizes_follow_markup
+        # 장 번호 제목의 글자 크기 → 수준 1. 번호 없는 같은 크기 제목도 장 수준으로 둔다
+        self._numbered_sizes = numbered_sizes or {}
+
+    def place(self, level: int | None, layout: dict | None, font_only: bool, max_level: int | None) -> int | None:
+        size = layout.get("font_size") if layout else None
+        chapter_sizes = [s for s, chapter_level in self._numbered_sizes.items() if chapter_level == 1]
+        if self._sizes_follow_markup and level == 1 and size is not None and chapter_sizes and size < min(chapter_sizes):
+            # 번호 규칙상 수준 1("1. … 알림")이어도 장 제목보다 글자가 작으면 절 안의 목록형 번호다
+            font_only = True
+        if font_only and size is not None and level is not None:
+            level = self._numbered_sizes.get(size) or self._level_below_larger(size)
+            if max_level is not None:
+                level = min(level, max_level)
+        if level is None:
+            return level
+        return self._push(level, size)
+
+    def _level_below_larger(self, size: float) -> int:
+        """같은 크기의 가장 가까운 앞선 제목이 있으면 그 형제, 더 큰 제목이 먼저 나오면 그 한 단계 아래."""
+        for stacked_level, stacked_size in reversed(self._stack):
+            if stacked_size is None:
+                # 글꼴 정보를 못 짝지은 번호 제목은 크기를 비교할 수 없어 기준으로 쓰지 않는다
+                continue
+            if stacked_size > size:
+                return stacked_level + 1
+            if stacked_size == size:
+                return stacked_level
+        return 1
+
+    def _push(self, level: int, size: float | None) -> int:
+        while self._stack and self._stack[-1][0] >= level:
+            self._stack.pop()
+        self._stack.append((level, size))
+        return level
+
+
+def _numbered_heading_sizes(text: str, layout_entries: list[dict] | None) -> dict[float, int]:
+    """장 번호 제목("1 사업 개요")이 쓰는 글자 크기를 수준 1로 고정한다. 같은 크기의 번호 없는 제목("완료 결과
+    요약")이 문서 제목(h1) 뒤에 먼저 나와도 장과 같은 수준을 주려고 본문 전체를 먼저 훑는다. 더 작은 크기의
+    "1. …"은 절 안의 목록형 번호일 수 있어 기준으로 쓰지 않는다(고도화보고서 7.3절 알림 목록 실측)."""
+    levels_by_size: dict[float, set[int]] = {}
+    cursor = _LineLayoutCursor(layout_entries or [])
+    for line in text.split("\n"):
+        stripped = line.strip()
+        layout = cursor.match(stripped) if stripped else None
+        if not (layout and layout.get("is_bold") and layout.get("font_size")):
+            continue
+        numbered = _HEADING_NUMBERED_RE.match(stripped)
+        if not numbered or not _plausible_numbered_heading(stripped, numbered.group(1)):
+            continue
+        if stripped[len(numbered.group(1)):].startswith(")"):
+            continue
+        levels_by_size.setdefault(layout["font_size"], set()).add(numbered.group(1).count(".") + 1)
+    if not levels_by_size:
+        return {}
+    # 장 번호("1 사업 개요")가 쓰는 가장 큰 크기만 기준으로 쓴다. 더 작은 크기의 "1. …"은 절 안의 목록형 번호일 수 있다
+    chapter_size = max(levels_by_size)
+    return {chapter_size: 1} if levels_by_size[chapter_size] == {1} else {}
+
+
+_MARKUP_HEADING_SUFFIXES = (".html", ".htm", ".md", ".markdown")
+
+
+def _uses_markup_headings(filename: str | None) -> bool:
+    return (filename or "").lower().endswith(_MARKUP_HEADING_SUFFIXES)
+
+
 def _build_blocks(
     text: str,
     layout_entries: list[dict] | None = None,
     toc_offsets: set[int] | None = None,
     page_map: list | None = None,
     max_level: int | None = None,
+    markup_headings: bool = False,
 ) -> list[tuple[str, int | None, int, int, str, dict | None]]:
-    """줄 단위로 훑어 (node_type, level, span_start, span_end, block_text,
+    """`markup_headings`는 제목을 태그로 표시하는 형식(HTML, 마크다운)이다. 그 형식에서 본문 글씨로 쓴 번호 줄은
+    제목이 아니다.
+
+    줄 단위로 훑어 (node_type, level, span_start, span_end, block_text,
     layout) 튜플 목록을 만든다. HEADING/LIST_ITEM/TABLE(마커)/FOOTNOTE/TOC
     줄은 각각 새 블록을 열고, 연속된 본문 줄은 현재 열린 블록(PARAGRAPH 또는
     TABLE)에 그대로 이어붙인다. 빈 줄을 만나면 진행 중인 블록이 닫힌다.
@@ -317,6 +422,7 @@ def _build_blocks(
     header_offsets = _running_header_offsets(text, page_map)
     # 마지막 제목 상자의 수준. 그 뒤의 줄 제목은 이만큼 아래로 내린다(title_box.py)
     box_shift = 0
+    nester = _FontHeadingNester(_numbered_heading_sizes(text, layout_entries), sizes_follow_markup=markup_headings)
 
     def flush() -> None:
         nonlocal buf_type, buf_start, buf_end, buf_lines, box_shift
@@ -370,6 +476,13 @@ def _build_blocks(
                 node_type, level, box_shift = "HEADING", 1, 0
         elif node_type == "HEADING" and box_shift:
             level = shifted_level(level, box_shift, max_level)
+        if node_type == "HEADING" and markup_headings and layout and not layout.get("is_bold") and (
+            _HEADING_NUMBERED_RE.match(line)
+        ):
+            # 태그 없는 번호 줄은 제목이 아니다. 마크다운 번호 목록("1. 항목")은 목록 항목으로 둔다
+            node_type, level = ("LIST_ITEM", None) if _LIST_RE.match(line) else ("PARAGRAPH", None)
+        if node_type == "HEADING":
+            level = nester.place(level, layout, _is_font_only_heading(line, layout), max_level)
         if node_type in ("HEADING", "LIST_ITEM", "TABLE", "FOOTNOTE"):
             flush()
             if node_type == "TABLE":
@@ -601,7 +714,10 @@ class StructureAnalyzeBlock(BaseBlock):
         # (title_box.py). 글자를 한 자씩 띄운 번호 제목("1. 목    적")도 제목으로 받는다(2026-11-17).
         # 1.16.0: "목차"/"차례" 제목 뒤 항목이 본문에 다시 나오면 쪽 번호가 없어도 목차로 본다.
         # 가운뎃점 리더("······ 3")도 목차 줄로 받는다(toc_detection.py, 2026-11-17).
-        return "1.16.0"
+        # 1.17.0: 여러 줄을 담은 글꼴 항목을 줄마다 나눠 짝짓는다. HTML 문서 뒤쪽의 큰 제목(번호 없는
+        # "부록 A. 용어" 등)이 글꼴 정보를 잃고 문단이 되던 문제. 번호 없이 글꼴로만 잡힌 제목은 모두 수준 1이던
+        # 것을, 앞선 더 큰 제목의 한 단계 아래(같은 크기면 형제)에 두어 번호 제목 아래로 들어가게 한다(2026-11-19).
+        return "1.17.0"
 
     @property
     def category(self) -> str:
@@ -665,6 +781,7 @@ class StructureAnalyzeBlock(BaseBlock):
                 if doc.elements
                 else _build_blocks(
                     text, layout_entries, toc_offsets, _page_map_for_text(doc, text), cfg.heading_max_level,
+                    markup_headings=_uses_markup_headings(getattr(doc, "original_filename", None)),
                 )
             )
 

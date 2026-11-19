@@ -14,6 +14,7 @@ from app.api.v1.permissions import (
     check_document_access,
 )
 from app.db.models.document import Document
+from app.db.models.quality_report import QualityReport
 from app.db.models.user import User
 from app.db.models.workflow import (
     WorkflowBlockInstance,
@@ -23,6 +24,7 @@ from app.db.models.workflow import (
 )
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 from app.db.session import get_db
+from app.services.audit import log_audit
 from app.services.workflow_service import validate_graph
 
 from .access import (
@@ -280,6 +282,25 @@ async def delete_run(
     return {"deleted": True}
 
 
+_REVIEW_AUDIT_ACTIONS = {"승인": "workflow_run.approve", "반려": "workflow_run.reject"}
+
+
+async def _record_review(db: AsyncSession, run: WorkflowRun, user: User, decision: str) -> None:
+    """검토 게이트의 승인·반려를 품질 보고서(누가·언제)와 감사 로그에 남긴다. 커밋은 호출한 쪽이 한다."""
+    report = await db.scalar(
+        select(QualityReport).where(QualityReport.run_id == run.id).order_by(QualityReport.created_at.desc()).limit(1)
+    )
+    if report is not None:
+        report.reviewed_by = user.id
+        report.reviewed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        report.review_note = decision
+    log_audit(
+        db, str(user.id), _REVIEW_AUDIT_ACTIONS[decision], "workflow_run", str(run.id),
+        detail={"document_id": str(run.document_id) if run.document_id else None,
+                "quality_report_id": str(report.id) if report is not None else None},
+    )
+
+
 @router.post("/runs/{run_id}/resume")
 async def resume_run(
     run_id: UUID,
@@ -299,11 +320,15 @@ async def resume_run(
     # 실행은 워커가 이어 가고, 문서 상태는 다음 블록(대개 임베딩)이 시작될 때 바뀐다. embed 큐가
     # 밀려 있으면 몇 분 동안 검토 대기 목록에 남아 있으므로, 승인한 시점에 처리 대기로 바꿔 둔다.
     # 이어 갈 블록을 못 찾으면 작업이 검토 대기로 되돌린다(resume_workflow_run)
+    await _record_review(db, run, current_user, "승인")
     if run.document_id:
         doc = await db.get(Document, run.document_id)
         if doc is not None and doc.status == "WAITING_REVIEW":
             doc.status = "QUEUED"
-            await db.commit()
+        if doc is not None and doc.quality_status == "REVIEW_REQUIRED":
+            # 경고는 남아 있지만 사람이 확인했으므로 "검토 필요" 대신 "품질 경고"로 보인다
+            doc.quality_status = "SUCCESS_WITH_WARNING"
+    await db.commit()
 
     from app.pipeline.tasks.workflow import resume_workflow_run
 
@@ -326,6 +351,8 @@ async def cancel_run(
     if run.status not in ("WAITING_REVIEW", "QUEUED", "RUNNING"):
         raise HTTPException(status_code=409, detail="취소할 수 없는 상태입니다")
 
+    if run.status == "WAITING_REVIEW":
+        await _record_review(db, run, current_user, "반려")
     run.status = "CANCELLED"
     run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
     if run.document_id:

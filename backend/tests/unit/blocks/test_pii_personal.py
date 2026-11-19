@@ -17,6 +17,10 @@ def _found(matches, text):
     ("문의는 이수진 과장에게 한다", ["이수진"]),
     ("최민호님과 정다은 씨가 참석했다", ["최민호", "정다은"]),
     ("담당자 홍길동은 부재중이다", ["홍길동"]),
+    ("| 이름 | 김영희 |", ["김영희"]),
+    ("담당자 이름: 홍길동", ["홍길동"]),
+    ("보호자 이름 : 이영희", ["이영희"]),
+    ("작성일 2026-11-19\n이름: 박철수", ["박철수"]),
 ])
 def test_names_next_to_labels_and_titles_are_found(text, names):
     assert _found(pp.name_matches(text), text) == names
@@ -34,6 +38,10 @@ def test_names_next_to_labels_and_titles_are_found(text, names):
     "성명 사용자 구분",
     "선생님과 위원님께 드립니다",
     "홍보 과장과 연구소 실장, 사업단 팀장이 모였다",   # 부서와 조직 이름
+    # "이름" 앞에 다른 낱말이 붙으면 무엇의 이름이라는 일반 명사다(고도화·완료보고서 실측, 2026-11-19)
+    "배정된 유형 번호와 유형 이름  유형별 소속 확률 8개",
+    "| 코드 | 화면 이름 | 원천 이벤트 | 회사 5 룰 |",
+    "| tb_code_detail | 이벤트 코드와 이름 | 이벤트 카탈로그 |",
 ])
 def test_words_that_only_look_like_names_are_left_alone(text):
     assert pp.name_matches(text) == []
@@ -86,7 +94,7 @@ def test_block_defaults_include_new_types_but_not_business_numbers():
     assert {"ADDRESS", "DRIVER_LICENSE", "PASSPORT", "NAME"} <= set(pb._ALL_ENTITY_TYPES)
     assert "BIZNO" not in pb._ALL_ENTITY_TYPES and "BIZNO" in pb._ENTITY_PRIORITY
     assert set(pb._ALL_ENTITY_TYPES) <= set(pb._ENTITY_PRIORITY)
-    assert pb.PiiDetectBlock().block_version == "1.1.0"
+    assert pb.PiiDetectBlock().block_version == "1.2.1"
 
 
 def test_block_regex_dispatch_reaches_the_new_detectors():
