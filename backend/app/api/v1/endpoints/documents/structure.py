@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.api.v1.deps import get_current_user, require_admin
-from app.api.v1.endpoints.documents.processing import _resolve_display_run_id
+from app.api.v1.endpoints.documents.processing import _resolve_tab_run_id
 from app.api.v1.permissions import (
     check_document_access,
 )
@@ -69,7 +69,7 @@ async def list_cleaning_changes(
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="viewer")
 
-    run_id = await _resolve_display_run_id(db, doc)
+    run_id = await _resolve_tab_run_id(db, doc, ("text_clean",))
     items: list[dict] = []
     if run_id:
         rows = (
@@ -117,7 +117,7 @@ async def list_dictionary_applications(
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="viewer")
 
-    run_id = await _resolve_display_run_id(db, doc)
+    run_id = await _resolve_tab_run_id(db, doc, ("user_dict", "synonym", "stopword"))
     applications = []
     if run_id:
         applications = (
@@ -276,7 +276,7 @@ async def list_pii_detections(
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="viewer")
 
-    run_id = await _resolve_display_run_id(db, doc)
+    run_id = await _resolve_tab_run_id(db, doc, ("pii_detect",))
     detections = []
     if run_id:
         detections = (
@@ -348,6 +348,97 @@ async def reject_pii_detection(
     await db.commit()
     await db.refresh(detection)
     return detection
+
+
+async def _tab_pii_detections(db: AsyncSession, doc: Document) -> tuple[str | None, list]:
+    """민감정보 탭이 보여 주는 탐지 목록(목록 API 와 같은 run). 일괄 처리도 이 목록만 바꾼다."""
+    from app.db.models.pii_detection import PiiDetection
+
+    run_id = await _resolve_tab_run_id(db, doc, ("pii_detect",))
+    if not run_id:
+        return None, []
+    detections = (
+        await db.scalars(
+            select(PiiDetection).where(PiiDetection.run_id == run_id).order_by(PiiDetection.created_at.asc())
+        )
+    ).all()
+    return run_id, list(detections)
+
+
+async def _bulk_review_pii(db: AsyncSession, document_id: UUID, current_user: User, approve: bool) -> dict:
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await check_document_access(db, doc, current_user, min_role="editor")
+
+    run_id, detections = await _tab_pii_detections(db, doc)
+    now = datetime.utcnow()
+    for detection in detections:
+        detection.approved_by = current_user.id if approve else None
+        detection.approved_at = now if approve else None
+        detection.rejected = not approve
+    log_audit(
+        db, str(current_user.id), "pii.approve_all" if approve else "pii.reject_all",
+        resource_type="document", resource_id=str(document_id), detail={"count": len(detections)},
+    )
+    await db.commit()
+    for detection in detections:
+        await db.refresh(detection)
+    return {"document_id": str(document_id), "run_id": run_id, "detections": detections}
+
+
+@router.post("/{document_id}/pii/approve-all", response_model=PiiDetectionsResponse)
+async def approve_all_pii_detections(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """민감정보 탭의 탐지를 모두 승인한다(이미 해제한 것도 승인으로 바뀐다)."""
+    return await _bulk_review_pii(db, document_id, current_user, approve=True)
+
+
+@router.post("/{document_id}/pii/reject-all", response_model=PiiDetectionsResponse)
+async def reject_all_pii_detections(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """민감정보 탭의 탐지를 모두 해제한다(이미 승인한 것도 해제로 바뀐다)."""
+    return await _bulk_review_pii(db, document_id, current_user, approve=False)
+
+
+class PiiRevealAllResponse(BaseModel):
+    values: dict[str, str]
+
+
+@router.post("/{document_id}/pii/reveal-all", response_model=PiiRevealAllResponse)
+async def reveal_all_pii_detections(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """민감정보 탭의 원문을 한 번에 연다. 한 건씩 열 때와 같이 전역 admin 만 쓸 수 있고, 연 탐지마다 감사 로그를 남긴다.
+    원문이 저장되지 않은 탐지는 결과에서 빠진다."""
+    from app.core import crypto
+
+    require_admin(current_user)
+
+    doc = await db.scalar(select(Document).where(Document.id == document_id))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    _, detections = await _tab_pii_detections(db, doc)
+    values: dict[str, str] = {}
+    for detection in detections:
+        if not detection.original_encrypted:
+            continue
+        values[str(detection.id)] = crypto.decrypt_secret(detection.original_encrypted)
+        log_audit(
+            db, str(current_user.id), "pii.reveal",
+            resource_type="pii_detection", resource_id=str(detection.id),
+        )
+    await db.commit()
+    return {"values": values}
 
 
 class PiiRevealResponse(BaseModel):

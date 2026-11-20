@@ -259,6 +259,53 @@ async def test_pii_reveal_requires_admin_and_existing_original(db_session):  # n
     assert "원문" in err.detail
 
 
+async def test_pii_approve_all_then_reject_all_covers_every_detection_on_the_tab(db_session):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "s-pii-bulk")
+    first, second = await _pii(db_session, doc, run), await _pii(db_session, doc, run)
+    user = owner_user()
+    await st.reject_pii_detection(doc.id, first.id, db_session, user)  # 개별 해제가 있어도 전체 승인이 덮어쓴다
+
+    approved = await st.approve_all_pii_detections(doc.id, db_session, user)
+
+    assert {str(d.id) for d in approved["detections"]} == {str(first.id), str(second.id)}
+    assert all(str(d.approved_by) == str(user.id) and not d.rejected for d in approved["detections"])
+
+    rejected = await st.reject_all_pii_detections(doc.id, db_session, user)
+
+    assert all(d.rejected and d.approved_by is None and d.approved_at is None for d in rejected["detections"])
+    logs = (await db_session.scalars(select(AuditLog).where(AuditLog.resource_id == str(doc.id)))).all()
+    assert {log.action for log in logs} >= {"pii.approve_all", "pii.reject_all"}
+
+
+async def test_pii_bulk_review_guards(db_session):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "s-pii-bulk-guard")
+    await _pii(db_session, doc, run)
+
+    for endpoint in (st.approve_all_pii_detections, st.reject_all_pii_detections):
+        await assert_http_error(endpoint(uuid4(), db_session, owner_user()), 404)
+        await assert_http_error(endpoint(doc.id, db_session, stranger_user()), 403)
+
+
+async def test_pii_reveal_all_returns_stored_originals_and_audits_each(db_session):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "s-pii-reveal-all")
+    phone = await _pii(db_session, doc, run, original="010-1234-5678")
+    await _pii(db_session, doc, run)  # 원문이 없는 탐지는 건너뛴다
+
+    result = await st.reveal_all_pii_detections(doc.id, db_session, admin_user())
+
+    assert result == {"values": {str(phone.id): "010-1234-5678"}}
+    logs = (await db_session.scalars(select(AuditLog).where(AuditLog.action == "pii.reveal"))).all()
+    assert [log.resource_id for log in logs] == [str(phone.id)]
+
+
+async def test_pii_reveal_all_requires_admin_and_document(db_session):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "s-pii-reveal-all-g")
+    await _pii(db_session, doc, run, original="비밀")
+
+    await assert_http_error(st.reveal_all_pii_detections(doc.id, db_session, owner_user()), 403)
+    await assert_http_error(st.reveal_all_pii_detections(uuid4(), db_session, admin_user()), 404)
+
+
 # ------------------------------------------------------------------ jobs
 async def test_jobs_listed_oldest_first(db_session):  # noqa: F811
     doc = await add_doc(db_session, "s-jobs")

@@ -271,6 +271,30 @@ export function useRejectPii() {
   })
 }
 
+/** 민감정보 탭의 탐지를 모두 승인(approve=true)하거나 모두 해제한다. */
+export function useBulkReviewPii() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ documentId, approve }: { documentId: string; approve: boolean }) => {
+      const { data } = await apiClient.post(`/documents/${documentId}/pii/${approve ? 'approve-all' : 'reject-all'}`)
+      return data as PiiDetectionsResult
+    },
+    onSuccess: (data, { documentId }) => {
+      queryClient.setQueryData(['documents', documentId, 'pii'], data)
+    },
+  })
+}
+
+/** 민감정보 탭의 원문을 한 번에 연다(관리자 전용). 원문이 저장되지 않은 탐지는 결과에 없다. */
+export function useRevealAllPii() {
+  return useMutation({
+    mutationFn: async ({ documentId }: { documentId: string }) => {
+      const { data } = await apiClient.post(`/documents/${documentId}/pii/reveal-all`)
+      return data as { values: Record<string, string> }
+    },
+  })
+}
+
 export function useRevealPii() {
   return useMutation({
     mutationFn: async ({ documentId, detectionId }: { documentId: string; detectionId: string }) => {

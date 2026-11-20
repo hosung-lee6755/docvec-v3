@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
-import { useApprovePii, usePiiDetections, useRejectPii, useRevealPii } from '../../hooks/useDocumentStructure'
+import {
+  useApprovePii, useBulkReviewPii, usePiiDetections, useRejectPii, useRevealAllPii, useRevealPii,
+} from '../../hooks/useDocumentStructure'
 import { useAuthStore } from '../../store/authStore'
 import { ErrorText } from '../ui'
 import { PII_TYPE_LABELS } from '../../lib/documentQueues'
@@ -14,6 +16,8 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
   const approve = useApprovePii()
   const reject = useRejectPii()
   const reveal = useRevealPii()
+  const revealAll = useRevealAllPii()
+  const bulkReview = useBulkReviewPii()
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
   const [revealed, setRevealed] = useState<Record<string, string>>({})
 
@@ -31,6 +35,18 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
     })
   }
 
+  const handleRevealAll = () => {
+    revealAll.mutate({ documentId }, { onSuccess: (res) => setRevealed(res.values) })
+  }
+
+  const handleBulkReview = (shouldApprove: boolean) => {
+    const message = shouldApprove
+      ? '탐지된 민감정보를 모두 승인합니다. 이미 해제한 항목도 승인으로 바뀝니다. 계속할까요?'
+      : '탐지된 민감정보를 모두 해제합니다. 이미 승인한 항목도 해제로 바뀝니다. 계속할까요?'
+    if (!window.confirm(message)) return
+    bulkReview.mutate({ documentId, approve: shouldApprove })
+  }
+
   if (isError) return <ErrorText error={error} message="민감정보 탐지 결과를 불러오지 못했습니다." />
 
   if (isLoading) {
@@ -45,10 +61,56 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
   if (!detections.length) {
     return <p style={{ color: 'var(--color-text-muted)', fontSize: 13, margin: 0 }}>탐지된 민감정보가 없습니다.</p>
   }
+  const approvedCount = detections.filter((d) => d.approved_by).length
+  const rejectedCount = detections.filter((d) => !d.approved_by && d.rejected).length
+  const revealedCount = Object.keys(revealed).length
+  const isReviewBusy = approve.isPending || reject.isPending || bulkReview.isPending
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>탐지 {detections.length}건</p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0, marginRight: 'auto' }}>
+          탐지 {detections.length}건, 승인 {approvedCount}건, 해제 {rejectedCount}건
+        </p>
+        <button
+          type="button"
+          onClick={() => handleBulkReview(true)}
+          disabled={isReviewBusy || approvedCount === detections.length}
+          className="ds-btn ds-btn--ghost ds-btn--sm"
+        >
+          전체 승인
+        </button>
+        <button
+          type="button"
+          onClick={() => handleBulkReview(false)}
+          disabled={isReviewBusy || rejectedCount === detections.length}
+          className="ds-btn ds-btn--ghost ds-btn--sm"
+        >
+          전체 해제
+        </button>
+        {isAdmin && (
+          <>
+            <button
+              type="button"
+              onClick={handleRevealAll}
+              disabled={revealAll.isPending}
+              className="ds-btn ds-btn--ghost ds-btn--sm"
+            >
+              {revealAll.isPending ? '여는 중…' : '전체 원문 보기'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setRevealed({})}
+              disabled={revealedCount === 0}
+              className="ds-btn ds-btn--ghost ds-btn--sm"
+            >
+              전체 숨기기
+            </button>
+          </>
+        )}
+      </div>
+      {revealAll.isError && <ErrorText error={revealAll.error} message="원문을 한꺼번에 열지 못했습니다." />}
+      {bulkReview.isError && <ErrorText error={bulkReview.error} message="일괄 처리하지 못했습니다." />}
       {approve.isError && <ErrorText error={approve.error} message="승인하지 못했습니다." />}
       {reject.isError && <ErrorText error={reject.error} message="반려하지 못했습니다." />}
       {reveal.isError && <ErrorText error={reveal.error} message="원문을 보지 못했습니다." />}
@@ -88,7 +150,7 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
                       <button
                         type="button"
                         onClick={() => approve.mutate({ documentId, detectionId: d.id })}
-                        disabled={approve.isPending || reject.isPending}
+                        disabled={isReviewBusy}
                         className="ds-btn ds-btn--ghost ds-btn--sm"
                         style={{ cursor: 'pointer' }}
                       >
@@ -97,7 +159,7 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
                       <button
                         type="button"
                         onClick={() => reject.mutate({ documentId, detectionId: d.id })}
-                        disabled={approve.isPending || reject.isPending}
+                        disabled={isReviewBusy}
                         className="ds-btn ds-btn--ghost ds-btn--sm"
                         style={{ cursor: 'pointer' }}
                       >
