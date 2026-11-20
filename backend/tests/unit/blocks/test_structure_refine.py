@@ -197,3 +197,84 @@ def test_chapter_number_after_a_clearly_smaller_numbered_item_keeps_its_own_leve
     ]
     out = refine_element_blocks(blocks, elements, font_sizes={"a": 16.0, "b": 11.0, "c": 16.0})
     assert out[2][1] == out[0][1] < out[1][1]
+
+
+def _same_size_blocks(texts):
+    ids = [f"h{i}" for i in range(len(texts))]
+    elements = [_el(e, "section_header", 1, [0, 100, 10, 90]) for e in ids]
+    blocks = [_block("HEADING", t, e, 1) for t, e in zip(texts, ids)]
+    return blocks, elements, ids
+
+
+def test_decimal_numbering_depth_sets_levels_when_sizes_are_equal():
+    # KRS SG 0027(2026-11-20): 표지 글자가 1·2단계를 차지해 "3.", "3.2", "3.2.1"이 모두 3단계로 평평했다
+    texts = ["한국철도표준규격", "MJ81 형 선로전환기", "1.  적용범위 및 분류", "1.1  적용범위", "1.2  분류",
+             "3.  필요조건", "3.2  형태", "3.2.1 일반구조", "3.2.2 외함", "4.  검사 및 시험"]
+    blocks, elements, ids = _same_size_blocks(texts)
+    sizes = dict(zip(ids, [36.0, 15.9, 10, 10, 10, 10, 10, 10, 10, 10]))
+
+    out = refine_element_blocks(blocks, elements, font_sizes=sizes)
+
+    level = {b[4]: b[1] for b in out}
+    assert level["1.  적용범위 및 분류"] == level["3.  필요조건"] == level["4.  검사 및 시험"] == 1
+    assert level["1.1  적용범위"] == level["3.2  형태"] == 2
+    assert level["3.2.1 일반구조"] == level["3.2.2 외함"] == 3
+
+
+def test_decimal_depth_keeps_chapters_below_a_title_when_there_is_room():
+    texts = ["사업 안내서", "1. 개요", "1.1 목적", "1.2 범위", "2. 절차"]
+    blocks, elements, ids = _same_size_blocks(texts)
+    sizes = dict(zip(ids, [20.0, 14.0, 12.0, 12.0, 14.0]))
+
+    out = refine_element_blocks(blocks, elements, font_sizes=sizes)
+
+    assert [b[1] for b in out] == [1, 2, 3, 3, 2]
+
+
+def test_decimal_depth_ignores_dates_amounts_and_documents_without_sub_numbers():
+    texts = ["1. 사업 개요", "2026.4.17 공고", "0.5 mm 이하", "2. 신청 방법"]
+    blocks, elements, ids = _same_size_blocks(texts)
+    out = refine_element_blocks(blocks, elements, font_sizes=dict.fromkeys(ids, 12.0))
+    assert [b[1] for b in out] == [1, 1, 1, 1]
+
+
+def test_childless_first_chapter_follows_the_next_numbered_chapter():
+    # KR S-03010: 첫 장 "1. 용어의 정의"는 하위 절이 없어 다음 장과 단계가 어긋났다
+    texts = ["표지 제목", "1. 용어의 정의", "2. 일반사항", "2.1 개요", "2.2 구성", "3. 선정조건", "3.1 종류", "3.1.1 전기식"]
+    blocks, elements, ids = _same_size_blocks(texts)
+    sizes = dict(zip(ids, [30.0] + [10.0] * 7))
+
+    out = refine_element_blocks(blocks, elements, font_sizes=sizes)
+
+    level = {b[4]: b[1] for b in out}
+    assert level["1. 용어의 정의"] == level["2. 일반사항"] == level["3. 선정조건"] == 1
+    assert level["2.1 개요"] == level["3.1 종류"] == 2
+    assert level["3.1.1 전기식"] == 3
+
+
+def test_numbered_items_without_sub_numbers_inside_annexes_keep_their_level():
+    # 기계설비 매뉴얼: 별표 속 "5. 문화 및 집회시설" 같은 항목은 하위 번호가 없어 장으로 올리지 않는다
+    texts = ["2. 냉동기", "2.1 일반", "2.1.1 흡수식", "[별표 1] 건축물 용도", "5. 문화 및 집회시설", "6. 종교시설"]
+    blocks, elements, ids = _same_size_blocks(texts)
+    sizes = dict(zip(ids, [14.0, 12.0, 12.0, 14.0, 10.0, 10.0]))
+
+    out = refine_element_blocks(blocks, elements, font_sizes=sizes)
+
+    level = {b[4]: b[1] for b in out}
+    assert (level["2. 냉동기"], level["2.1 일반"], level["2.1.1 흡수식"]) == (1, 2, 3)
+    assert level["5. 문화 및 집회시설"] == level["6. 종교시설"] == 3
+
+
+def test_numbered_chapters_nest_under_commentary_containers():
+    # KR S-03010: "해설 2." 아래 "1. 전기식 선로전환기"가 해설보다 위로 올라가 해설 제목이 절 경로에서 빠졌다
+    texts = ["1. 용어", "2. 일반사항", "2.1 개요", "2.1.1 구성", "해설 1. 일반사항", "1. 개요", "2. 결정",
+             "해설 2. 종류", "1. 전기식", "1.1 NS형", "1.2 MJ81형", "2. 기계식"]
+    blocks, elements, ids = _same_size_blocks(texts)
+
+    out = refine_element_blocks(blocks, elements, font_sizes=dict.fromkeys(ids, 10.0))
+
+    level = {b[4]: b[1] for b in out}
+    assert level["2. 일반사항"] == 1 and level["2.1 개요"] == 2 and level["2.1.1 구성"] == 3
+    assert level["해설 1. 일반사항"] == level["해설 2. 종류"] == 1
+    assert level["1. 전기식"] == level["2. 기계식"] == level["1. 개요"] == 2
+    assert level["1.1 NS형"] == 3

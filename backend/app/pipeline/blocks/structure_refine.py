@@ -255,6 +255,122 @@ def _apply_marker_order(blocks: list[list], sizes: list[float | None], max_level
         recent[rank] = (block[1], size)
 
 
+# "3.", "3.2", "3.2.1" 같은 점 번호. 마디는 1~99 이고 번호 뒤에 공백과 글이 이어져야 한다(날짜·수치 제외)
+_DECIMAL_NUMBER_RE = re.compile(r"^\s*([1-9]\d?(?:\.[1-9]\d?)*)\.?\s+\S")
+_DECIMAL_MIN_SUB_HEADINGS = 2
+# 번호 장을 묶는 제목("해설 2.", "부록 1", "붙임 3", "PART 2"). 그 아래 번호는 1부터 다시 시작한다
+_CONTAINER_RE = re.compile(r"^\s*(?:해설|부록|별첨|붙임|PART|Part)\s*\d+")
+
+
+def _decimal_number(text: str) -> tuple[int, ...] | None:
+    match = _DECIMAL_NUMBER_RE.match(text)
+    if not match:
+        return None
+    number = match.group(1)
+    if "." not in number and not re.match(r"^\s*\d+\.", text):
+        return None  # "1 개요" 처럼 점이 없는 한 마디 번호는 제목 번호로 보지 않는다
+    return tuple(int(part) for part in number.split("."))
+
+
+def _decimal_trees(blocks: list[list]) -> dict[int, int | None]:
+    """번호의 부모-자식 관계가 이어지는 제목만 고른다. 돌려주는 값은 블록 위치 → 부모 블록 위치(뿌리는 None).
+
+    "3.2.1"의 부모는 그 앞에 가장 가까이 나온 "3.2"다. 자식 번호가 하나도 없는 "5. 문화 및 집회시설" 같은
+    표·별표 속 번호 항목은 고르지 않는다(기계설비 매뉴얼, 2026-11-20)."""
+    last_seen: dict[tuple[int, ...], int] = {}
+    parent_of: dict[int, int | None] = {}
+    for index, block in enumerate(blocks):
+        if block[0] != "HEADING" or block[1] is None:
+            continue
+        if _CONTAINER_RE.match(block[4]):
+            last_seen = {}  # "해설 2." 아래 번호는 앞 묶음의 번호와 이어지지 않는다
+            continue
+        number = _decimal_number(block[4])
+        if number is None:
+            continue
+        parent = last_seen.get(number[:-1]) if len(number) > 1 else None
+        if parent is not None:
+            parent_of[index] = parent
+            parent_of.setdefault(parent, None)
+        last_seen[number] = index
+        # 같은 번호대가 다시 시작하면(새 장) 그보다 깊은 번호는 더 이상 부모가 될 수 없다
+        for key in [k for k in last_seen if len(k) > len(number) and k[: len(number)] != number]:
+            del last_seen[key]
+    return parent_of
+
+
+def _apply_decimal_depth(blocks: list[list], max_level: int) -> None:
+    """점 번호 깊이로 단계를 정한다("3." < "3.2" < "3.2.1").
+
+    KRS SG 0027 같은 규격 문서(2026-11-20)는 장·절·항 제목을 모두 같은 크기로 써서 글자 크기로는 단계가
+    나뉘지 않는다. 번호의 부모-자식 관계가 두 번 이상 이어지는 문서에만 적용한다. 뿌리 제목은 지금 단계를
+    두되, 문서에서 가장 깊은 번호까지 max_level 안에 들어가도록 필요하면 위로 올린다. 자식은 부모 바로 아래다."""
+    parent_of = _decimal_trees(blocks)
+    if sum(1 for parent in parent_of.values() if parent is not None) < _DECIMAL_MIN_SUB_HEADINGS:
+        return
+
+    def depth(index: int) -> int:
+        steps = 0
+        while parent_of.get(index) is not None:
+            index, steps = parent_of[index], steps + 1
+        return steps
+
+    deepest = min(max(depth(i) for i in parent_of) + 1, max_level)
+    ceiling = max(1, max_level - deepest + 1)
+    original = {i: b[1] for i, b in enumerate(blocks)}
+    for index in sorted(parent_of):
+        parent = parent_of[index]
+        if parent is None:
+            blocks[index][1] = min(blocks[index][1], ceiling)
+        else:
+            blocks[index][1] = min(max_level, blocks[parent][1] + 1)
+    _align_childless_chapters(blocks, parent_of, original)
+    _nest_under_containers(blocks, parent_of, original, depth, max_level)
+
+
+def _nest_under_containers(blocks: list[list], parent_of: dict, original: dict, depth, max_level: int) -> None:
+    """"해설 2." 같은 묶음 제목 아래 번호 장·절이 있으면 묶음을 장보다 한 단계 위에 둔다.
+
+    KR S-03010(2026-11-20): 본문 장을 1단계로 올리자 3단계이던 "해설 2."가 그 아래 "1. 전기식 선로전환기"보다
+    낮아져 절 경로에서 빠졌다. 묶음 제목은 모두 같은 단계로 둔다."""
+    heading_indices = [i for i, b in enumerate(blocks) if b[0] == "HEADING" and b[1] is not None]
+    containers = [i for i in heading_indices if _CONTAINER_RE.match(blocks[i][4])]
+    scopes: dict[int, list[int]] = {}
+    for position, container in enumerate(containers):
+        end = containers[position + 1] if position + 1 < len(containers) else len(blocks)
+        members = [
+            i for i in heading_indices if container < i < end
+            and (number := _decimal_number(blocks[i][4])) is not None and (i in parent_of or len(number) == 1)
+        ]
+        if members:
+            scopes[container] = members
+    if not scopes:
+        return
+    needed = max(depth(i) if i in parent_of else 0 for members in scopes.values() for i in members) + 1
+    container_level = max(1, min(min(original[c] for c in scopes), max_level - needed))
+    for container, members in scopes.items():
+        blocks[container][1] = container_level
+        for i in members:
+            blocks[i][1] = min(max_level, container_level + 1 + (depth(i) if i in parent_of else 0))
+
+
+def _align_childless_chapters(blocks: list[list], parent_of: dict[int, int | None], original: dict) -> None:
+    """하위 절이 없는 장("5. 표시 및 포장")도 바로 앞 장과 번호가 이어지고 원래 단계가 같으면 같은 단계로 둔다."""
+    chapters = [
+        (index, number[0]) for index, block in enumerate(blocks)
+        if block[0] == "HEADING" and block[1] is not None
+        and (number := _decimal_number(block[4])) is not None and len(number) == 1
+    ]
+    # 앞 장을 따르고("4." 다음 "5."), 첫 장처럼 앞 장이 없으면 뒤 장을 따른다("1." 다음 "2.")
+    for ordered, step in ((chapters, 1), (list(reversed(chapters)), -1)):
+        previous: tuple[int, int, int] | None = None  # (장 번호, 원래 단계, 새 단계)
+        for index, chapter in ordered:
+            if (index not in parent_of and previous and chapter == previous[0] + step
+                    and original[index] == previous[1]):
+                blocks[index][1] = previous[2]
+            previous = (chapter, original[index], blocks[index][1])
+
+
 def refine_element_blocks(
     blocks: list[Block], elements: list[dict], max_level: int = 3, font_sizes: dict[str, float] | None = None,
 ) -> list[Block]:
@@ -276,4 +392,5 @@ def refine_element_blocks(
     sizes = [size_of(b) if b[0] == "HEADING" else None for b in work]
     _refine_levels(work, sizes, max_level, measured=bool(font_sizes))
     _apply_marker_order(work, sizes, max_level)
+    _apply_decimal_depth(work, max_level)
     return [tuple(b) for b in work]
