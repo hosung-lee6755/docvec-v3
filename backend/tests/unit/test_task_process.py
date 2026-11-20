@@ -733,3 +733,20 @@ def test_recognize_document_images_uses_the_block_setting_for_the_cap_and_says_w
 
     assert len(records) == 2
     assert "5개 가운데 앞의 2개만" in parsed.warnings[0]
+
+
+def test_figures_with_native_text_are_never_dropped_by_the_recognition_cap():
+    # UIUX 가이드라인(2026-11-20): 벡터 화면 예시 그림 673개 중 40개만 남아 그림 안 원본 글이 사라졌다
+    datas = [_png(70 + i, 70) for i in range(5)]
+    parsed = _parsed_with_images(*datas)
+    regions = parsed.pages[0].image_regions
+    for region in regions[:3]:
+        region.native_text = "화면 예시 안의 원본 글자입니다"
+
+    with patch("app.services.storage.storage_service", MagicMock()), \
+         patch.object(proc, "_recognize_figure_text", return_value="인식한 그림 설명 문장") as recognize:
+        records = proc._recognize_document_images("d", parsed, {}, max_figures=1)
+
+    assert len(records) == 4  # 원본 글 그림 3개 + 이미지 인식 그림 1개
+    assert recognize.call_count == 1
+    assert "이미지 인식이 필요한 그림 2개 가운데 앞의 1개만" in parsed.warnings[0]

@@ -371,6 +371,33 @@ def _recognize_figure_text(png_bytes: bytes, vision_options: dict) -> str:
         return ""
 
 
+def _has_native_figure_text(native_text: str | None) -> bool:
+    return bool(native_text) and len(native_text.strip()) >= _FIGURE_MIN_MEANINGFUL_CHARS
+
+
+def _cap_figures_needing_recognition(document_id: str, parsed, candidates: list, cap: int) -> list:
+    """원본 글이 있는 그림은 모두 두고, 이미지 인식이 필요한 그림만 앞에서부터 cap 개 남긴다(문서 순서 유지)."""
+    needing = sum(1 for c in candidates if not _has_native_figure_text(c[2]))
+    if needing <= cap:
+        return candidates
+    logger.info(
+        "figure recognition capped",
+        extra={"document_id": document_id, "total": needing, "cap": cap},
+    )
+    parsed.warnings.append(
+        f"이미지 인식이 필요한 그림 {needing}개 가운데 앞의 {cap}개만 인식했습니다. "
+        "텍스트 추출 블록의 '그림 인식 상한'을 올리면 더 읽습니다."
+    )
+    kept, recognized = [], 0
+    for candidate in candidates:
+        if _has_native_figure_text(candidate[2]):
+            kept.append(candidate)
+        elif recognized < cap:
+            kept.append(candidate)
+            recognized += 1
+    return kept
+
+
 def _recognize_document_images(
     document_id: str, parsed, vision_options: dict, max_figures: int | None = None,
 ) -> list[dict]:
@@ -427,17 +454,11 @@ def _recognize_document_images(
             # 그림 글을 넣기 전에 자리를 정해 둔다. 넣으면서 찾으면 먼저 넣은 그림 글에 밀린다
             candidates.append((page, buf.getvalue(), region.native_text, _figure_anchor(page, region)))
 
-    # 블록 설정(max_figures)이 있으면 그 값을, 없으면 기본 상한을 쓴다(전체 점검 2-1)
+    # 블록 설정(max_figures)이 있으면 그 값을, 없으면 기본 상한을 쓴다(전체 점검 2-1).
+    # 상한은 이미지 인식(OCR·VLM)이 필요한 그림에만 건다. 원본 텍스트 레이어 글이 있는 그림은 인식 비용이 없는데,
+    # 예전에는 이런 그림도 41번째부터 글이 통째로 버려졌다(UIUX 가이드라인 그림 673개 중 40개만, 2026-11-20).
     cap = max_figures if max_figures is not None and max_figures >= 0 else _FIGURE_MAX_COUNT
-    if len(candidates) > cap:
-        logger.info(
-            "figure recognition capped",
-            extra={"document_id": document_id, "total": len(candidates), "cap": cap},
-        )
-        parsed.warnings.append(
-            f"그림 {len(candidates)}개 가운데 앞의 {cap}개만 인식했습니다. 텍스트 추출 블록의 '그림 인식 상한'을 올리면 더 읽습니다."
-        )
-        candidates = candidates[:cap]
+    candidates = _cap_figures_needing_recognition(document_id, parsed, candidates, cap)
 
     records: list[dict] = []
     placed_after: dict = {}

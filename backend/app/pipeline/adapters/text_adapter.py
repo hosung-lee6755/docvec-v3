@@ -24,8 +24,11 @@ _MD_FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _FALLBACK_ENCODINGS = ("utf-8-sig", "cp949", "utf-16")
 _HTML_HEADINGS = {f"h{level}": level for level in range(1, 7)}
 # button·select 는 화면 조작 요소다. 목차 접기 버튼의 "목차"가 제목에 붙어 "…보고서목차"가 됐다(2026-11-19)
+# head 는 통째로 버리지 않고 그 안의 메타 정보 태그만 버린다. <head>·<body> 를 적지 않은 HTML 은 lxml 이 본문 첫
+# <header> 를 head 안에 넣어, 예전에는 표지 제목·버전 줄이 사라졌다(AIDE_연동가이드, 2026-11-20).
 _HTML_SKIPPED = {
-    "script", "style", "noscript", "template", "head", "svg", "iframe", "object", "embed", "button", "select",
+    "script", "style", "noscript", "template", "title", "meta", "link", "base",
+    "svg", "iframe", "object", "embed", "button", "select",
 }
 _HTML_BLOCKS = {
     "p", "div", "section", "article", "main", "header", "footer", "nav", "aside", "li", "ul", "ol", "dl", "dt",
@@ -179,7 +182,7 @@ def parse_html(html: str) -> tuple[list[RawTextBlock], list[RawTableCandidate], 
             else:
                 walk(child, preformatted)
 
-    walk(soup.body or soup)
+    walk(soup.html or soup)
     flush()
     return blocks, tables, collector, title or None
 

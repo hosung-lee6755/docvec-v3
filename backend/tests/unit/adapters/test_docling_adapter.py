@@ -399,3 +399,69 @@ def test_pdf_properties_are_empty_for_a_broken_file(tmp_path):
     path.write_bytes(b"not a pdf")
 
     assert _pdf_properties(path) == (0, None)
+
+
+# ------------------------------------------------ 목차(document_index) 글 채우기(2026-11-20)
+
+def _toc_item(rows, page_no, bbox):
+    item = _FakeTableItem(rows, page_no=page_no, bbox=bbox)
+    item.label = _FakeLabel("document_index")
+    return item
+
+
+def test_toc_lines_are_read_from_the_pdf_text_layer_with_page_numbers(fake_docling_module, tmp_path):
+    import fitz
+
+    from app.pipeline.adapters.docling_adapter import DoclingAdapter
+
+    pdf_path = tmp_path / "toc.pdf"
+    with fitz.open() as pdf:
+        page = pdf.new_page(width=595, height=842)
+        page.insert_text((80, 100), "1. Overview ..........")
+        page.insert_text((80, 130), "2. Scope ..........")
+        # 쪽 번호는 항목과 따로 찍혀 있고(다른 글 블록), 쪽 오른쪽 끝 너머에 있을 수도 있다
+        page.insert_text((400, 100), "3")
+        page.insert_text((400, 130), "12")
+        pdf.save(str(pdf_path))
+    # Docling 의 목차 영역은 쪽 번호 열을 빠뜨리고(오른쪽 끝 300) 표 칸 글도 비어 있다
+    toc = _toc_item([["", ""]], page_no=1, bbox=(70, 842 - 80, 300, 842 - 140))
+    fake_docling_module["fake_document"] = _FakeDoclingDocument([(toc, 0)])
+
+    elements = DoclingAdapter().extract(pdf_path, {}).metadata["elements"]
+
+    assert [(e["type"], e["content"]["text"]) for e in elements] == [
+        ("document_index", "1. Overview .......... 3"),
+        ("document_index", "2. Scope .......... 12"),
+    ]
+
+
+def test_toc_without_text_layer_falls_back_to_the_docling_cells(fake_docling_module, tmp_path):
+    import fitz
+
+    from app.pipeline.adapters.docling_adapter import DoclingAdapter
+
+    pdf_path = tmp_path / "scan.pdf"
+    with fitz.open() as pdf:
+        pdf.new_page(width=595, height=842)
+        pdf.save(str(pdf_path))
+    toc = _toc_item([["항목", "쪽"], ["1. 개요", "3"]], page_no=1, bbox=(70, 762, 300, 702))
+    fake_docling_module["fake_document"] = _FakeDoclingDocument([(toc, 0)])
+
+    elements = DoclingAdapter().extract(pdf_path, {}).metadata["elements"]
+
+    assert [e["content"]["text"] for e in elements] == ["항목 쪽", "1. 개요 3"]
+
+
+def test_toc_lines_join_wrapped_page_numbers_and_drop_titles():
+    from app.pipeline.adapters.docling_toc import toc_lines
+
+    text = "목    차\n01\n1. 개요 ······\n········ 3\n2. 범위 ······ 12\n부록"
+    assert toc_lines(text) == ["1. 개요 ······ ········ 3", "2. 범위 ······ 12", "부록"]
+
+
+def test_toc_prefers_docling_cells_when_the_text_layer_has_no_toc_lines():
+    from app.pipeline.adapters.docling_toc import choose_toc_lines
+
+    # 스캔 PDF 의 텍스트 레이어에 워터마크만 남은 경우
+    assert choose_toc_lines("CONFIDENTIAL", "1. 개요 3\n2. 범위 12") == ["1. 개요 3", "2. 범위 12"]
+    assert choose_toc_lines("1. 개요 ····· 3", "엉뚱한 칸") == ["1. 개요 ····· 3"]

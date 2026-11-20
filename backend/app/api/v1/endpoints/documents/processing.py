@@ -370,6 +370,40 @@ async def _resolve_display_run_id(db: AsyncSession, doc: Document) -> str | None
     return str(run_id) if run_id else None
 
 
+_MAX_LINEAGE_DEPTH = 8
+
+
+async def _resolve_tab_run_id(db: AsyncSession, doc: Document, producer_block_types: tuple[str, ...]) -> str | None:
+    """탭 데이터(노드·청크·정제·사전·PII)를 실제로 만든 run.
+
+    부분 재처리는 시작 블록 앞 단계를 부모 run 에서 복사만 하고(step.cached) 그 단계가 쓴 행은 부모 run_id 에
+    그대로 남는다. 그래서 기준 run(`_resolve_display_run_id`)에서 그 탭을 만드는 블록이 복사본이면 부모 run 으로
+    거슬러 올라간다. 블록이 그 run 에서 실제로 돌았으면 행이 0건이어도 그 run 을 쓴다(옛 결과를 보여 주지 않는다).
+    예전에는 기준 run 만 봐서 저장 단계부터 다시 돌린 Pub120bk.pdf 의 구조 탭이 비어 보였다(2026-11-20)."""
+    from app.db.models.workflow import WorkflowBlockInstance
+    from app.db.models.workflow_run import WorkflowRun as _WorkflowRun
+    from app.db.models.workflow_run import WorkflowRunStep
+
+    base = await _resolve_display_run_id(db, doc)
+    current, seen = base, set()
+    for _ in range(_MAX_LINEAGE_DEPTH):
+        if current is None or current in seen:
+            break
+        seen.add(current)
+        cached_flags = (await db.scalars(
+            select(WorkflowRunStep.cached)
+            .join(WorkflowBlockInstance, WorkflowBlockInstance.id == WorkflowRunStep.block_instance_id)
+            .where(WorkflowRunStep.run_id == current, WorkflowBlockInstance.block_type.in_(producer_block_types))
+        )).all()
+        if not cached_flags or not all(cached_flags):
+            return current
+        parent = await db.scalar(select(_WorkflowRun.parent_run_id).where(_WorkflowRun.id == current))
+        if parent is None:
+            return current
+        current = str(parent)
+    return base
+
+
 @router.get("/{document_id}/nodes", response_model=DocumentNodesResponse)
 async def list_document_nodes(
     document_id: UUID,
@@ -386,7 +420,7 @@ async def list_document_nodes(
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="viewer")
 
-    run_id = await _resolve_display_run_id(db, doc)
+    run_id = await _resolve_tab_run_id(db, doc, ("structure_analyze",))
     nodes = []
     if run_id:
         nodes = (

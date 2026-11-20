@@ -201,12 +201,12 @@ async def read_chunk(ctx: ToolContext, args: ReadChunkArgs) -> dict:
 
 
 async def read_document(ctx: ToolContext, args: ReadDocumentArgs) -> dict:
-    from app.api.v1.endpoints.documents.processing import _resolve_display_run_id
+    from app.api.v1.endpoints.documents.processing import _resolve_tab_run_id
     from app.db.models.document_chunk import DocumentChunk
 
     doc = await _visible_document(ctx, args.document_id)
     _documents(ctx, [doc.id])
-    run_id = await _resolve_display_run_id(ctx.db, doc)
+    run_id = await _resolve_tab_run_id(ctx.db, doc, ("chunk_split",))
     chunks = []
     if run_id:
         chunks = (await ctx.db.scalars(

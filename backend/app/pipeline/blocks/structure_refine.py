@@ -56,6 +56,9 @@ def estimate_font_size(text: str, bbox) -> float | None:
 
 
 _KMEANS_ROUNDS = 30
+# 실제 글자 크기로 층을 나눌 때 기준으로 삼는 크기의 최소 반복 횟수와 최소 비율
+_MEASURED_MIN_REPEATS = 2
+_MEASURED_MIN_SHARE = 0.01
 
 
 def _kmeans_1d(values: list[float], k: int) -> list[float]:
@@ -91,15 +94,46 @@ def assign_tiers(sizes: list[float], max_level: int) -> dict[float, int]:
     }
 
 
+def assign_measured_tiers(sizes: list[float], max_level: int) -> dict[float, int]:
+    """원본 텍스트 레이어에서 읽은 실제 글자 크기로 층을 나눈다.
+
+    실제 크기는 값이 몇 개로 딱 떨어지므로 서로 다른 크기마다 한 표만 주고 k-평균을 돌린다. 표지에만 한 번 나오는
+    큰 글자(42pt 등)가 1단계를 차지해 본문 제목층이 한 무리로 뭉치지 않도록, 제목 전체의 1% 이상이면서 두 번
+    이상 나온 크기만 층의 기준으로 삼는다. 나머지 크기는 가장 가까운 층에 붙는다(2026-11-20, Pub120bk 의
+    18/12/10pt 가 1/2/3단계로 나뉜다)."""
+    import math
+    from collections import Counter
+
+    counts = Counter(sizes)
+    floor = max(_MEASURED_MIN_REPEATS, _MEASURED_MIN_SHARE * len(sizes))
+    basis = sorted({math.log(s) for s, c in counts.items() if c >= floor} or {math.log(s) for s in counts})
+    centers = _kmeans_1d(basis, min(max_level, len(basis)))
+    merged: list[float] = []
+    for c in centers:
+        if not merged or merged[-1] - c > math.log(1 + _TIER_TOLERANCE):
+            merged.append(c)
+    # 기준층이 모자라면 기준층보다 확실히 큰 크기를 맨 위층으로 더한다(드문 큰 제목이 본문 제목과 묶이지 않게)
+    largest = math.log(max(counts))
+    if len(merged) < max_level and largest - merged[0] > math.log(1 + _TIER_TOLERANCE):
+        merged.insert(0, largest)
+    smallest = math.log(min(counts))
+    if len(merged) < max_level and merged[-1] - smallest > math.log(1 + _TIER_TOLERANCE):
+        merged.append(smallest)
+    return {
+        s: 1 + min(range(len(merged)), key=lambda i: abs(math.log(s) - merged[i]))
+        for s in counts
+    }
+
+
 def _norm(text: str) -> str:
     return _SPACE_RE.sub("", text)
 
 
-def _refine_levels(blocks: list[list], sizes: list[float | None], max_level: int) -> None:
+def _refine_levels(blocks: list[list], sizes: list[float | None], max_level: int, measured: bool = False) -> None:
     known = [s for s, b in zip(sizes, blocks) if s is not None and b[0] == "HEADING"]
     if len({round(s, 1) for s in known}) < 2:
         return  # 크기 차이가 없으면 Docling 레벨을 그대로 둔다
-    level_of = assign_tiers(known, max_level)
+    level_of = (assign_measured_tiers if measured else assign_tiers)(known, max_level)
     previous = 1
     for block, size in zip(blocks, sizes):
         if block[0] != "HEADING":
@@ -160,15 +194,86 @@ def _mark_running_headers(blocks: list[list], elements: list[dict]) -> None:
             block[0], block[1] = key[0], None
 
 
-def refine_element_blocks(blocks: list[Block], elements: list[dict], max_level: int = 3) -> list[Block]:
-    """`_build_blocks_from_elements()`의 결과를 보정한 새 목록을 돌려준다(입력은 바꾸지 않는다)."""
+# 한국 공문서의 제목 기호 순서(작을수록 상위). 같은 크기의 제목이면 이 순서로 단계를 나눈다.
+# "1.1" 같은 하위 번호는 순서를 정하지 않는다(글자 크기로만 판단).
+_MARKER_RANKS = (
+    (re.compile(r"^\s*(?:제\s*\d+\s*[장편부절]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+\s*[.\s]|\d+\s*\.(?!\d)|PART\s*\d+)", re.IGNORECASE), 0),
+    (re.compile(r"^\s*[□■]"), 1),
+    (re.compile(r"^\s*[○◦●◎❍]"), 2),
+    (re.compile(r"^\s*[-–·•※▷▶☞]"), 3),
+)
+
+
+def _marker_rank(text: str) -> int | None:
+    for pattern, rank in _MARKER_RANKS:
+        if pattern.match(text):
+            return rank
+    return None
+
+
+_CHAPTER_NUMBER_RE = re.compile(r"^\s*(\d+)\s*\.(?!\d)")
+
+
+def _chapter_number(text: str) -> int | None:
+    match = _CHAPTER_NUMBER_RE.match(text)
+    return int(match.group(1)) if match else None
+
+
+def _similar_size(size: float | None, other: float | None) -> bool:
+    if size is None or other is None:
+        return True
+    return max(size, other) <= min(size, other) * (1 + _TIER_TOLERANCE)
+
+
+def _apply_marker_order(blocks: list[list], sizes: list[float | None], max_level: int) -> None:
+    """같은 크기인데 더 하위 기호를 단 제목이 상위 기호 제목과 같거나 높은 단계면 한 단계 내린다.
+
+    디지털협업공장 공고문(2026-11-20)에서 "1. 사업 개요"와 바로 아래 "□ 사업 개요"가 같은 10.7pt 라
+    □ 제목이 장 제목과 같은 단계(또는 위)로 잡혀 청크 절 경로에서 장 제목이 빠졌다."""
+    recent: dict[int, tuple[int, float | None]] = {}
+    last_numbered: tuple[int, int, float | None] | None = None  # (번호, 단계, 크기)
+    for block, size in zip(blocks, sizes):
+        if block[0] != "HEADING" or block[1] is None:
+            continue
+        rank = _marker_rank(block[4])
+        if rank is None:
+            continue
+        number = _chapter_number(block[4])
+        if number is not None:
+            # "6." 다음 "7." 처럼 번호가 이어지고 크기가 비슷하면 같은 단계다. 자율형공장 공고문(2026-11-20)은
+            # 1~6장을 16pt, 7~8장을 15pt 로 써서 7장이 6장 아래로 들어갔다.
+            if last_numbered and number == last_numbered[0] + 1 and _similar_size(size, last_numbered[2]):
+                block[1] = last_numbered[1]
+            last_numbered = (number, block[1], size)
+        upper = [r for r in recent if r < rank]
+        if upper:
+            parent_level, parent_size = recent[max(upper)]
+            not_larger = size is None or parent_size is None or size <= parent_size * (1 + _TIER_TOLERANCE)
+            if block[1] <= parent_level and not_larger:
+                block[1] = min(parent_level + 1, max_level)
+        recent = {r: v for r, v in recent.items() if r < rank}
+        recent[rank] = (block[1], size)
+
+
+def refine_element_blocks(
+    blocks: list[Block], elements: list[dict], max_level: int = 3, font_sizes: dict[str, float] | None = None,
+) -> list[Block]:
+    """`_build_blocks_from_elements()`의 결과를 보정한 새 목록을 돌려준다(입력은 바꾸지 않는다).
+
+    font_sizes 는 원본 PDF 텍스트 레이어에서 읽은 제목의 실제 글자 크기다(pdf_heading_fonts). 없으면 bbox 로 어림한다."""
     bbox_by_id = {el.get("id"): el.get("bbox") for el in elements}
+    font_sizes = font_sizes or {}
     work = [list(b) for b in blocks if not (b[0] == "PARAGRAPH" and len(b[4].strip()) <= 1)]
     _mark_toc_entries(work, elements)
     _mark_running_headers(work, elements)
-    sizes = [
-        estimate_font_size(b[4], bbox_by_id.get((b[5] or {}).get("element_id"))) if b[0] == "HEADING" else None
-        for b in work
-    ]
-    _refine_levels(work, sizes, max_level)
+
+    def size_of(block) -> float | None:
+        element_id = (block[5] or {}).get("element_id")
+        if font_sizes:  # 실제 크기와 어림값은 척도가 달라 섞지 않는다. 못 읽은 제목은 앞 제목의 단계를 따른다
+            return font_sizes.get(element_id)
+        return estimate_font_size(block[4], bbox_by_id.get(element_id))
+
+    sizes = [size_of(b) if b[0] == "HEADING" else None for b in work]
+    _refine_levels(work, sizes, max_level, measured=bool(font_sizes))
+    _apply_marker_order(work, sizes, max_level)
     return [tuple(b) for b in work]

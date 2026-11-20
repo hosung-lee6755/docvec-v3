@@ -145,6 +145,26 @@ def test_walk_hwp_body_collects_paragraphs_and_anchored_tables_once():
     assert tables == [[["이름", "값 / 둘째줄"]]]  # 셀 안 문단 구분을 남긴다
 
 
+def test_hwp_cell_reads_paragraphs_under_column_sets_and_nested_tables():
+    # 3. 제안요청서·NS-AM 검사매뉴얼(2026-11-20): 칸 문단이 ColumnSet 에 싸여 있거나 칸 안에 표가 있으면 칸이 비었다
+    nested = (
+        "<TableControl><TableBody><TableRow>"
+        + _hwp_cell("① 내부 IP 현황") + _hwp_cell("② 구성도")
+        + "</TableRow></TableBody></TableControl>"
+    )
+    table = (
+        "<TableControl><TableBody><TableRow>"
+        "<TableCell><ColumnSet>" + _hwp_p("Ⅰ. 사업 개요 1") + _hwp_p("Ⅱ. 조직 현황 3") + "</ColumnSet></TableCell>"
+        "<TableCell>" + _hwp_p("누출금지 정보", inner=nested) + "</TableCell>"
+        "</TableRow></TableBody></TableControl>"
+    )
+    paragraphs, tables = [], []
+
+    hwp._walk_hwp_body(_hwp_xml(table), paragraphs, tables)
+
+    assert tables == [[["Ⅰ. 사업 개요 1 / Ⅱ. 조직 현황 3", "누출금지 정보 / ① 내부 IP 현황 / ② 구성도"]]]
+
+
 def test_walk_hwp_body_reads_table_caption_and_skips_shape_objects():
     body = _hwp_xml(
         "<TableControl><TableCaption>" + _hwp_p("표 제목") + "</TableCaption>"

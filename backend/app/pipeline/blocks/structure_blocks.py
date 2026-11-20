@@ -16,6 +16,7 @@ DOCX만, HWP/HWPX와 업그레이드 전 문서는 없음)이 있으면 그것�
 연속된 본문 줄만 하나의 PARAGRAPH로 병합한다(빈 줄이 있으면 그 지점에서도
 끊는다 — OCR 등으로 실제 빈 줄이 있는 경우 더 세밀하게 나뉘는 효과).
 """
+import logging
 import re
 import uuid
 
@@ -27,6 +28,8 @@ from app.pipeline.blocks.structure_refine import refine_element_blocks
 from app.pipeline.blocks.title_box import shifted_level, starts_with_roman, title_box_heading
 from app.pipeline.blocks.toc_detection import titled_toc_indices
 from app.pipeline.blocks.title_resolver import LeadLine, _is_chapter_heading, resolve_title
+
+logger = logging.getLogger(__name__)
 
 _HEADING_NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*)[.\)]?\s+\S")
 _HEADING_KOREAN_RE = re.compile(r"^제\s*\d+\s*[장절조편]")
@@ -546,6 +549,22 @@ def _node_type_for_element(el_type: str) -> str:
     return "PARAGRAPH"
 
 
+def _original_heading_font_sizes(doc) -> dict[str, float]:
+    """PDF 원본 텍스트 레이어에서 제목 요소의 실제 글자 크기를 읽는다. PDF 가 아니거나 못 읽으면 빈 사전이다."""
+    if "pdf" not in (getattr(doc, "mime_type", "") or "").lower():
+        return {}
+    from app.core.config import settings
+    from app.pipeline.blocks.pdf_heading_fonts import heading_font_sizes
+    from app.services.storage import storage_service
+
+    try:
+        raw = storage_service.download_file(settings.minio_bucket_originals, doc.minio_key)
+    except Exception:
+        logger.warning("structure_analyze: failed to download original PDF for %s", doc.id, exc_info=True)
+        return {}
+    return heading_font_sizes(raw, doc.elements)
+
+
 def _build_blocks_from_elements(
     elements: list[dict],
 ) -> list[tuple[str, int | None, int | None, int | None, str, dict | None]]:
@@ -717,7 +736,11 @@ class StructureAnalyzeBlock(BaseBlock):
         # 1.17.0: 여러 줄을 담은 글꼴 항목을 줄마다 나눠 짝짓는다. HTML 문서 뒤쪽의 큰 제목(번호 없는
         # "부록 A. 용어" 등)이 글꼴 정보를 잃고 문단이 되던 문제. 번호 없이 글꼴로만 잡힌 제목은 모두 수준 1이던
         # 것을, 앞선 더 큰 제목의 한 단계 아래(같은 크기면 형제)에 두어 번호 제목 아래로 들어가게 한다(2026-11-19).
-        return "1.17.0"
+        # 1.18.0: Docling PDF 제목의 글자 크기를 원본 텍스트 레이어에서 읽고(pdf_heading_fonts.py), 같은 크기면
+        # 제목 기호 순서(1. > □ > ○ > -)로 단계를 나눈다. "1. 사업 개요" 아래 "□ 사업 개요"가 장 제목보다 높은
+        # 단계로 잡혀 청크 절 경로에서 장 제목이 빠지던 문제(2026-11-20).
+        # 1.18.1: "6." 다음 "7."처럼 번호가 이어지고 크기가 8% 안이면 같은 단계로 맞춘다(자율형공장 공고문 7장).
+        return "1.18.1"
 
     @property
     def category(self) -> str:
@@ -776,7 +799,8 @@ class StructureAnalyzeBlock(BaseBlock):
             # 폴백한다 — 회귀 없음.
             built_blocks = (
                 refine_element_blocks(
-                    _build_blocks_from_elements(doc.elements), doc.elements, cfg.heading_max_level
+                    _build_blocks_from_elements(doc.elements), doc.elements, cfg.heading_max_level,
+                    font_sizes=_original_heading_font_sizes(doc),
                 )
                 if doc.elements
                 else _build_blocks(

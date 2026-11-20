@@ -282,3 +282,17 @@ def test_html_buttons_are_page_controls_not_document_text():
     )
     blocks, _tables, _collector, _title = parse_html(html)
     assert [b.text for b in blocks] == ["분석 보고서", "본문 입니다."]
+
+
+def test_html_without_head_and_body_tags_keeps_the_cover_header():
+    # AIDE_연동가이드: <head>·<body> 없이 <style> 뒤에 <header> 가 오면 lxml 이 header 를 head 에 넣는다(2026-11-20)
+    from app.pipeline.adapters.text_adapter import parse_html
+
+    html = (
+        "<!doctype html><meta charset='utf-8'><title>문서 제목</title><style>p{color:red}</style>"
+        "<header><h1>화면 연동 가이드</h1><p>버전 v1.0</p></header><h2>1. 참조</h2><p>본문</p>"
+    )
+    blocks, _tables, _collector, title = parse_html(html)
+
+    assert title == "문서 제목"
+    assert [b.text for b in blocks] == ["화면 연동 가이드", "버전 v1.0", "1. 참조", "본문"]

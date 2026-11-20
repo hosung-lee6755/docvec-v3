@@ -170,12 +170,36 @@ def _hwp_collect_text(elem) -> str:
     return "".join(texts)
 
 
+def _hwp_cell_paragraphs(elem, out: list[str]) -> None:
+    """칸 안의 문단 글을 모은다. 문단이 칸 바로 아래가 아니라 단 설정(ColumnSet) 등에 싸여 있어도 찾고,
+    칸 안에 든 표의 글도 이어 받는다(HWPX 의 칸 글과 같은 규칙).
+
+    예전에는 칸 바로 아래 문단만 읽어 목차·요구사항 세부내용 칸이 통째로 비고, 칸 안의 표(누출금지 정보 목록,
+    재질 규격표)가 사라졌다(3. 제안요청서·NS-AM 검사매뉴얼, 2026-11-20)."""
+    for child in elem:
+        tag = child.tag
+        if tag == "Paragraph":
+            text = _hwp_collect_text(child).strip()
+            if text:
+                out.append(text)
+            _hwp_nested_table_paragraphs(child, out)
+        elif tag != "GShapeObjectControl":
+            _hwp_cell_paragraphs(child, out)
+
+
+def _hwp_nested_table_paragraphs(elem, out: list[str]) -> None:
+    """문단에 박힌 표만 찾아 그 칸의 글을 모은다. 문단의 다른 자식 글은 _hwp_collect_text 가 이미 읽었다."""
+    for child in elem:
+        tag = child.tag
+        if tag == "TableControl":
+            _hwp_cell_paragraphs(child, out)
+        elif tag not in ("Paragraph", "GShapeObjectControl"):
+            _hwp_nested_table_paragraphs(child, out)
+
+
 def _hwp_cell_text(cell) -> str:
-    parts = [
-        _hwp_collect_text(p).strip()
-        for p in cell
-        if p.tag == "Paragraph" and _hwp_collect_text(p).strip()
-    ]
+    parts: list[str] = []
+    _hwp_cell_paragraphs(cell, parts)
     return CELL_PARAGRAPH_SEP.join(parts)
 
 

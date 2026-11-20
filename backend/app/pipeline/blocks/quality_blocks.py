@@ -39,7 +39,8 @@ _BROKEN_CHAR_RE = re.compile(r"[�\x00-\x08\x0b\x0c\x0e-\x1f]")
 # TOC 항목의 점선/공백 리더 + 페이지 번호 꼬리, 그리고 번호매김/장절조 머리를
 # 각각 벗겨내면 TOC 항목과 실제 HEADING 노드 텍스트를 비교할 수 있는 형태가
 # 된다 — structure_blocks.py의 동일 패턴과 의도적으로 맞춘 정규식.
-_TOC_TRAILING_LEADER_RE = re.compile(r"[.…\s]{2,}\d{1,4}\s*$")
+# 한글 문서는 "·"·"ㆍ"·"‥" 점선도 많이 쓴다(기계설비 매뉴얼 목차, 2026-11-20)
+_TOC_TRAILING_LEADER_RE = re.compile(r"[.…·ㆍ‥\s]{2,}\d{1,4}\s*$")
 _LEADING_NUMBER_RE = re.compile(r"^(?:\d+(?:\.\d+)*[.\)]?\s+|제?\s*\d+\s*[장절조편]\s*)")
 
 
@@ -261,7 +262,8 @@ class QualityCheckBlock(BaseBlock):
         # 1.7.0: 경고 대상을 화면이 짚을 수 있게 빈 쪽 번호(empty_pages)와 제목으로 확인되지 않은 목차
         # 항목(toc_unmatched)을 metrics에 남긴다(2026-11-17).
         # 1.8.0: 목차-제목 대조가 띄어쓰기 차이를 무시하고, 번호를 뗀 형태와 떼지 않은 형태를 모두 맞대 본다(2026-11-19).
-        return "1.8.0"
+        # 1.8.1: 목차 점선으로 "·"·"ㆍ"·"‥"도 알아본다(2026-11-20).
+        return "1.8.1"
 
     @property
     def category(self) -> str:

@@ -28,6 +28,7 @@ from app.pipeline.adapters.base import (
     RawTableCandidate,
     RawTextBlock,
 )
+from app.pipeline.adapters.docling_toc import TOC_LABELS, choose_toc_lines, grid_text
 from app.pipeline.adapters.hwpx_structure import grid_from_cells
 from app.pipeline.adapters.ruled_tables import RuledTable, find_ruled_tables, match_ruled_table
 from app.pipeline.blocks.table_markdown import rows_to_markdown
@@ -315,6 +316,99 @@ def _native_text_in_bbox(fitz_doc, page_no: int, bbox: tuple[float, float, float
     return page.get_text("text", clip=fitz.Rect(left, top, right, bottom)).strip()
 
 
+_TOC_RIGHT_OVERFLOW = 3.0
+_TOC_LEFT_MARGIN = 4.0
+# 같은 줄로 볼 낱말 세로 중심의 최대 차이(pt)
+_SAME_LINE_TOLERANCE = 3.0
+
+
+def _visual_lines(words: list[tuple]) -> str:
+    """PyMuPDF 낱말 목록을 화면에 보이는 줄로 다시 묶는다.
+
+    목차의 쪽 번호가 항목과 다른 글 블록에 들어 있는 PDF 가 있어(기계설비 매뉴얼 3쪽), 블록 순서대로 읽으면
+    항목들이 먼저 나오고 쪽 번호가 맨 뒤에 몰린다. 세로 위치가 같은 낱말을 한 줄로 모아 왼쪽부터 잇는다."""
+    lines: list[list[tuple]] = []
+    for word in sorted(words, key=lambda w: ((w[1] + w[3]) / 2, w[0])):
+        center = (word[1] + word[3]) / 2
+        if lines and abs(center - (lines[-1][0][1] + lines[-1][0][3]) / 2) <= _SAME_LINE_TOLERANCE:
+            lines[-1].append(word)
+        else:
+            lines.append([word])
+    return "\n".join(" ".join(w[4] for w in sorted(line, key=lambda w: w[0])) for line in lines)
+
+
+class _NativeTextReader:
+    """원본 PDF 텍스트 레이어를 쪽·영역 단위로 읽는다. 처음 쓸 때 한 번만 열고, 열지 못하면 ""만 돌려준다."""
+
+    def __init__(self, file_path: Path, warnings: list[str]) -> None:
+        self._path = file_path
+        self._warnings = warnings
+        self._doc = None
+        self._failed = False
+
+    def read_full_width(self, page_no: int, bbox: tuple[float, float, float, float] | None) -> str:
+        """bbox 의 위아래 범위를 쪽 너비 전체로 넓혀 읽는다. Docling 의 목차 영역은 오른쪽 끝 쪽 번호 열을
+        자주 빠뜨린다(기계설비 매뉴얼 3쪽에서 항목 30개 중 20여 개의 쪽 번호가 잘렸다, 2026-11-20)."""
+        if bbox is None or self._failed:
+            return ""
+        try:
+            if self._doc is None:
+                import fitz  # pymupdf
+
+                self._doc = fitz.open(str(self._path))
+            if page_no < 1 or page_no > len(self._doc):
+                return ""
+            # 점선이 길면 쪽 번호가 쪽 오른쪽 끝 밖에 찍힌 PDF 도 있어(같은 매뉴얼) 오른쪽은 넉넉히 연다
+            page = self._doc[page_no - 1]
+            first_y, second_y = bbox[1], bbox[3]
+            if first_y > second_y:  # 왼쪽 아래 원점 → 왼쪽 위 원점
+                first_y, second_y = page.rect.height - first_y, page.rect.height - second_y
+            import fitz  # pymupdf
+
+            # 왼쪽은 목차 영역에서 시작한다(옆 단·사이드바 글이 섞이지 않게). 오른쪽만 쪽 번호 열까지 넓힌다
+            left = max(0.0, min(bbox[0], bbox[2]) - _TOC_LEFT_MARGIN)
+            clip = fitz.Rect(left, first_y, page.rect.width * _TOC_RIGHT_OVERFLOW, second_y)
+            return _visual_lines(page.get_text("words", clip=clip))
+        except Exception as exc:  # 보강일 뿐이다. 실패하면 Docling 표 칸 글로 대신한다
+            self._failed = True
+            self._warnings.append(f"목차 영역 원본 텍스트 읽기 실패: {exc}")
+            return ""
+
+    def close(self) -> None:
+        if self._doc is not None:
+            self._doc.close()
+
+
+def _emit_text(page: RawPage, elements: list[dict], section_path: list[str], label: str, text: str,
+               bbox, level=None) -> None:
+    """글 요소 하나를 요소 목록과 쪽 글 블록에 더한다."""
+    is_header = label in _HEADER_LABELS
+    is_footer = label in _FOOTER_LABELS
+    block_type = "header" if is_header else "footer" if is_footer else "paragraph"
+    element_id = str(uuid4())
+    if text:
+        page.text_blocks.append(
+            RawTextBlock(
+                text=text, page_number=page.page_number, bbox=bbox, block_type=block_type,
+                element_id=element_id,
+            )
+        )
+    metadata = {
+        "section_path": list(section_path), "is_header": is_header, "is_footer": is_footer,
+        # 메타 정보 생성 설계서(2026-07-23) Phase 3 — order는 순회 인덱스(읽기 순서),
+        # style/font_size/font_name은 Docling이 제공하지 않아 항상 None(자동 생성 불가, 스키마에는 노출).
+        "order": len(elements), "is_caption": label in _CAPTION_LABELS, "style": None,
+    }
+    if label in _HEADING_LABELS:
+        # DocumentNode.level 계층 구성에 필요(Phase 2) — Docling의 SectionHeaderItem.level이 곧 heading depth.
+        metadata["level"] = level
+    elements.append({
+        "id": element_id, "page": page.page_number, "type": label, "bbox": bbox,
+        "content": {"text": text, "markdown": text},
+        "metadata": metadata,
+    })
+
+
 def _attach_native_text_to_pictures(file_path: Path, pages_by_no: dict[int, RawPage],
                                     warnings: list[str]) -> None:
     """그림 영역마다 원본 텍스트 레이어의 글자를 `native_text`로 붙인다(그림 인식이 OCR 보다 우선 사용)."""
@@ -462,6 +556,7 @@ class DoclingAdapter(BaseAdapter):
         warnings: list[str] = []
         table_ordinal = 0
         ruled_source = _RuledTableSource(file_path, warnings)
+        native_text = _NativeTextReader(file_path, warnings)
 
         def page_for(page_no: int) -> RawPage:
             if page_no not in pages_by_no:
@@ -533,46 +628,24 @@ class DoclingAdapter(BaseAdapter):
                 })
                 continue
 
+            if label in TOC_LABELS:
+                # 목차는 글이 표 칸에 담겨 text 가 비어 있다. 원본 글(없으면 표 칸)을 목차 줄 하나씩 낸다
+                lines = choose_toc_lines(native_text.read_full_width(page_no, bbox), grid_text(_table_grid(item)[0]))
+                for line in lines:
+                    _emit_text(page, elements, section_path, label, line, bbox)
+                continue
+
             text = (getattr(item, "text", "") or "").strip()
-            is_header = label in _HEADER_LABELS
-            is_footer = label in _FOOTER_LABELS
-            block_type = "header" if is_header else "footer" if is_footer else "paragraph"
-            element_id = str(uuid4())
-
-            if text:
-                page.text_blocks.append(
-                    RawTextBlock(
-                        text=text, page_number=page_no, bbox=bbox, block_type=block_type,
-                        element_id=element_id,
-                    )
-                )
-
             if label in _HEADING_LABELS:
                 section_path = [text] if text else section_path
-
-            metadata = {
-                "section_path": list(section_path), "is_header": is_header, "is_footer": is_footer,
-                # 메타 정보 생성 설계서(2026-07-23) Phase 3 — order는 순회
-                # 인덱스(읽기 순서), style/font_size/font_name은 Docling이
-                # 제공하지 않아 항상 None(자동 생성 불가, 스키마에는 노출).
-                "order": len(elements), "is_caption": label in _CAPTION_LABELS, "style": None,
-            }
-            if label in _HEADING_LABELS:
-                # DocumentNode.level 계층 구성에 필요(Phase 2) — Docling의
-                # SectionHeaderItem.level이 곧 우리의 heading depth.
-                metadata["level"] = getattr(item, "level", None)
-
-            elements.append({
-                "id": element_id, "page": page_no, "type": label, "bbox": bbox,
-                "content": {"text": text, "markdown": text},
-                "metadata": metadata,
-            })
+            _emit_text(page, elements, section_path, label, text, bbox, level=getattr(item, "level", None))
 
         # pdf_adapter.py의 클라우드 VLM OCR 폴백과 동일하게, 등록된 BYOK 키가
         # 있을 때만 저-커버리지 페이지를 escalate한다(_resolve_vision_credentials,
         # process.py) — 키가 없으면 vision_backend/vision_api_key가 빈 값이라
         # 이 블록 자체가 스킵되고 기존 EasyOCR-only 동작과 동일하다.
         ruled_source.close()
+        native_text.close()
         _attach_native_text_to_pictures(file_path, pages_by_no, warnings)
 
         vision_backend = options.get("vision_backend")

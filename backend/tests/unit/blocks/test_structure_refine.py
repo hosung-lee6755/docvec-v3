@@ -1,5 +1,10 @@
 """Docling 구조 블록 보정(structure_refine.py, 2026-11-13)."""
-from app.pipeline.blocks.structure_refine import assign_tiers, estimate_font_size, refine_element_blocks
+from app.pipeline.blocks.structure_refine import (
+    assign_measured_tiers,
+    assign_tiers,
+    estimate_font_size,
+    refine_element_blocks,
+)
 
 
 def _el(eid, el_type, page, bbox, text=""):
@@ -112,3 +117,83 @@ def test_toc_page_paragraph_matching_a_heading_becomes_toc():
     out = refine_element_blocks(blocks, elements)
 
     assert [b[0] for b in out] == ["TOC", "TOC", "HEADING"]
+
+
+def test_real_font_sizes_put_box_heading_under_the_chapter_heading():
+    # bbox 어림으로는 "□ 사업 개요"가 "1. 사업 개요"보다 크게 잡히지만 실제 글자 크기는 둘 다 10.7pt 다(2026-11-20)
+    elements = [
+        _el("h0", "section_header", 1, [0, 730, 200, 700]),    # 큰 표지 제목
+        _el("h1", "section_header", 1, [0, 611, 66, 600]),     # "1. 사업 개요"
+        _el("h2", "section_header", 1, [0, 513, 78, 500]),     # "□ 사업 개요" (어림값이 더 크다)
+        _el("h3", "section_header", 1, [0, 411, 66, 400]),     # "2. 신청 방법"
+    ]
+    blocks = [
+        _block("HEADING", "2026년도 공고", "h0", 1),
+        _block("HEADING", "1. 사업 개요", "h1", 1),
+        _block("HEADING", "□ 사업 개요", "h2", 1),
+        _block("HEADING", "2. 신청 방법", "h3", 1),
+    ]
+    sizes = {"h0": 20.0, "h1": 10.7, "h2": 10.7, "h3": 10.7}
+
+    out = refine_element_blocks(blocks, elements, font_sizes=sizes)
+
+    levels = [b[1] for b in out]
+    assert levels[2] == levels[1] + 1
+    assert levels[3] == levels[1]
+
+
+def test_marker_order_keeps_a_larger_box_heading_at_its_own_level():
+    elements = [_el(e, "section_header", 1, [0, 100, 10, 90]) for e in ("a", "b", "c")]
+    blocks = [
+        _block("HEADING", "1. 개요", "a", 1),
+        _block("HEADING", "□ 큰 제목", "b", 1),
+        _block("HEADING", "○ 세부", "c", 1),
+    ]
+
+    out = refine_element_blocks(blocks, elements, font_sizes={"a": 10.0, "b": 16.0, "c": 10.0})
+
+    assert out[1][1] < out[0][1]          # □ 가 확실히 더 크면 기호 순서로 내리지 않는다
+    assert out[2][1] == out[1][1] + 1     # ○ 는 □ 아래로 간다
+
+
+def test_marker_order_does_not_touch_unmarked_or_sub_numbered_headings():
+    elements = [_el(e, "section_header", 1, [0, 100, 10, 90]) for e in ("a", "b")]
+    blocks = [_block("HEADING", "1. 개요", "a", 1), _block("HEADING", "1.1 범위", "b", 1)]
+    out = refine_element_blocks(blocks, elements, font_sizes={"a": 10.0, "b": 10.0})
+    assert [b[1] for b in out] == [1, 1]
+
+
+def test_measured_tiers_ignore_one_off_cover_sizes():
+    # Pub120bk(2026-11-20): 표지 32/24pt 가 한 번씩 나와도 본문 제목층 18/12/10pt 가 1/2/3단계로 나뉜다
+    sizes = [32.0, 32.0, 24.0] + [18.0] * 49 + [15.0] * 2 + [12.0] * 900 + [10.0] * 950
+    level_of = assign_measured_tiers(sizes, max_level=3)
+    assert (level_of[18.0], level_of[12.0], level_of[10.0]) == (1, 2, 3)
+    assert level_of[32.0] == level_of[24.0] == 1
+
+
+def test_consecutive_chapter_numbers_share_a_level_despite_a_small_size_drop():
+    # 자율형공장 공고문(2026-11-20): 1~6장은 16pt, 7장은 15pt 라 7장이 6장 아래로 들어갔다
+    elements = [_el(e, "section_header", 1, [0, 100, 10, 90]) for e in ("a", "b", "c", "d")]
+    blocks = [
+        _block("HEADING", "6. 유의 사항", "a", 1),
+        _block("HEADING", "□ 교육 이수", "b", 1),
+        _block("HEADING", "7. 추진근거", "c", 1),
+        _block("HEADING", "□ 근거 법령", "d", 1),
+    ]
+    sizes = {"a": 16.0, "b": 14.0, "c": 15.0, "d": 14.0}
+
+    out = refine_element_blocks(blocks, elements, font_sizes=sizes)
+
+    assert out[2][1] == out[0][1]
+    assert out[3][1] > out[2][1]
+
+
+def test_chapter_number_after_a_clearly_smaller_numbered_item_keeps_its_own_level():
+    elements = [_el(e, "section_header", 1, [0, 100, 10, 90]) for e in ("a", "b", "c")]
+    blocks = [
+        _block("HEADING", "1. 개요", "a", 1),
+        _block("HEADING", "1. 세부 항목", "b", 1),
+        _block("HEADING", "2. 신청 방법", "c", 1),
+    ]
+    out = refine_element_blocks(blocks, elements, font_sizes={"a": 16.0, "b": 11.0, "c": 16.0})
+    assert out[2][1] == out[0][1] < out[1][1]

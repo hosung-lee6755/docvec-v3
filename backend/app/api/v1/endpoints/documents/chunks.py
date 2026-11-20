@@ -10,7 +10,7 @@ from app.api.v1.endpoints.documents.chunk_edits import (
     refresh_chunk_warnings,
     relink_and_delete,
 )
-from app.api.v1.endpoints.documents.processing import _resolve_display_run_id
+from app.api.v1.endpoints.documents.processing import _resolve_tab_run_id
 from app.api.v1.endpoints.documents.upload import _start_workflow_or_mark_failed
 from app.api.v1.permissions import (
     check_document_access,
@@ -187,10 +187,8 @@ async def list_document_chunks(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="viewer")
-
-    # structure/cleaning-changes/dictionary-applications/pii/quality 탭과 동일한
-    # run 해석 기준(_resolve_display_run_id) — active_run_id 우선, 없으면 최신 run.
-    run_id = await _resolve_display_run_id(db, doc)
+    # 청크를 실제로 만든 run(_resolve_tab_run_id) — 부분 재처리로 chunk_split 을 복사만 했으면 부모 run 을 본다.
+    run_id = await _resolve_tab_run_id(db, doc, ("chunk_split",))
 
     # 메타 정보 생성 설계서(2026-07-23) Phase 4 — token_count/chunk_type/
     # keywords/embedding_model/element_id/prev_chunk_id/next_chunk_id/
@@ -259,7 +257,10 @@ async def list_document_chunks(
     # only touches Postgres document_chunks, not Qdrant vectors). Without filtering,
     # orphaned vectors from older runs cause chunk counts to diverge between the
     # RAG status and quality tabs.
-    hits = [h for h in hits if h["payload"].get("workflow_run_id") == run_id]
+    # 벡터의 workflow_run_id 는 rag_store 를 실제로 돈 run 이다. 저장 단계부터 다시 돌리면 청크 행(chunk_split)은
+    # 부모 run 에 있고 벡터는 새 run 에 적혀 있어 둘을 따로 푼다(같은 값으로 거르면 모든 청크가 "임베딩 안 됨").
+    vector_run_id = await _resolve_tab_run_id(db, doc, ("rag_store",))
+    hits = [h for h in hits if h["payload"].get("workflow_run_id") in {run_id, vector_run_id}]
     hits.sort(key=lambda h: h["payload"].get("chunk_index", 0))
 
     if not hits:

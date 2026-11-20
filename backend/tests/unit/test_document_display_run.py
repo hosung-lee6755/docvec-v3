@@ -91,3 +91,42 @@ async def test_returns_none_when_the_document_has_no_runs(db_session):  # noqa: 
     await db_session.flush()
 
     assert await _resolve_display_run_id(db_session, doc) is None
+
+
+# ------------------------------------------------ 부분 재처리: 탭 데이터를 실제로 만든 run(2026-11-20)
+
+async def _step(db, run, version, block_type: str, cached: bool) -> None:
+    from app.db.models.workflow import WorkflowBlockInstance
+    from app.db.models.workflow_run import WorkflowRunStep
+
+    block = WorkflowBlockInstance(id=uuid4(), version_id=version.id, block_type=block_type, config={})
+    db.add(block)
+    await db.flush()
+    db.add(WorkflowRunStep(id=uuid4(), run_id=run.id, block_instance_id=block.id, status="COMPLETED", cached=cached))
+    await db.flush()
+
+
+async def test_tab_follows_the_parent_when_the_block_was_only_copied(db_session):  # noqa: F811
+    from app.api.v1.endpoints.documents.processing import _resolve_tab_run_id
+
+    doc = _doc("k6")
+    db_session.add(doc)
+    await db_session.flush()
+    pre = await _version(db_session, "PREPROCESS")
+    upload = await _run(db_session, doc, pre, "UPLOAD", minutes_ago=30)
+    await _step(db_session, upload, pre, "structure_analyze", cached=False)
+    retry = await _run(db_session, doc, pre, "REPROCESS", minutes_ago=20)  # 저장 단계부터 다시 돈 실행이 또 실패
+    retry.parent_run_id = upload.id
+    await _step(db_session, retry, pre, "structure_analyze", cached=True)
+    latest = await _run(db_session, doc, pre, "REPROCESS", minutes_ago=10)
+    latest.parent_run_id = retry.id
+    await _step(db_session, latest, pre, "structure_analyze", cached=True)
+    await _step(db_session, latest, pre, "chunk_split", cached=False)
+    doc.active_run_id = latest.id
+    await db_session.flush()
+
+    assert await _resolve_tab_run_id(db_session, doc, ("structure_analyze",)) == str(upload.id)
+    # 이 실행에서 실제로 돈 블록의 탭은 행이 없더라도 이 실행을 본다(옛 결과를 보여 주지 않는다)
+    assert await _resolve_tab_run_id(db_session, doc, ("chunk_split",)) == str(latest.id)
+    # 워크플로우에 없는 블록이면 기준 실행 그대로
+    assert await _resolve_tab_run_id(db_session, doc, ("pii_detect",)) == str(latest.id)

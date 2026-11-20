@@ -52,6 +52,13 @@ def test_toc_heading_match_ratio_matches_after_stripping_numbering_and_leader():
     assert ratio == 0.5
 
 
+def test_toc_heading_match_ratio_strips_middle_dot_leaders():
+    # 기계설비 매뉴얼 목차는 "·" 점선을 쓴다(2026-11-20)
+    toc_texts = ["1. 기계설비 착공 전 확인표 판단기준··························33"]
+
+    assert _toc_heading_match_ratio(toc_texts, ["1. 기계설비 착공 전 확인표 판단기준"]) == 1.0
+
+
 def test_toc_heading_match_ratio_is_none_when_no_toc_entries():
     assert _toc_heading_match_ratio([], ["1. 서론"]) is None
 
