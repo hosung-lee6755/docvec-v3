@@ -15,6 +15,7 @@ from app.pipeline.adapters.base import (
     RawTextBlock,
 )
 from app.pipeline.adapters.hwpx_structure import grid_from_cells
+from app.pipeline.adapters.nested_tables import InnerTables, is_frame_only, is_separable_table
 from app.pipeline.adapters.sheet_adapter import MAX_COLUMNS
 from app.pipeline.adapters.simple_layout import PAGE_HEIGHT, PAGE_WIDTH, BlockCollector, failed
 
@@ -119,10 +120,40 @@ def _span_attr(cell, name: str) -> int:
         return 1
 
 
-def _html_table_grid(table) -> tuple[list[list[str]], list[dict]]:
+def _html_cell_pieces(node, pieces: list[str], inner: InnerTables | None) -> None:
+    from bs4.element import Comment, NavigableString
+
+    for child in node.children:
+        if isinstance(child, Comment):
+            continue
+        if isinstance(child, NavigableString):
+            text = str(child).strip()
+            if text:
+                pieces.append(text)
+        elif (child.name or "").lower() == "table":
+            deeper = InnerTables()
+            rows, spans = _html_table_grid(child, deeper)
+            if inner is not None and is_separable_table(rows):
+                caption = child.find("caption", recursive=False)
+                pieces.append(inner.add(rows, spans, deeper, caption.get_text(" ", strip=True) if caption else None))
+            else:
+                _html_cell_pieces(child, pieces, inner)  # 한 줄짜리 작은 표는 칸 글로 둔다
+        else:
+            _html_cell_pieces(child, pieces, inner)
+
+
+def _html_cell_text(cell, inner: InnerTables | None) -> str:
+    """get_text(" ", strip=True)와 같은 글. inner 가 있으면 2행 2열 이상인 안쪽 표는 inner 로 떼어 내고
+    "[칸 안의 표 k]" 표시만 남긴다(nested_tables.py, 2026-11-20)."""
+    pieces: list[str] = []
+    _html_cell_pieces(cell, pieces, inner)
+    return " ".join(pieces)
+
+
+def _html_table_grid(table, inner: InnerTables | None = None) -> tuple[list[list[str]], list[dict]]:
     """rowspan/colspan을 지켜 열이 맞는 격자를 만든다. 세로 병합은 글을 아래 줄에도 적고, 가로 병합은 첫 칸에만
     적는다(HWPX와 같은 규칙). 합친 칸의 위치와 크기는 spans로 따로 돌려준다."""
-    # 표 안의 표는 바깥 칸의 글로 합쳐진다. 안쪽 표의 행을 바깥 표의 행으로 세지 않는다
+    # 안쪽 표의 행을 바깥 표의 행으로 세지 않는다. 안쪽 표는 칸 글이 될 때 따로 떼어 낸다(_html_cell_text)
     trs = [tr for tr in table.find_all("tr") if tr.find_parent("table") is table]
     occupied: set[tuple[int, int]] = set()
     cells: list[tuple[int, int, int, int, str]] = []
@@ -136,9 +167,29 @@ def _html_table_grid(table) -> tuple[list[list[str]], list[dict]]:
             row_span = min(_span_attr(cell, "rowspan"), len(trs) - row)
             col_span = min(_span_attr(cell, "colspan"), MAX_COLUMNS - col)
             occupied.update((row + dr, col + dc) for dr in range(row_span) for dc in range(col_span))
-            cells.append((row, col, row_span, col_span, cell.get_text(" ", strip=True)))
+            cells.append((row, col, row_span, col_span, _html_cell_text(cell, inner)))
             col += col_span
     return grid_from_cells(cells)
+
+
+def _emit_html_table(table, blocks: list[RawTextBlock], tables: list[RawTableCandidate], collector: BlockCollector) -> None:
+    """표를 내고, 칸 안에서 떼어 낸 표를 바로 뒤에 낸다(HWP 와 같은 규칙)."""
+    inner = InnerTables()
+    rows, spans = _html_table_grid(table, inner)
+    _emit_rows(rows, spans, inner, None, blocks, tables, collector)
+
+
+def _emit_rows(
+    rows: list[list[str]], spans: list[dict], inner: InnerTables, title: str | None,
+    blocks: list[RawTextBlock], tables: list[RawTableCandidate], collector: BlockCollector,
+) -> None:
+    if is_frame_only(rows):  # 칸 하나짜리 틀에 표만 들어 있으면 틀 대신 안쪽 표를 낸다
+        for inner_rows, inner_spans, deeper, caption in inner.found:
+            _emit_rows(inner_rows, inner_spans, deeper, caption, blocks, tables, collector)
+        return
+    collector.table(blocks, tables, rows, 1, spans, title)
+    for inner_rows, inner_spans, deeper, inner_title in inner.titled(rows):
+        _emit_rows(inner_rows, inner_spans, deeper, inner_title, blocks, tables, collector)
 
 
 def parse_html(html: str) -> tuple[list[RawTextBlock], list[RawTableCandidate], BlockCollector, str | None]:
@@ -168,8 +219,7 @@ def parse_html(html: str) -> tuple[list[RawTextBlock], list[RawTableCandidate], 
                 continue
             if name == "table":
                 flush()
-                rows, spans = _html_table_grid(child)
-                collector.table(blocks, tables, rows, 1, spans)
+                _emit_html_table(child, blocks, tables, collector)
             elif name in _HTML_HEADINGS:
                 flush()
                 collector.text(blocks, child.get_text(" ", strip=True), 1, heading_level=_HTML_HEADINGS[name])

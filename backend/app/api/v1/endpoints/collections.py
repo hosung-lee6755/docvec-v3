@@ -35,6 +35,7 @@ from app.services.access_policy import (
 )
 from app.services.audit import log_audit
 from app.services.search_settings import SearchSettings, resolve_search_settings
+from app.services.workflow_scope import ensure_fits_project, fits_project
 from app.services.document_state import claim_document_status
 from app.services.document_storage import release_original
 from app.services.embedding import EMBEDDING_MODEL_REGISTRY
@@ -175,10 +176,12 @@ async def create_collection(
         workflow = await db.get(WorkflowDefinition, data.default_workflow_id)
         if workflow is None or workflow.kind != "PREPROCESS":
             raise HTTPException(status_code=400, detail="전처리(PREPROCESS) 워크플로우만 기본값으로 지정할 수 있습니다")
+        await ensure_fits_project(db, workflow, data.project_id)
     if data.default_analysis_workflow_id is not None:
         analysis_workflow = await db.get(WorkflowDefinition, data.default_analysis_workflow_id)
         if analysis_workflow is None or analysis_workflow.kind != "ANALYSIS":
             raise HTTPException(status_code=400, detail="분석(ANALYSIS) 워크플로우만 기본값으로 지정할 수 있습니다")
+        await ensure_fits_project(db, analysis_workflow, data.project_id)
 
     collection = Collection(
         name=data.name,
@@ -354,6 +357,24 @@ async def get_collection_vector_stats(
     }
 
 
+async def _reset_workflows_outside_project(db: AsyncSession, collection: Collection) -> None:
+    """다른 프로젝트로 옮긴 컬렉션에서 옛 프로젝트의 워크플로우 지정은 표준으로 되돌린다(2026-11-20 사용자 결정).
+    프로젝트 워크플로우는 같은 프로젝트의 컬렉션에만 쓴다. 화면은 저장 전에 무엇이 바뀌는지 알린다."""
+    from app.db.models.workflow import WorkflowDefinition
+
+    for id_field, version_field in (
+        ("default_workflow_id", "default_workflow_version"),
+        ("default_analysis_workflow_id", "default_analysis_workflow_version"),
+    ):
+        workflow_id = getattr(collection, id_field)
+        if not workflow_id:
+            continue
+        workflow = await db.get(WorkflowDefinition, workflow_id)
+        if workflow is None or not fits_project(workflow.project_id, collection.project_id):
+            setattr(collection, id_field, None)
+            setattr(collection, version_field, None)
+
+
 @router.patch("/{collection_id}", response_model=CollectionResponse)
 async def update_collection(
     collection_id: UUID,
@@ -366,8 +387,10 @@ async def update_collection(
         collection.name = data.name
     if data.description is not None:
         collection.description = data.description
+    project_changed = False
     if data.project_id is not None:
         await check_project_access(db, data.project_id, current_user, min_role="editor")
+        project_changed = str(collection.project_id or "") != str(data.project_id)
         collection.project_id = str(data.project_id)
     if data.restrict_to_members is not None:
         collection.restrict_to_members = data.restrict_to_members
@@ -414,6 +437,7 @@ async def update_collection(
         workflow = await db.get(WorkflowDefinition, data.default_workflow_id)
         if workflow is None or workflow.kind != "PREPROCESS":
             raise HTTPException(status_code=400, detail="전처리(PREPROCESS) 워크플로우만 기본값으로 지정할 수 있습니다")
+        await ensure_fits_project(db, workflow, collection.project_id)
         collection.default_workflow_id = str(data.default_workflow_id)
         collection.default_workflow_version = data.default_workflow_version
 
@@ -426,8 +450,12 @@ async def update_collection(
         analysis_workflow = await db.get(WorkflowDefinition, data.default_analysis_workflow_id)
         if analysis_workflow is None or analysis_workflow.kind != "ANALYSIS":
             raise HTTPException(status_code=400, detail="분석(ANALYSIS) 워크플로우만 기본값으로 지정할 수 있습니다")
+        await ensure_fits_project(db, analysis_workflow, collection.project_id)
         collection.default_analysis_workflow_id = str(data.default_analysis_workflow_id)
         collection.default_analysis_workflow_version = data.default_analysis_workflow_version
+
+    if project_changed:
+        await _reset_workflows_outside_project(db, collection)
 
     previous_level = collection.default_security_level
     level_changed = (

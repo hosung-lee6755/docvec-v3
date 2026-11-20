@@ -8,6 +8,7 @@ import { useWorkflows, useWorkflowVersions } from '../../hooks/useWorkflows'
 import { Alert, Badge, Button, Field, IconButton, Modal, Select, Spinner, Tabs } from '../ui'
 import type { BadgeTone } from '../ui'
 import { describeError } from '../../lib/apiError'
+import { workflowsForProject } from '../../lib/workflowScope'
 import '../../styles/screens/documents.css'
 
 interface UploadModalProps {
@@ -165,7 +166,8 @@ export function UploadModal({
 
   const filesSubmitDisabled = isBatchUploading || !selectedFiles.length || !uploadCollectionId
   const zipSubmitDisabled = uploadZip.isPending || !zipFile || !uploadCollectionId
-  const workflowOptions = (uploadProjectWorkflows ?? []).filter((wf) => !wf.is_system_default)
+  // 업로드할 컬렉션과 같은 프로젝트의 워크플로우만 고른다. 개인 컬렉션은 표준 전처리만 쓴다(2026-11-20)
+  const workflowOptions = workflowsForProject(uploadProjectWorkflows, selectedUploadCollection?.project_id)
   const collectionMissingHint = !collectionsData?.length ? '컬렉션이 없습니다. 먼저 컬렉션을 생성하세요.' : undefined
 
   const footer = uploadMode === 'files' ? (

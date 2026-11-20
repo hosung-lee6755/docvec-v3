@@ -439,6 +439,81 @@ def test_repaginate_assigns_pages_tables_and_images():
     assert parsed.pages[0].image_regions == [image]
 
 
+def test_repaginate_ignores_inner_table_markers_when_matching_a_table():
+    # 바깥 칸의 "[칸 안의 표 1]" 표시는 미리보기 PDF 에 없는 글이라 빼고 맞춘다(2026-11-20)
+    table = RawTableCandidate(page_number=1, rows=[["[칸 안의 표 1]", "셀A"], ["셀B", "셀C"]])
+    table_block = RawTextBlock("[표 1]\n[칸 안의 표 1] | 셀A\n셀B | 셀C", 1, block_type="table")
+    parsed = _hwp_parsed([RawTextBlock("첫 문단입니다", 1), table_block], tables=[table])
+    pages_text = [
+        {"page_number": 1, "text": "첫 문단입니다"},
+        {"page_number": 2, "text": "셀A 셀B 셀C"},
+    ]
+
+    _repaginate(parsed, pages_text)
+
+    assert table.page_number == 2
+
+
+def test_repaginate_places_a_table_by_a_cell_found_on_only_one_page_when_its_start_does_not_match():
+    # NS-AM 검사매뉴얼(2026-11-20): 모든 표의 머리 칸이 같고 미리보기의 글 순서가 달라 앞 글로는 찾지 못했다.
+    # 그 표들이 모두 이전 쪽에 남았다. 검사번호처럼 한 쪽에만 나오는 칸으로 쪽을 정한다
+    header = ["NS-AM형 선로전환기 검사 메뉴얼", "개 정 / 번 호", "Rev. A"]
+    first = RawTableCandidate(page_number=1, rows=[header, ["검사번호", "KR-I-NSAM-03.01"]])
+    second = RawTableCandidate(page_number=1, rows=[header, ["검사번호", "KR-I-NSAM-04.01"]])
+    parsed = _hwp_parsed(
+        [RawTextBlock("[표 1]\n...", 1, block_type="table"), RawTextBlock("[표 2]\n...", 1, block_type="table")],
+        tables=[first, second],
+    )
+    pages_text = [
+        {"page_number": 1, "text": "Rev. A NS-AM형 선로전환기 검사 메뉴얼 개정번호 검사번호 KR-I-NSAM-03.01"},
+        {"page_number": 2, "text": "Rev. A NS-AM형 선로전환기 검사 메뉴얼 개정번호 검사번호 KR-I-NSAM-04.01"},
+    ]
+
+    _repaginate(parsed, pages_text)
+
+    assert first.page_number == 1
+    assert second.page_number == 2
+
+
+def test_repaginate_does_not_jump_far_ahead_on_a_single_matching_cell():
+    # 같은 성능 표가 여러 쪽에 되풀이되면 우연히 한 쪽에만 나온 칸 하나로 멀리 건너뛸 수 있다. 그러면 뒤의 표가
+    # 모두 그 쪽에 묶인다(쪽은 앞으로만 간다). 칸 글로는 현재 쪽과 바로 다음 쪽까지만 정한다
+    table = RawTableCandidate(page_number=1, rows=[["머리 칸 글입니다", "7.6A 이하 운전전류"], ["a", "b"]])
+    parsed = _hwp_parsed(
+        [RawTextBlock("첫 문단입니다", 1), RawTextBlock("[표 1]\n...", 1, block_type="table")], tables=[table],
+    )
+    pages_text = [
+        {"page_number": 1, "text": "첫 문단입니다"},
+        {"page_number": 2, "text": "다른 글"},
+        {"page_number": 3, "text": "다른 글"},
+        {"page_number": 4, "text": "7.6A 이하 운전전류"},
+    ]
+
+    _repaginate(parsed, pages_text)
+
+    assert table.page_number == 1
+
+
+def test_repaginate_keeps_an_inner_table_next_to_its_outer_table():
+    # NS-AM 05.03(2026-11-20): 칸 안에서 떼어 낸 성능 표가 뒤쪽의 같은 성능 표와 맞아 12쪽으로 건너뛰었다.
+    # 안쪽 표는 바깥 표 바로 뒤에 있으므로 현재 쪽과 다음 쪽에서만 찾는다
+    rows = [["동정(우리mm)", "전환시간(sec)"], ["185", "7 이하"]]
+    inner = RawTableCandidate(page_number=1, rows=rows, title="[칸 안의 표 1] '설 명' 행의 칸에 든 표")
+    parsed = _hwp_parsed(
+        [RawTextBlock("첫 문단입니다", 1), RawTextBlock("[표 1]\n...", 1, block_type="table")], tables=[inner],
+    )
+    pages_text = [
+        {"page_number": 1, "text": "첫 문단입니다 동정 (우리 mm)"},
+        {"page_number": 2, "text": "다른 글"},
+        {"page_number": 3, "text": "다른 글"},
+        {"page_number": 4, "text": "동정(우리mm) 전환시간(sec) 185 7 이하"},
+    ]
+
+    _repaginate(parsed, pages_text)
+
+    assert inner.page_number == 1
+
+
 def test_repaginate_attaches_images_to_page_one_when_all_blocks_land_there():
     para = RawTextBlock("유일한 문단", 1)
     image = RawImageRegion(page_number=1, bbox=(0, 0, 0, 0), image_bytes=b"i")
@@ -479,6 +554,7 @@ class _Harness:
         self.qdrant = MagicMock()
         self.summary = MagicMock()
         self.metadata = MagicMock()
+        self.analysis = MagicMock()
         self.fail_job = MagicMock()
         self.settings = ("model-x", max_chars, 0, 0, strategy)
 
@@ -495,6 +571,7 @@ class _Harness:
              patch("app.services.qdrant_service.qdrant_service", self.qdrant), \
              patch("app.pipeline.tasks.summary.generate_summary", self.summary), \
              patch("app.pipeline.tasks.metadata.extract_metadata", self.metadata), \
+             patch("app.pipeline.tasks.workflow.start_auto_analysis", self.analysis), \
              patch.object(proc, "_resolve_collection_settings", return_value=self.settings):
             return proc.continue_processing.run(document_id, edited_text)
 
@@ -524,8 +601,10 @@ def test_continue_processing_happy_path_indexes_and_triggers_followups():
     assert points[0]["payload"]["page_number"] == 1
     h.qdrant.init_collection.assert_called_once()
     h.qdrant.delete_by_document.assert_called_once()
-    h.summary.delay.assert_called_once_with("d1")
-    h.metadata.delay.assert_called_once_with("d1")
+    # 분석은 컬렉션의 분석 워크플로우(없으면 표준 분석)를 따른다. 요약, 메타데이터 작업을 직접 보내지 않는다(2026-11-20)
+    h.analysis.assert_called_once_with(h.db, doc)
+    h.summary.delay.assert_not_called()
+    h.metadata.delay.assert_not_called()
 
 
 def test_continue_processing_deletes_old_vectors_before_upserting_new_ones():
@@ -560,8 +639,9 @@ def test_continue_processing_empty_document_is_indexed_with_zero_chunks():
     assert result == {"document_id": "d1", "status": "INDEXED", "chunks": 0}
     assert h.stages == ["CHUNK", "NORMALIZE"]
     h.qdrant.upsert_points.assert_not_called()
-    h.summary.delay.assert_called_once_with("d1")
-    h.metadata.delay.assert_called_once_with("d1")
+    h.analysis.assert_called_once_with(h.db, doc)
+    h.summary.delay.assert_not_called()
+    h.metadata.delay.assert_not_called()
 
 
 def test_continue_processing_drops_chunks_that_clean_to_empty():

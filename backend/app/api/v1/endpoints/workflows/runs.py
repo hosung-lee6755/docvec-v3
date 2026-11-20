@@ -25,6 +25,7 @@ from app.db.models.workflow import (
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 from app.db.session import get_db
 from app.services.audit import log_audit
+from app.services.workflow_scope import collection_project_id, ensure_fits_project
 from app.services.workflow_service import validate_graph
 
 from .access import (
@@ -57,17 +58,22 @@ async def _load_run_context(
     return run, version, workflow
 
 
-async def _check_run_target_access(db: AsyncSession, data: RunCreate, user: User) -> None:
+async def _check_run_target_access(db: AsyncSession, data: RunCreate, user: User, workflow) -> None:
     """워크플로우 편집 권한과 별개로, 실행 대상 문서/컬렉션에 대한 editor 권한을 요구한다.
     실행은 문서 상태와 분석 결과를 바꾸고 결과를 `/runs/{id}` 로 읽을 수 있게 하므로, 이 검사가
-    없으면 자기 워크플로우로 남의 문서를 실행해 파싱 텍스트를 읽을 수 있다."""
+    없으면 자기 워크플로우로 남의 문서를 실행해 파싱 텍스트를 읽을 수 있다.
+
+    프로젝트 워크플로우는 같은 프로젝트의 문서와 컬렉션에만 실행한다(2026-11-20, services/workflow_scope.py)."""
     if data.document_id:
         doc = await db.get(Document, data.document_id)
         if doc is None:
             raise HTTPException(status_code=404, detail="Document not found")
         await check_document_access(db, doc, user, min_role="editor")
+        collection_id = doc.collection_id
     else:
         await check_collection_access(db, data.collection_id, user, min_role="editor")
+        collection_id = data.collection_id
+    await ensure_fits_project(db, workflow, await collection_project_id(db, collection_id))
 
 
 async def _points_at_other_live_run(db: AsyncSession, doc: Document, run: WorkflowRun) -> bool:
@@ -137,7 +143,7 @@ async def run_workflow(
     errors = await validate_graph(db, str(data.version_id))
     if errors:
         raise HTTPException(status_code=409, detail={"message": "워크플로우 유효성 검사 실패", "errors": errors})
-    await _check_run_target_access(db, data, current_user)
+    await _check_run_target_access(db, data, current_user, workflow)
 
     if data.document_id:
         target_document_ids = [data.document_id]

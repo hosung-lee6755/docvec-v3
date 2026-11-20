@@ -442,3 +442,122 @@ def test_walk_hwp_body_records_document_order():
     hwp._walk_hwp_body(body, paragraphs, tables, order)
 
     assert order == [("p", 0), ("t", 0), ("p", 1)]
+
+
+# ------------------------------------------------- 칸 안의 표(2026-11-20, NS-AM 검사매뉴얼)
+# 예전에는 안쪽 표의 칸 글을 바깥 칸 글에 " / "로 이어 붙여 행과 열이 사라졌다. 이제 2행 2열 이상인 안쪽 표는
+# 바깥 표 바로 뒤에 따로 내고, 바깥 칸에는 "[칸 안의 표 k]" 표시를, 안쪽 표 제목에는 들어 있던 칸을 남긴다.
+
+
+def _hwp_table(*rows: str, caption: str = "") -> str:
+    head = f"<TableCaption>{_hwp_p(caption)}</TableCaption>" if caption else ""
+    body = "".join(f"<TableRow>{row}</TableRow>" for row in rows)
+    return f"<TableControl>{head}<TableBody>{body}</TableBody></TableControl>"
+
+
+def _hwp_outer_with(inner: str) -> str:
+    return _hwp_table(
+        _hwp_cell("구분") + _hwp_cell("내용"),
+        _hwp_cell("설명") + "<TableCell>" + _hwp_p("주요 부품", inner=inner) + "</TableCell>",
+    )
+
+
+def test_walk_hwp_body_separates_an_inner_table_and_marks_its_cell():
+    inner = _hwp_table(_hwp_cell("부품명") + _hwp_cell("재료"), _hwp_cell("상체") + _hwp_cell("GC 200"))
+    paragraphs, tables, order = [], [], []
+    ctx = hwp._HwpxContext()
+
+    hwp._walk_hwp_body(_hwp_xml(_hwp_outer_with(inner)), paragraphs, tables, order, ctx)
+
+    assert tables == [
+        [["구분", "내용"], ["설명", "주요 부품 / [칸 안의 표 1]"]],
+        [["부품명", "재료"], ["상체", "GC 200"]],
+    ]
+    assert order == [("t", 0), ("t", 1)]
+    assert ctx.titles == {1: "[칸 안의 표 1] '설명' 행 '내용' 열 칸에 든 표"}
+
+
+def test_walk_hwp_body_uses_the_inner_caption_in_the_inner_title():
+    inner = _hwp_table(
+        _hwp_cell("부품명") + _hwp_cell("재료"), _hwp_cell("상체") + _hwp_cell("GC 200"), caption="[표 2] 재질",
+    )
+    ctx = hwp._HwpxContext()
+
+    hwp._walk_hwp_body(_hwp_xml(_hwp_outer_with(inner)), [], [], [], ctx)
+
+    assert ctx.titles == {1: "[칸 안의 표 1] [표 2] 재질 ('설명' 행 '내용' 열 칸에 든 표)"}
+
+
+def test_walk_hwp_body_emits_a_table_inside_an_inner_table_after_it():
+    deepest = _hwp_table(_hwp_cell("x") + _hwp_cell("y"), _hwp_cell("1") + _hwp_cell("2"))
+    inner = _hwp_table(
+        _hwp_cell("부품명") + _hwp_cell("재료"),
+        _hwp_cell("상체") + "<TableCell>" + _hwp_p("GC 200", inner=deepest) + "</TableCell>",
+    )
+    tables, order = [], []
+
+    hwp._walk_hwp_body(_hwp_xml(_hwp_outer_with(inner)), [], tables, order, hwp._HwpxContext())
+
+    assert [t[0] for t in tables] == [["구분", "내용"], ["부품명", "재료"], ["x", "y"]]
+    assert tables[1][1] == ["상체", "GC 200 / [칸 안의 표 1]"]
+    assert order == [("t", 0), ("t", 1), ("t", 2)]
+
+
+def test_walk_hwpx_separates_an_inner_table_and_marks_its_cell():
+    inner = _tbl(["부품명", "재료"], ["상체", "GC 200"])
+    outer = (
+        f"<hp:tbl><hp:tr><hp:tc>{_p('구분')}</hp:tc><hp:tc>{_p('내용')}</hp:tc></hp:tr>"
+        f"<hp:tr><hp:tc>{_p('설명')}</hp:tc><hp:tc><hp:subList>"
+        f"<hp:p><hp:run><hp:t>주요 부품</hp:t>{inner}</hp:run></hp:p>"
+        "</hp:subList></hp:tc></hp:tr></hp:tbl>"
+    )
+    paragraphs, tables, order = [], [], []
+    ctx = hwp._HwpxContext()
+
+    hwp._walk_hwpx(ET.fromstring(_hp(outer)), paragraphs, tables, order, ctx)
+
+    assert tables == [
+        [["구분", "내용"], ["설명", "주요 부품 / [칸 안의 표 1]"]],
+        [["부품명", "재료"], ["상체", "GC 200"]],
+    ]
+    assert order == [("t", 0), ("t", 1)]
+    assert ctx.titles == {1: "[칸 안의 표 1] '설명' 행 '내용' 열 칸에 든 표"}
+
+
+def test_hwpx_one_row_inner_box_stays_in_the_cell_text():
+    outer = (
+        "<hp:tbl><hp:tr><hp:tc>"
+        f"<hp:p><hp:run><hp:t>누출금지 정보</hp:t>{_tbl(['① 내부 IP', '② 구성도'])}</hp:run></hp:p>"
+        "</hp:tc></hp:tr></hp:tbl>"
+    )
+    tables = []
+
+    hwp._walk_hwpx(ET.fromstring(_hp(outer)), [], tables)
+
+    assert tables == [[["누출금지 정보 / ① 내부 IP / ② 구성도"]]]
+
+
+def test_ordered_text_blocks_put_the_inner_title_on_the_line_after_the_table_number():
+    # 구조 분석은 "[표 N]"만 있는 줄을 표의 시작으로 본다. 제목을 같은 줄에 두면 문단이 된다
+    from app.pipeline.blocks.structure_blocks import _classify
+
+    blocks, candidates = hwp._ordered_text_blocks(
+        [], [[["a", "b"], ["c", "d"]]], [("t", 0)], None, {0: "[칸 안의 표 1] 제목"},
+    )
+
+    assert blocks[0].text == "[표 1]\n[칸 안의 표 1] 제목\na | b\nc | d"
+    assert _classify(blocks[0].text.splitlines()[0], None, None) == ("TABLE", None)
+    assert candidates[0].title == "[칸 안의 표 1] 제목"
+
+
+def test_walk_hwp_body_drops_a_single_cell_frame_that_only_holds_a_table():
+    inner = _hwp_table(_hwp_cell("구 분") + _hwp_cell("10㏊미만"), _hwp_cell("시료채취량") + _hwp_cell("2건"))
+    frame = _hwp_table("<TableCell>" + _hwp_p("", inner=inner) + "</TableCell>")
+    tables, order = [], []
+    ctx = hwp._HwpxContext()
+
+    hwp._walk_hwp_body(_hwp_xml(frame), [], tables, order, ctx)
+
+    assert tables == [[["구 분", "10㏊미만"], ["시료채취량", "2건"]]]
+    assert order == [("t", 0)]
+    assert ctx.titles == {}

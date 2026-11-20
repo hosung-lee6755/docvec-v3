@@ -482,28 +482,59 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
         db.close()
 
 
-def _dispatch_default_analysis(document_id: str) -> None:
-    """기본 분석 워크플로우가 없는 컬렉션의 문서에 요약과 메타데이터(키워드, 분류) 작업을 보낸다.
-    예전 고정 파이프라인은 색인 뒤 두 작업을 보냈지만 워크플로우 경로는 보내지 않아, 분석 워크플로우를
-    지정하지 않은 컬렉션은 요약, 추천 태그, 분류가 계속 비어 있었다(2026-11-16 점검)."""
-    from app.pipeline.tasks.metadata import extract_metadata
-    from app.pipeline.tasks.summary import generate_summary
+# 시스템 표준 분석 워크플로우의 고정 ID(마이그레이션 b9d1f3a5c7e9 가 만든다). 프로젝트가 없는 분석 워크플로우를
+# 모두 표준으로 보면 프로젝트 없이 만든 다른 워크플로우를 잘못 고를 수 있어 ID 로 찾는다
+STANDARD_ANALYSIS_WORKFLOW_ID = "00000000-0000-0000-0000-0000000000e1"
 
-    generate_summary.delay(document_id)
-    extract_metadata.delay(document_id)
+
+def _resolve_analysis_version(db, collection):
+    """전처리가 끝난 문서를 분석할 워크플로우 버전. 컬렉션의 기본 분석 워크플로우(고정 버전 또는 최신 게시 버전)가
+    먼저이고, 없으면 시스템 표준 분석 워크플로우(STANDARD_ANALYSIS_WORKFLOW_ID)의 최신 게시 버전이다. 업로드가 전처리
+    워크플로우를 고르는 순서(_resolve_preprocess_version_id)와 같다.
+
+    예전(2026-11-16~11-20)에는 분석 워크플로우가 없으면 워크플로우 밖에서 요약·메타데이터 작업을 직접 보냈다.
+    처리 이력에 남지 않고 화면에서 고칠 수도 없었으며, 컬렉션 화면의 "지정하면 요약·키워드가 생긴다"는 안내와도
+    어긋났다(사용자 검토). 표준 분석 워크플로우가 같은 일(요약, 키워드, 분류, 저장)을 한다."""
+    from app.db.models.workflow import WorkflowDefinition, WorkflowVersion
+
+    if collection is not None and collection.default_analysis_workflow_id:
+        query = db.query(WorkflowVersion).filter(WorkflowVersion.workflow_id == collection.default_analysis_workflow_id)
+        if collection.default_analysis_workflow_version is not None:
+            return query.filter(
+                WorkflowVersion.version_number == collection.default_analysis_workflow_version
+            ).first()
+        return query.filter(WorkflowVersion.published_at.isnot(None)).order_by(
+            WorkflowVersion.version_number.desc()
+        ).first()
+
+    standard = db.get(WorkflowDefinition, STANDARD_ANALYSIS_WORKFLOW_ID)
+    if standard is None:
+        logger.warning("표준 분석 워크플로우가 없어 분석을 건너뜁니다")
+        return None
+    return db.query(WorkflowVersion).filter(
+        WorkflowVersion.workflow_id == standard.id, WorkflowVersion.published_at.isnot(None)
+    ).order_by(WorkflowVersion.version_number.desc()).first()
+
+
+def _forget_summary_index(document_id: str) -> None:
+    """요약을 비운 문서를 요약 검색에서 뺀다. 색인 서버가 잠시 안 돼도 분석은 이어 간다."""
+    from app.services import summary_index
+
+    try:
+        summary_index.delete_document_summary(document_id)
+    except Exception:
+        logger.exception("summary index delete failed", extra={"document_id": document_id})
 
 
 def _maybe_trigger_analysis(db, run) -> None:
-    """A PREPROCESS run that just completed on a document in a collection with
-    Collection.default_analysis_workflow_id set kicks off that ANALYSIS workflow
-    automatically against the same document (컬렉션 생성/수정 시 지정한 기본
-    분석 워크플로우). Guarded to only fire off a
+    """A PREPROCESS run that just completed kicks off an ANALYSIS workflow
+    automatically against the same document: the collection's default analysis
+    workflow (컬렉션 생성/수정 시 지정한 기본 분석 워크플로우), or the system
+    standard analysis workflow when none is set (_resolve_analysis_version). Guarded to only fire off a
     PREPROCESS run's completion so an ANALYSIS run's own completion can never
     recursively trigger another analysis run."""
-    from app.db.models.collection import Collection
     from app.db.models.document import Document
-    from app.db.models.workflow import WorkflowBlockInstance, WorkflowDefinition, WorkflowEdge, WorkflowVersion
-    from app.db.models.workflow_run import WorkflowRun
+    from app.db.models.workflow import WorkflowDefinition, WorkflowVersion
 
     if not run.document_id:
         return
@@ -515,31 +546,37 @@ def _maybe_trigger_analysis(db, run) -> None:
     document = db.get(Document, run.document_id)
     if document is None:
         return
-    collection = db.get(Collection, document.collection_id) if document.collection_id else None
-    if collection is None or not collection.default_analysis_workflow_id:
-        _dispatch_default_analysis(str(document.id))
-        return
+    start_auto_analysis(db, document, dictionary_version=run.dictionary_version)
 
-    analysis_version_query = db.query(WorkflowVersion).filter(
-        WorkflowVersion.workflow_id == collection.default_analysis_workflow_id
-    )
-    if collection.default_analysis_workflow_version is not None:
-        analysis_version = analysis_version_query.filter(
-            WorkflowVersion.version_number == collection.default_analysis_workflow_version
-        ).first()
-    else:
-        analysis_version = analysis_version_query.filter(
-            WorkflowVersion.published_at.isnot(None)
-        ).order_by(WorkflowVersion.version_number.desc()).first()
+
+def start_auto_analysis(db, document, dictionary_version=None) -> None:
+    """문서를 컬렉션의 기본 분석 워크플로우(없으면 시스템 표준 분석 워크플로우)로 분석하는 AUTO_ANALYSIS 실행을
+    만들고 시작한다. 전처리 실행이 끝났을 때(_maybe_trigger_analysis)와, 워크플로우 밖의 레거시 처리
+    (process.continue_processing: 컬렉션의 청크와 임베딩만 다시 만들기, 검토 대기 문서 진행, 버전 복원)가
+    끝났을 때 함께 쓴다. 예전에는 레거시 처리가 요약, 메타데이터 작업을 직접 보내 사용자 워크플로우를
+    따르지 않았다(2026-11-20)."""
+    from app.db.models.collection import Collection
+    from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge
+    from app.db.models.workflow_run import WorkflowRun
+    from app.pipeline.analysis_outputs import SUMMARY, analysis_outputs, clear_unproduced_fields
+
+    collection = db.get(Collection, document.collection_id) if document.collection_id else None
+    analysis_version = _resolve_analysis_version(db, collection)
     if analysis_version is None:
         return
 
     analysis_run = WorkflowRun(
         id=uuid4(),
-        version_id=analysis_version.id, document_id=document.id, collection_id=collection.id,
-        status="QUEUED", trigger="AUTO_ANALYSIS", dictionary_version=run.dictionary_version,
+        version_id=analysis_version.id, document_id=document.id,
+        collection_id=collection.id if collection is not None else None,
+        status="QUEUED", trigger="AUTO_ANALYSIS", dictionary_version=dictionary_version,
     )
     db.add(analysis_run)
+    blocks = db.query(WorkflowBlockInstance).filter(
+        WorkflowBlockInstance.version_id == analysis_version.id
+    ).all()
+    # 사용자 워크플로우를 그대로 따른다(2026-11-20). 만들지 않는 요약, 태그, 분류는 예전 실행이 남긴 값을 비운다
+    cleared = clear_unproduced_fields(document, analysis_outputs((b.block_type, b.config) for b in blocks))
     # documents.active_run_id ↔ workflow_runs.document_id 는 외래키가 순환이라, run을
     # 먼저 DB에 내보내지 않으면 작업 단위가 documents UPDATE를 workflow_runs INSERT보다
     # 앞세워 fk_documents_active_run_id 위반이 난다(컬렉션에 기본 분석 워크플로우를
@@ -560,10 +597,9 @@ def _maybe_trigger_analysis(db, run) -> None:
     document.active_run_id = analysis_run.id
     db.commit()
     db.refresh(analysis_run)
+    if SUMMARY in cleared:
+        _forget_summary_index(str(document.id))
 
-    blocks = db.query(WorkflowBlockInstance).filter(
-        WorkflowBlockInstance.version_id == analysis_version.id
-    ).all()
     edges = db.query(WorkflowEdge).filter(WorkflowEdge.version_id == analysis_version.id).all()
     has_incoming = {e.to_block_id for e in edges}
     entry_blocks = [b for b in blocks if b.id not in has_incoming]

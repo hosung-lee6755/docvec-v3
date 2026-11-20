@@ -52,6 +52,8 @@ export default function DocumentSidebar({
   const isUserEdited = (field: MetadataResettableField) => !!doc.user_edited_fields?.includes(field)
   const resetField = (field: MetadataResettableField) => updateMetadata.mutate({ documentId: doc.id, reset_fields: [field] })
   const showCategoryHint = doc.metadata_status === 'PENDING' && !doc.category
+  // 분석 워크플로우에 태그, 분류 단계가 없어 비운 경우(SKIPPED, backend/app/pipeline/analysis_outputs.py)
+  const showCategorySkipped = doc.metadata_status === 'SKIPPED' && !doc.category
 
   return (
     <div>
@@ -100,6 +102,11 @@ export default function DocumentSidebar({
               {showCategoryHint && (
                 <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
                   자동 분석이 실행되지 않아 비어 있습니다. 직접 입력할 수 있습니다.
+                </span>
+              )}
+              {showCategorySkipped && (
+                <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                  이 컬렉션의 분석 워크플로우에는 분류 단계가 없어 비어 있습니다. 직접 입력할 수 있습니다.
                 </span>
               )}
             </>
@@ -245,6 +252,11 @@ export default function DocumentSidebar({
           {!isAnalyzing && (doc.summary_status === 'PENDING' || doc.summary_status === 'GENERATING') && (
             <p style={{ color: 'var(--color-text-muted)', fontSize: 13, margin: 0 }}>
               생성된 요약이 없습니다.
+            </p>
+          )}
+          {doc.summary_status === 'SKIPPED' && (
+            <p style={{ color: 'var(--color-text-muted)', fontSize: 13, margin: 0 }}>
+              이 컬렉션의 분석 워크플로우에는 요약 단계가 없어 요약을 만들지 않았습니다.
             </p>
           )}
           {doc.summary_status === 'FAILED' && (

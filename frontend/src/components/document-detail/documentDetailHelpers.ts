@@ -49,6 +49,8 @@ export function qualityEvidenceText(category: string, metrics: QualityMetrics): 
 
 export const RUN_TRIGGER_LABELS: Record<string, string> = {
   UPLOAD: '업로드', MANUAL: '수동 실행', REPROCESS: '재처리', COLLECTION_REPROCESS: '컬렉션 재처리',
+  // 전처리가 끝난 뒤 컬렉션의 분석 워크플로우(없으면 표준 분석)로 도는 실행
+  AUTO_ANALYSIS: '자동 분석',
 }
 
 // 실행 상태를 화면에 보일 한글 이름. 모르는 값은 원래 값을 그대로 보인다.

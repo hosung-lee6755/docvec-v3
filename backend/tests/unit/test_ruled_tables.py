@@ -51,9 +51,11 @@ def test_reads_the_outer_table_with_missing_side_borders_and_keeps_the_inner_tab
     outer = tables[0]
     assert outer.rows[0] == ["No", "Criteria", "Basis", "Docs"]
     assert [row[0] for row in outer.rows[1:]] == ["1", "2"]
-    assert outer.rows[2][1] == "Meter box rule"  # 안쪽 표 글은 바깥 칸에 섞지 않는다
+    # 안쪽 표 글은 바깥 칸에 섞지 않고, 안쪽 표가 있던 칸에는 표시만 남긴다(2026-11-20)
+    assert outer.rows[2][1] == "Meter box rule [칸 안의 표 1]"
     assert len(outer.nested) == 1
     assert outer.nested[0].rows == [["DN", "Thickness"], ["20", "25mm"]]
+    assert outer.nested[0].title == "[칸 안의 표 1] '2' 행 'Criteria' 열 칸에 든 표"
 
 
 def test_matches_a_docling_table_by_position(nested_pdf):
@@ -140,3 +142,66 @@ def test_year_column_next_to_prose_folded_into_the_same_line_count_is_not_split(
 
     raw = [["연도", "내용"], ["2023\n2024\n2025", "설비 교체 공사를 마치고 시운전을\n거쳐 준공 검사를 받은 뒤 운영을\n시작했으며 점검 주기를 정했다"]]
     assert _clean_rows(raw)[1][0] == "2023\n2024\n2025"
+
+
+@pytest.fixture
+def merged_header_pdf(tmp_path):
+    """KR S-03010 표 2 모양: 둘째 머리 줄이 12pt 로 낮고, "NS" 칸이 세 열에 걸치며 그 아래가 세 칸으로 나뉜다.
+    "Item"·"MJ"·"Note"는 두 머리 줄에 걸친다. 본문 첫 줄의 NS 값은 세 열을 합친 칸이다."""
+    doc = fitz.open()
+    page = doc.new_page(width=600, height=800)
+    xs = [60, 120, 200, 280, 360, 440, 520]
+    for y in (100, 124, 160, 200):
+        _line(page, xs[0], y, xs[-1], y)
+    _line(page, 120, 112, 360, 112)  # NS 아래 둘째 머리 줄
+    for x in (60, 120, 360, 440, 520):
+        _line(page, x, 100, x, 200)
+    for x in (200, 280):
+        _line(page, x, 112, x, 124)  # 12pt 짧은 칸 구분선
+        _line(page, x, 160, x, 200)
+    texts = [
+        (65, 115, "Item"), (125, 109, "NS"), (365, 115, "MJ"), (445, 115, "Note"),
+        (125, 121, "Friction"), (205, 121, "Integral"), (285, 121, "Magnetic"),
+        (65, 145, "Power"), (125, 145, "220V"), (365, 145, "380V"),
+        (65, 185, "Current"), (125, 185, "3.8A"), (205, 185, "4.5A"), (285, 185, "4.2A"), (365, 185, "3.0A"),
+    ]
+    for x, y, text in texts:
+        page.insert_text(fitz.Point(x, y), text, fontsize=7)
+    path = tmp_path / "merged_header.pdf"
+    doc.save(path)
+    return path
+
+
+def test_short_cell_dividers_and_two_row_headers_are_read_per_column(merged_header_pdf):
+    # KR S-03010 표 2(2026-11-20): 12.7pt 짧은 구분선을 버려 "마찰클러치형 클러치일체형 전자클러치형"이 한 칸이 됐고,
+    # 윗줄 "NS형"과 아랫줄 칸이 따로 놀았다
+    with pdfplumber.open(merged_header_pdf) as pdf:
+        table = find_ruled_tables(pdf.pages[0])[0]
+
+    assert table.rows[0] == ["Item", "NS Friction", "NS Integral", "NS Magnetic", "MJ", "Note"]
+    # 세 열을 합친 칸의 값은 세 종류 모두의 값이다(원본 표에서 NS형 세 칸에 걸친 "1Φ220V AC")
+    assert table.rows[1] == ["Power", "220V", "220V", "220V", "380V", ""]
+    assert table.rows[2] == ["Current", "3.8A", "4.5A", "4.2A", "3.0A", ""]
+    assert {"row": 1, "col": 1, "row_span": 1, "col_span": 3} in table.spans
+
+
+def test_vertically_merged_cells_repeat_on_each_row(tmp_path):
+    doc = fitz.open()
+    page = doc.new_page(width=600, height=800)
+    for y in (100, 130, 190):
+        _line(page, 60, y, 400, y)
+    _line(page, 160, 160, 400, 160)  # "Gravel" 칸은 두 줄에 걸친다
+    for x in (60, 160, 280, 400):
+        _line(page, x, 100, x, 190)
+    for x, y, text in [(65, 120, "Bed"), (165, 120, "Turnout"), (285, 120, "Gap"),
+                       (65, 175, "Gravel"), (165, 150, "F8-F15"), (285, 150, "1350"),
+                       (165, 180, "F18-F45"), (285, 180, "1300")]:
+        page.insert_text(fitz.Point(x, y), text, fontsize=8)
+    path = tmp_path / "vertical.pdf"
+    doc.save(path)
+
+    with pdfplumber.open(path) as pdf:
+        table = find_ruled_tables(pdf.pages[0])[0]
+
+    assert [row[0] for row in table.rows] == ["Bed", "Gravel", "Gravel"]
+    assert {"row": 1, "col": 0, "row_span": 2, "col_span": 1} in table.spans

@@ -342,10 +342,10 @@ def test_run_elements_path_keeps_toc_when_enabled():
 def test_block_metadata():
     block = sb.StructureAnalyzeBlock()
     assert block.block_type == "structure_analyze"
-    assert block.block_version == "1.19.0"
+    assert block.block_version == "1.20.0"
     assert block.category == "구조·보호"
     assert block.config_schema is sb.StructureAnalyzeConfig
-    assert sb.StructureAnalyzeConfig().heading_max_level == 3
+    assert sb.StructureAnalyzeConfig().heading_max_level == 5
 
 
 # ---- 쪽 정보가 없는 경로의 노드 쪽 번호(2026-11-16) ----

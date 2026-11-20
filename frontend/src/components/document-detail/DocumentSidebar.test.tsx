@@ -50,7 +50,7 @@ const createDocument = (overrides: Partial<Document> = {}): Document => ({
   ...overrides,
 })
 
-const renderSidebar = (overrides: Partial<Document> = {}) => {
+const renderSidebar = (overrides: Partial<Document> = {}, propOverrides: Partial<SidebarProps> = {}) => {
   const updateMetadata = { mutate: vi.fn() }
   const props: SidebarProps = {
     doc: createDocument(overrides),
@@ -67,6 +67,7 @@ const renderSidebar = (overrides: Partial<Document> = {}) => {
     tagInput: '',
     onTagInputChange: vi.fn(),
     onActiveTabChange: vi.fn(),
+    ...propOverrides,
   }
   render(<DocumentSidebar {...props} />)
   return { updateMetadata }
@@ -202,5 +203,22 @@ describe('분류 PENDING 안내', () => {
   it('자동 분석이 끝난 상태에서 분류가 비어 있어도 안내를 보여 주지 않는다', () => {
     renderSidebar({ metadata_status: 'DONE', category: null })
     expect(screen.queryByText(/자동 분석이 실행되지 않아/)).not.toBeInTheDocument()
+  })
+})
+
+describe('분석 워크플로우가 만들지 않은 항목(2026-11-20)', () => {
+  it('요약 단계가 없는 워크플로우로 분석한 문서는 그 이유를 보여 준다', () => {
+    renderSidebar({ summary_status: 'SKIPPED', summary: null }, { isReady: true })
+    expect(
+      screen.getByText('이 컬렉션의 분석 워크플로우에는 요약 단계가 없어 요약을 만들지 않았습니다.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('생성된 요약이 없습니다.')).not.toBeInTheDocument()
+  })
+
+  it('태그와 분류 단계가 모두 없으면 빈 분류에 그 이유를 보여 준다', () => {
+    renderSidebar({ metadata_status: 'SKIPPED', category: null })
+    expect(
+      screen.getByText('이 컬렉션의 분석 워크플로우에는 분류 단계가 없어 비어 있습니다. 직접 입력할 수 있습니다.'),
+    ).toBeInTheDocument()
   })
 })

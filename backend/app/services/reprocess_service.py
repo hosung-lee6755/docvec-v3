@@ -20,6 +20,12 @@ from app.db.models.document_node import DocumentNode
 from app.db.models.workflow import WorkflowBlockInstance, WorkflowEdge, WorkflowVersion
 from app.db.models.workflow_run import WorkflowRun, WorkflowRunStep
 from app.services.dictionary_service import current_dictionary_version
+from app.services.workflow_scope import (
+    collection_project_id,
+    default_preprocess_workflow_id,
+    fits_project,
+    misfit_message,
+)
 
 
 class ReprocessError(ValueError):
@@ -211,6 +217,10 @@ async def start_partial_reprocess(
 ) -> WorkflowRun:
     computed = await compute_reprocess_impact(db, doc, start_block, reason=reason, parent_run=parent_run)
     parent_run = computed.parent_run
+    misfit = await _workflow_misfit(db, doc, parent_run.version_id)
+    if misfit:
+        # 블록부터 재처리는 예전 실행의 앞 단계를 그대로 이어 쓰므로 예전 워크플로우를 바꿀 수 없다
+        raise ReprocessError(f"{misfit}. 처음부터 다시 처리하면 지금 컬렉션의 워크플로우로 처리합니다.")
     dictionary_version = await current_dictionary_version(db)
 
     new_run = WorkflowRun(
@@ -327,6 +337,38 @@ async def resolve_latest_version(db: AsyncSession, parent_run: WorkflowRun) -> W
     return version
 
 
+async def _workflow_misfit(db: AsyncSession, doc: Document, version_id) -> str | None:
+    """이 버전의 워크플로우를 문서의 지금 컬렉션에서 쓸 수 없으면 그 이유. 쓸 수 있으면 None.
+    프로젝트 워크플로우는 같은 프로젝트의 컬렉션과 문서에만 쓴다(services/workflow_scope.py)."""
+    from app.db.models.workflow import WorkflowDefinition
+
+    version = await db.get(WorkflowVersion, version_id)
+    workflow = await db.get(WorkflowDefinition, version.workflow_id) if version is not None else None
+    if workflow is None:
+        return None
+    project_id = await collection_project_id(db, doc.collection_id)
+    if fits_project(workflow.project_id, project_id):
+        return None
+    return await misfit_message(db, workflow, project_id)
+
+
+async def _collection_preprocess_version(db: AsyncSession, doc: Document) -> WorkflowVersion:
+    """문서의 지금 컬렉션이 쓰는 전처리 워크플로우 버전(업로드와 같은 기준)."""
+    collection = await db.get(Collection, doc.collection_id) if doc.collection_id else None
+    workflow_id, pinned = await default_preprocess_workflow_id(db, collection)
+    if workflow_id is None:
+        raise ReprocessError("표준 전처리 워크플로우가 설정되어 있지 않습니다.")
+    query = select(WorkflowVersion).where(WorkflowVersion.workflow_id == workflow_id)
+    if pinned is not None:
+        query = query.where(WorkflowVersion.version_number == pinned)
+    else:
+        query = query.where(WorkflowVersion.published_at.is_not(None))
+    version = await db.scalar(query.order_by(WorkflowVersion.version_number.desc()).limit(1))
+    if version is None:
+        raise ReprocessError("이 컬렉션의 전처리 워크플로우에 게시된 버전이 없습니다.")
+    return version
+
+
 async def start_reprocess_on_latest_version(
     db: AsyncSession, doc: Document, reason: str | None,
     timeout_overrides: dict[str, int] | None = None,
@@ -351,7 +393,11 @@ async def start_reprocess_on_latest_version(
 
     # 처리 대상은 active run 이 아니라 문서의 전처리 워크플로우다(active run 이 분석 run 일 수 있다).
     base_run = await find_preprocess_run(db, doc) or parent_run
-    version = await resolve_latest_version(db, base_run)
+    if await _workflow_misfit(db, doc, base_run.version_id):
+        # 다른 프로젝트의 컬렉션으로 옮긴 문서는 지금 컬렉션의 워크플로우로 처리한다(2026-11-20)
+        version = await _collection_preprocess_version(db, doc)
+    else:
+        version = await resolve_latest_version(db, base_run)
     dictionary_version = await current_dictionary_version(db)
 
     blocks = (
@@ -367,7 +413,8 @@ async def start_reprocess_on_latest_version(
         id=uuid4(),
         version_id=version.id,
         document_id=doc.id,
-        collection_id=parent_run.collection_id,
+        # 문서가 지금 속한 컬렉션. 문서를 옮겼으면 예전 실행의 컬렉션과 다르다
+        collection_id=doc.collection_id,
         status="QUEUED",
         trigger="REPROCESS",
         parent_run_id=parent_run.id,

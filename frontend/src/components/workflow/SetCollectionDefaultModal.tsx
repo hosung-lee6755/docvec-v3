@@ -2,14 +2,15 @@ import { useMemo, useState } from 'react'
 import { useCollections, useUpdateCollection } from '../../hooks/useCollections'
 import { useWorkflowVersions } from '../../hooks/useWorkflows'
 import { Button, ErrorAlert, Modal, Select } from '../ui'
+import { AnalysisOutputsNotice } from '../collections/AnalysisOutputsNotice'
 import '../../styles/screens/pipeline.css'
 
 interface SetCollectionDefaultModalProps {
   projectId: string
   workflowId: string
   workflowName: string
-  // ANALYSIS는 시스템 기본값 개념이 없다(표준 워크플로우는 PREPROCESS 전용) —
-  // isSystemDefault는 kind==='PREPROCESS'일 때만 의미를 가진다.
+  // 전처리와 분석 모두 시스템 표준 워크플로우가 있다(분석은 2026-11-20부터). 표준 워크플로우를 지정하는 것은
+  // 컬렉션의 지정을 비우는 것과 같다(지정이 없으면 표준을 쓴다).
   kind: 'PREPROCESS' | 'ANALYSIS'
   isSystemDefault?: boolean
   onClose: () => void
@@ -35,7 +36,7 @@ export default function SetCollectionDefaultModal({
   const isCurrentDefault = (collection: { default_workflow_id: string | null; default_analysis_workflow_id: string | null }) =>
     kind === 'PREPROCESS'
       ? (isSystemDefault ? !collection.default_workflow_id : collection.default_workflow_id === workflowId)
-      : collection.default_analysis_workflow_id === workflowId
+      : (isSystemDefault ? !collection.default_analysis_workflow_id : collection.default_analysis_workflow_id === workflowId)
 
   const handleApply = () => {
     if (!selectedId) return
@@ -44,7 +45,9 @@ export default function SetCollectionDefaultModal({
     const pinnedVersion = versionMode === 'pinned' ? versionNumber : null
     if (kind === 'ANALYSIS') {
       updateCollection.mutate(
-        { id: selectedId, name: collection.name, default_analysis_workflow_id: workflowId, default_analysis_workflow_version: pinnedVersion },
+        isSystemDefault
+          ? { id: selectedId, name: collection.name, clear_default_analysis_workflow: true }
+          : { id: selectedId, name: collection.name, default_analysis_workflow_id: workflowId, default_analysis_workflow_version: pinnedVersion },
         { onSuccess: onClose },
       )
       return
@@ -122,6 +125,10 @@ export default function SetCollectionDefaultModal({
               </Select>
             )}
           </fieldset>
+        )}
+
+        {kind === 'ANALYSIS' && !isSystemDefault && (
+          <AnalysisOutputsNotice workflowId={workflowId} pinnedVersion={versionMode === 'pinned' ? versionNumber : null} />
         )}
 
         {isLoading && <p className="wf-muted">불러오는 중...</p>}

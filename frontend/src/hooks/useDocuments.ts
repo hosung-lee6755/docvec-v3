@@ -512,8 +512,17 @@ export interface DocumentPageText {
   text: string
 }
 
+export interface DocumentPagesTextResult {
+  document_id: string
+  pages: DocumentPageText[]
+  // 원본(미리보기) PDF 의 전체 쪽 수. 글이 없는 쪽은 pages 에 없어도 여기까지 넘길 수 있다
+  total_pages?: number
+  // pages 가 원본 미리보기와 같은 쪽 번호로 나뉘었는지. HWP·DOCX 는 미리보기 쪽에 맞춰 자른 결과다
+  synced?: boolean
+}
+
 export function useDocumentPagesText(id: string, enabled: boolean) {
-  return useQuery<{ document_id: string; pages: DocumentPageText[] }>({
+  return useQuery<DocumentPagesTextResult>({
     queryKey: ['documents', id, 'pages-text'],
     queryFn: async () => {
       const { data } = await apiClient.get(`/documents/${id}/pages-text`)

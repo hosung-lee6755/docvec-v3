@@ -278,3 +278,29 @@ def test_numbered_chapters_nest_under_commentary_containers():
     assert level["해설 1. 일반사항"] == level["해설 2. 종류"] == 1
     assert level["1. 전기식"] == level["2. 기계식"] == level["1. 개요"] == 2
     assert level["1.1 NS형"] == 3
+
+
+def test_fourth_number_depth_gets_its_own_level_when_max_level_is_five():
+    # 상한 3일 때는 "해설 2. > 1. > 1.1 > 1.1.2"의 1.1.2가 1.1과 같은 3단계였다
+    texts = ["1. 용어", "2. 일반사항", "2.1 개요", "2.1.1 구성", "해설 2. 종류", "1. 전기식", "1.1 NS형",
+             "1.1.1 구조", "1.1.2 클러치", "2. 기계식"]
+    blocks, elements, ids = _same_size_blocks(texts)
+
+    out = refine_element_blocks(blocks, elements, max_level=5, font_sizes=dict.fromkeys(ids, 10.0))
+
+    level = {b[4]: b[1] for b in out}
+    assert level["2. 일반사항"] == 1 and level["2.1 개요"] == 2 and level["2.1.1 구성"] == 3
+    assert level["해설 2. 종류"] == 1 and level["1. 전기식"] == 2 and level["1.1 NS형"] == 3
+    assert level["1.1.1 구조"] == level["1.1.2 클러치"] == 4
+
+
+def test_font_size_tiers_stay_at_three_when_max_level_is_five():
+    # 상한을 5로 올리자 표지의 드문 큰 글자가 1·2단계를 차지해 장 제목이 3~4단계로 밀렸다(기계설비 매뉴얼)
+    texts = ["표지 제목", "부제", "제1장 총칙", "제2장 설비", "가. 일반", "나. 기준", "다. 시험"]
+    blocks, elements, ids = _same_size_blocks(texts)
+    sizes = dict(zip(ids, [30.0, 20.0, 16.0, 16.0, 12.0, 12.0, 12.0]))
+
+    three = {b[4]: b[1] for b in refine_element_blocks(blocks, elements, max_level=3, font_sizes=sizes)}
+    five = {b[4]: b[1] for b in refine_element_blocks(blocks, elements, max_level=5, font_sizes=sizes)}
+
+    assert five == three

@@ -134,6 +134,10 @@ export const BLOCK_META: Record<string, BlockMeta> = {
         key: 'save_to_document', label: '결과를 문서에 저장', type: 'boolean', default: true,
         help: '요약·키워드 등을 대상 문서에 반영합니다. 끄더라도 실행 기록/JSON 내보내기에는 항상 남습니다.',
       },
+      {
+        key: 'category_as_tag', label: '분류를 추천 태그에도 넣기', type: 'boolean', default: true,
+        help: '분류 블록이 정한 분류를 추천 태그 목록에도 함께 넣습니다. 표준 분석 워크플로우는 넣지 않습니다.',
+      },
     ],
   },
 

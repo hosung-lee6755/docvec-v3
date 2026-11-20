@@ -221,3 +221,148 @@ async def test_deep_search_steps_hide_documents_the_admin_cannot_view(world):
     assert docs[0]["filename"] == "pub.txt" and docs[1] == {"document_id": None, "filename": None, "hidden": True}
     assert "conf.txt" not in str(detail)
     assert {i["id"]: i["mode"] for i in listed["items"]}[str(trace.id)] == "deep"
+
+
+# ---- 개선 루프(2026-11-20): 관리자가 원인을 표시하고 질문을 골든 쿼리로 등록한다 ----
+
+async def _as_collection_editor(w):
+    from app.db.models.collection_member import CollectionMember
+
+    w["db"].add(CollectionMember(
+        collection_id=str(w["col"].id), user_id=str(w["admin"].id), role="editor", invited_by=str(w["owner"].id),
+    ))
+    await w["db"].commit()
+
+
+async def test_admin_marks_cause_and_it_shows_in_list_and_detail(world):
+    result = await traces_api.set_answer_trace_review(
+        world["main"].id, traces_api.TraceReviewUpdate(cause="retrieval"),
+        db=world["db"], current_user=world["admin"],
+    )
+    assert result["review_cause"] == "retrieval"
+
+    detail = await traces_api.get_answer_trace(world["main"].id, db=world["db"], current_user=world["admin"])
+    assert (detail["review_cause"], detail["reviewed_by_name"]) == ("retrieval", "admin")
+    assert detail["reviewed_at"] is not None
+
+    window = dict(from_date=_PAST - timedelta(days=1), to_date=_PAST + timedelta(days=30))
+    marked = await _list(world, cause="retrieval", **window)
+    assert [i["id"] for i in marked["items"]] == [str(world["main"].id)]
+    assert marked["items"][0]["review_cause"] == "retrieval"
+    unmarked = await _list(world, cause="unreviewed", **window)
+    assert [i["id"] for i in unmarked["items"]] == [str(world["other"].id)]
+
+    audit = (await world["db"].scalars(
+        select(AuditLog).where(AuditLog.action == "answer_trace.review", AuditLog.resource_id == str(world["main"].id))
+    )).all()
+    assert len(audit) == 1
+
+
+async def test_admin_can_clear_cause(world):
+    for cause in ("document", None):
+        await traces_api.set_answer_trace_review(
+            world["main"].id, traces_api.TraceReviewUpdate(cause=cause), db=world["db"], current_user=world["admin"],
+        )
+    detail = await traces_api.get_answer_trace(world["main"].id, db=world["db"], current_user=world["admin"])
+    assert (detail["review_cause"], detail["reviewed_by_name"], detail["reviewed_at"]) == (None, None, None)
+
+
+async def test_cause_must_be_known_value():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        traces_api.TraceReviewUpdate(cause="weather")
+
+
+async def test_non_admin_cannot_mark_cause_or_register(world):
+    with pytest.raises(HTTPException) as exc:
+        await traces_api.set_answer_trace_review(
+            world["main"].id, traces_api.TraceReviewUpdate(cause="answer"), db=world["db"], current_user=world["owner"],
+        )
+    assert exc.value.status_code == 403
+    with pytest.raises(HTTPException) as exc:
+        await traces_api.register_trace_golden_query(
+            world["main"].id,
+            traces_api.TraceGoldenQueryCreate(collection_id=world["col"].id, expected_document_ids=[world["pub"].id]),
+            db=world["db"], current_user=world["owner"],
+        )
+    assert exc.value.status_code == 403
+
+
+async def test_register_golden_query_from_trace_links_it(world):
+    from app.db.models.golden_query import GoldenQuery
+
+    await _as_collection_editor(world)
+    created = await traces_api.register_trace_golden_query(
+        world["main"].id,
+        traces_api.TraceGoldenQueryCreate(collection_id=world["col"].id, expected_document_ids=[world["pub"].id]),
+        db=world["db"], current_user=world["admin"],
+    )
+    gq = await world["db"].get(GoldenQuery, created.id)
+    # 질의를 따로 보내지 않으면 사용자가 실제로 물은 질문을 그대로 쓴다
+    assert (gq.query, gq.expected_document_ids, str(gq.collection_id)) == (
+        "근거 질문", [str(world["pub"].id)], str(world["col"].id),
+    )
+    detail = await traces_api.get_answer_trace(world["main"].id, db=world["db"], current_user=world["admin"])
+    assert (detail["golden_query_id"], detail["golden_query_collection_id"]) == (str(gq.id), str(world["col"].id))
+
+    with pytest.raises(HTTPException) as exc:
+        await traces_api.register_trace_golden_query(
+            world["main"].id,
+            traces_api.TraceGoldenQueryCreate(collection_id=world["col"].id, expected_document_ids=[world["pub"].id]),
+            db=world["db"], current_user=world["admin"],
+        )
+    assert exc.value.status_code == 409
+
+
+async def test_register_golden_query_uses_edited_query(world):
+    from app.db.models.golden_query import GoldenQuery
+
+    await _as_collection_editor(world)
+    created = await traces_api.register_trace_golden_query(
+        world["main"].id,
+        traces_api.TraceGoldenQueryCreate(
+            collection_id=world["col"].id, query="  고친 질문 ", expected_document_ids=[world["pub"].id],
+            expected_facts=["10MΩ"],
+        ),
+        db=world["db"], current_user=world["admin"],
+    )
+    gq = await world["db"].get(GoldenQuery, created.id)
+    assert (gq.query, gq.expected_facts) == ("고친 질문", ["10MΩ"])
+
+
+async def test_register_golden_query_needs_collection_editor_and_visible_documents(world):
+    request = traces_api.TraceGoldenQueryCreate(collection_id=world["col"].id, expected_document_ids=[world["pub"].id])
+    # 관리자라도 컬렉션 편집 권한이 없으면 골든 쿼리를 만들 수 없다(컬렉션 화면과 같은 규칙)
+    with pytest.raises(HTTPException) as exc:
+        await traces_api.register_trace_golden_query(
+            world["main"].id, request, db=world["db"], current_user=world["admin"],
+        )
+    assert exc.value.status_code == 403
+
+    await _as_collection_editor(world)
+    with pytest.raises(HTTPException) as exc:
+        await traces_api.register_trace_golden_query(
+            world["main"].id,
+            traces_api.TraceGoldenQueryCreate(collection_id=world["col"].id, expected_document_ids=[world["conf"].id]),
+            db=world["db"], current_user=world["admin"],
+        )
+    assert exc.value.status_code == 400
+    trace = await world["db"].get(AnswerTrace, world["main"].id)
+    await world["db"].refresh(trace)
+    assert trace.golden_query_id is None
+
+
+async def test_deleting_golden_query_unlinks_trace(world):
+    from app.db.models.golden_query import GoldenQuery
+
+    await _as_collection_editor(world)
+    created = await traces_api.register_trace_golden_query(
+        world["main"].id,
+        traces_api.TraceGoldenQueryCreate(collection_id=world["col"].id, expected_document_ids=[world["pub"].id]),
+        db=world["db"], current_user=world["admin"],
+    )
+    await world["db"].delete(await world["db"].get(GoldenQuery, created.id))
+    await world["db"].commit()
+    detail = await traces_api.get_answer_trace(world["main"].id, db=world["db"], current_user=world["admin"])
+    assert detail["golden_query_id"] is None

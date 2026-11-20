@@ -582,7 +582,7 @@ class DoclingAdapter(BaseAdapter):
                     # 선으로 그린 표는 선 그대로 읽은 결과를 쓴다. 칸 안의 작은 표는 바로 뒤에 따로 낸다
                     caption = _table_caption(item, doc) or _preceding_caption(page)
                     tables = [
-                        (t.rows, None, "ruled_lines", t.title or (caption if t is ruled else None))
+                        (t.rows, list(t.spans) or None, "ruled_lines", t.title or (caption if t is ruled else None))
                         for t in (ruled, *ruled.nested)
                     ]
                 else:

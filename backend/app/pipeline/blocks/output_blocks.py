@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 class OutputConfig(BaseModel):
     save_to_document: bool = True
+    # 분류를 추천 태그에도 넣는다. 표준 분석 워크플로우는 예전 요약·메타데이터 작업처럼 넣지 않는다(2026-11-20)
+    category_as_tag: bool = True
 
 
 def _match_chunk_keywords(chunk_text: str, document_keywords: list[str]) -> list[str]:
@@ -99,7 +101,10 @@ class OutputBlock(BaseBlock):
         #
         # 1.6.0: 사용자가 직접 고친 분류(user_edited_fields)는 Document.category 에 덮어쓰지 않는다 —
         # 캐시된 이전 결과를 재생하면 사용자 수정이 있어도 분류가 되돌려진다.
-        return "1.6.0"
+        #
+        # 1.7.0: 추천 태그를 이전 값과 합치지 않고 이번 실행 결과로 바꿔 넣으며, 사용자가 무시한
+        # 태그(Document.dismissed_tags)는 빼고 넣는다(2026-11-20).
+        return "1.7.0"
 
     @property
     def config_schema(self) -> type[BaseModel] | None:
@@ -154,21 +159,30 @@ class OutputBlock(BaseBlock):
                         saved_fields.append("summary")
 
                     tags: list[str] = []
+                    # 이번 실행에 태그를 만드는 단계(키워드, 개체, 태그로 쓰는 분류)가 있었는가. 있었으면 결과가
+                    # 비어도 예전 추천 태그를 남기지 않는다
+                    makes_tags = False
                     for key in ("keywords", "entities"):
                         if isinstance(upstream.get(key), list):
+                            makes_tags = True
                             tags.extend(str(t) for t in upstream[key])
                     category = upstream.get("category")
                     if isinstance(category, str) and category.strip():
-                        tags.append(category.strip())
+                        if context.config.get("category_as_tag", True):
+                            makes_tags = True
+                            tags.append(category.strip())
                         # 사용자가 직접 고친 분류(user_edited_fields)는 재처리가 덮어쓰지 않는다.
                         if "category" not in (getattr(doc, "user_edited_fields", None) or []):
                             doc.category = category.strip()[:50]
                             saved_fields.append("category")
-                    if tags:
+                    if makes_tags:
+                        # 추천 태그는 이번 실행 결과로 바꿔 넣는다(2026-11-20). 예전에는 이전 값과 합쳐
+                        # 예전 워크플로우의 태그가 계속 쌓였다. 이미 단 태그와 사용자가 무시한 태그는 뺀다
                         before_tags = list(doc.suggested_tags or [])
-                        existing = {t.lower() for t in (doc.tags or [])}
-                        merged = _dedup(before_tags + tags)
-                        doc.suggested_tags = [t for t in merged if t.lower() not in existing] or None
+                        excluded = {
+                            t.lower() for t in [*(doc.tags or []), *(getattr(doc, "dismissed_tags", None) or [])]
+                        }
+                        doc.suggested_tags = [t for t in _dedup(tags) if t.lower() not in excluded] or None
                         doc.metadata_status = "DONE"
                         saved_fields.append("suggested_tags")
                         changes.append({

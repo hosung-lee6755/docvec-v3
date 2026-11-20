@@ -524,3 +524,19 @@ async def test_resume_run_takes_the_document_off_the_review_queue_right_away(wor
     await db.refresh(doc)
     assert doc.status == "QUEUED"
     dispatched.delay.assert_called_once_with(str(U(run.id)))
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_rejects_documents_and_collections_of_another_project(world, dispatched):
+    """프로젝트 워크플로우는 같은 프로젝트의 문서와 컬렉션에만 실행한다(2026-11-20)."""
+    db, owner = world["db"], world["owner"]
+    other = await make_project(db, owner, "P-other")
+    foreign_collection = await make_collection(db, owner, other, name="foreign")
+    doc = await make_document(db, owner, foreign_collection)
+
+    for target in (RunCreate(version_id=U(world["version"].id), document_id=U(doc.id)),
+                   RunCreate(version_id=U(world["version"].id), collection_id=U(foreign_collection.id))):
+        with pytest.raises(HTTPException) as exc:
+            await runs_api.run_workflow(U(world["workflow"].id), target, db, owner)
+        assert exc.value.status_code == 400
+    dispatched.apply_async.assert_not_called()

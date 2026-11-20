@@ -25,7 +25,7 @@ interface OriginalTabProps {
   content: { full_text: string; chunk_count: number } | undefined
   ragSource: RagRecordSource
   chunksResult: DocumentChunksResult | undefined
-  pagesTextResult: { pages: Page[] } | undefined
+  pagesTextResult: { pages: Page[]; total_pages?: number; synced?: boolean } | undefined
   previewResult: PreviewResult | undefined
   isPdfDoc: boolean
   originalPage: number
@@ -59,8 +59,12 @@ export default function OriginalTab({
   // 페이지를 넘길 때마다 iframe 이 새로 만들어지므로, PDF 는 한 번만 받아 blob URL 로 띄운다.
   const pdfBlob = usePdfBlobUrl(isPdfPreview ? previewResult?.url : undefined)
   const isNativePdf = isPdfDoc
-  const hasMultiplePages = new Set(pages.map((p) => p.page_number)).size > 1
-  const maxPage = pages.length ? Math.max(...pages.map((p) => p.page_number)) : 1
+  // 원본 PDF 는 page_map 으로, HWP·DOCX 는 미리보기 PDF 쪽에 맞춰 자른 파싱 본문이 온다(synced).
+  // 예전에는 원본 PDF 만 함께 넘겼고, 글이 없는 마지막 쪽(그림·빈 쪽)으로는 넘어가지 못했다
+  const isPageSynced = (isNativePdf || isPdfPreview) && (pagesTextResult?.synced ?? isNativePdf)
+  const lastTextPage = pages.length ? Math.max(...pages.map((p) => p.page_number)) : 1
+  const maxPage = Math.max(pagesTextResult?.total_pages ?? 0, lastTextPage, 1)
+  const hasMultiplePages = maxPage > 1
   const clampedPage = Math.min(Math.max(originalPage, 1), maxPage)
   let iframeSrc: string | undefined
   if (previewResult?.url) {
@@ -69,9 +73,10 @@ export default function OriginalTab({
     // blob 로 받지 못했을 때만 원격 URL 로 폴백한다. 받는 중에는 undefined → 로딩 표시.
     else if (pdfBlob.isError) iframeSrc = `${previewResult.url}#page=${clampedPage}`
   }
-  const currentPageText = isNativePdf && hasMultiplePages
+  const currentPageText = isPageSynced && hasMultiplePages
     ? pages.filter((p) => p.page_number === clampedPage).map((p) => p.text).join('\n\n')
     : null
+  const isCurrentPageEmpty = currentPageText !== null && !currentPageText.trim()
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 'var(--space-2)' }}>
@@ -106,9 +111,11 @@ export default function OriginalTab({
             다음 ▶
           </button>
           <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-            {isNativePdf
-              ? '원본과 파싱 텍스트가 같은 쪽으로 함께 이동합니다'
-              : '원본 미리보기만 페이지 이동합니다 (텍스트는 문서 전체가 표시됩니다)'}
+            {!isPageSynced
+              ? '원본 미리보기만 페이지 이동합니다 (텍스트는 문서 전체가 표시됩니다)'
+              : isNativePdf
+                ? '원본과 파싱 텍스트가 같은 쪽으로 함께 이동합니다'
+                : '미리보기와 파싱 텍스트가 같은 쪽으로 함께 이동합니다 (미리보기 쪽 나눔에 맞춰 나눈 글입니다)'}
           </span>
         </div>
       )}
@@ -145,7 +152,7 @@ export default function OriginalTab({
         <div style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
             <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)' }}>
-              파싱된 텍스트 (RAG 저장 형태){isNativePdf && hasMultiplePages ? ` (${clampedPage}쪽)` : ''}
+              파싱된 텍스트 (RAG 저장 형태){isPageSynced && hasMultiplePages ? ` (${clampedPage}쪽)` : ''}
             </p>
             <ViewModeToggle showJson={showJson} onChange={onShowJsonChange} />
           </div>
@@ -165,7 +172,12 @@ export default function OriginalTab({
                   : '저장된 청크를 불러오는 중입니다.'}
               </pre>
             )}
-            {!isContentLoading && !showJson && (
+            {!isContentLoading && !showJson && isCurrentPageEmpty && (
+              <p style={{ fontSize: 13, color: 'var(--color-text-muted)', margin: 0 }}>
+                이 쪽에서 추출된 글이 없습니다. 그림이나 빈 쪽일 수 있습니다.
+              </p>
+            )}
+            {!isContentLoading && !showJson && !isCurrentPageEmpty && (
               <div className="markdown-body" style={{ fontSize: 13, lineHeight: 1.7 }}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {currentPageText ?? content?.full_text ?? ''}

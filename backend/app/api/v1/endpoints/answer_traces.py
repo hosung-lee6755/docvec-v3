@@ -6,12 +6,17 @@
 상세는 근거 청크마다 지금 그 관리자가 문서를 볼 수 있는지 다시 판정한다.
 관리자도 문서 열람 규칙을 건너뛰지 못하므로, 볼 수 없는 문서의 현재 본문은 내려보내지 않는다.
 상세 조회는 감사 로그(`answer_trace.view`)에 남는다.
+
+개선 루프(2026-11-20). 관리자는 답이 왜 틀렸는지 원인(검색, 문서, 답변 표현, 기타)을 표시하고,
+질문을 골든 쿼리로 바로 등록해 회귀 점검에 넣을 수 있다. 골든 쿼리 등록은 컬렉션 화면과 같은 검사를 거친다
+(컬렉션 편집 권한, 기대 문서는 그 컬렉션에서 볼 수 있는 문서).
 """
-from datetime import datetime
-from typing import Annotated
+from datetime import datetime, timezone
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,8 +25,10 @@ from app.db.models.answer_trace import AnswerTrace, AnswerTraceSource
 from app.db.models.chat_message import ChatMessage
 from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
+from app.db.models.golden_query import GoldenQuery
 from app.db.models.user import User
 from app.db.session import get_db
+from app.schemas.golden_query import MAX_EXPECTED_FACTS, ExpectedFact, GoldenQueryCreate, GoldenQueryResponse
 from app.services.access_policy import (
     build_access_context,
     load_document_facts,
@@ -37,6 +44,24 @@ _QUERY_PREVIEW_LEN = 200
 ACCESS_VISIBLE = "visible"
 ACCESS_HIDDEN = "hidden"
 ACCESS_DELETED = "deleted"
+
+# 관리자가 표시하는 답변 문제의 원인. 검색이 엉뚱한 근거를 가져왔는지(retrieval), 문서 자체가 틀렸거나 비었는지(document),
+# 근거는 맞는데 답을 잘못 썼는지(answer)를 나눠 고칠 곳을 정한다.
+REVIEW_CAUSES = ("retrieval", "document", "answer", "other")
+UNREVIEWED = "unreviewed"
+
+
+class TraceReviewUpdate(BaseModel):
+    """원인을 표시한다. null 이면 표시를 지운다."""
+    cause: Literal["retrieval", "document", "answer", "other"] | None = None
+
+
+class TraceGoldenQueryCreate(BaseModel):
+    """답변 추적의 질문을 골든 쿼리로 등록한다. 질의를 보내지 않으면 사용자가 실제로 물은 질문을 쓴다."""
+    collection_id: UUID
+    query: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)] | None = None
+    expected_document_ids: list[UUID] = Field(..., min_length=1, max_length=50)
+    expected_facts: list[ExpectedFact] | None = Field(None, max_length=MAX_EXPECTED_FACTS)
 
 
 def _as_uuid(value: str | None) -> str | None:
@@ -55,8 +80,13 @@ def _trace_filters(
     grounding: str | None,
     status: str | None,
     cache_hit: bool | None,
+    cause: str | None = None,
 ) -> list:
     filters = []
+    if cause == UNREVIEWED:
+        filters.append(AnswerTrace.review_cause.is_(None))
+    elif cause is not None:
+        filters.append(AnswerTrace.review_cause == cause)
     if user_id is not None:
         filters.append(AnswerTrace.user_id == str(user_id))
     if from_date is not None:
@@ -135,6 +165,7 @@ async def list_answer_traces(
     status: str | None = None,
     cache_hit: bool | None = None,
     feedback: Annotated[str | None, Query(pattern="^(up|down|any)$")] = None,
+    cause: Annotated[str | None, Query(pattern="^(retrieval|document|answer|other|unreviewed)$")] = None,
     limit: int = Query(50, gt=0, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -152,7 +183,7 @@ async def list_answer_traces(
     if not await _lookup_allowed(db, current_user, document_id, collection_id):
         return {"total": 0, "items": []}
     filters = _trace_filters(
-        user_id, from_date, to_date, document_id, collection_id, grounding, status, cache_hit
+        user_id, from_date, to_date, document_id, collection_id, grounding, status, cache_hit, cause
     )
 
     if feedback is not None:
@@ -195,6 +226,8 @@ async def list_answer_traces(
                 "source_count": n,
                 "cited_count": cited,
                 "feedback": feedback_of.get(str(t.chat_message_id), (None, None))[0],
+                "review_cause": t.review_cause,
+                "golden_query_id": str(t.golden_query_id) if t.golden_query_id else None,
             }
             for t, n, cited in rows
         ],
@@ -304,12 +337,14 @@ async def get_answer_trace(
 
     feedback_of = await _feedback_by_message(db, [trace.chat_message_id] if trace.chat_message_id else [])
     rating, feedback_note = feedback_of.get(str(trace.chat_message_id), (None, None))
+    review = await _review_view(db, trace)
 
     return {
         "id": str(trace.id),
         "created_at": trace.created_at,
         "feedback": rating,
         "feedback_note": feedback_note,
+        **review,
         "chat_message_id": str(trace.chat_message_id) if trace.chat_message_id else None,
         "conversation_id": str(trace.conversation_id) if trace.conversation_id else None,
         "user_id": str(trace.user_id) if trace.user_id else None,
@@ -344,3 +379,74 @@ async def get_answer_trace(
         "error_message": trace.error_message,
         "sources": [_source_view(s, set(facts), visible, texts) for s in sources],
     }
+
+
+async def _review_view(db: AsyncSession, trace: AnswerTrace) -> dict:
+    """검토 칸. 골든 쿼리는 지워졌을 수 있으니 지금 있는지 다시 본다."""
+    reviewer = await db.get(User, trace.reviewed_by) if trace.reviewed_by else None
+    golden = await db.get(GoldenQuery, trace.golden_query_id) if trace.golden_query_id else None
+    return {
+        "review_cause": trace.review_cause,
+        "reviewed_by_name": reviewer.username if reviewer else None,
+        "reviewed_at": trace.reviewed_at,
+        "golden_query_id": str(golden.id) if golden else None,
+        "golden_query_collection_id": str(golden.collection_id) if golden else None,
+    }
+
+
+async def _trace_or_404(db: AsyncSession, trace_id: UUID) -> AnswerTrace:
+    trace = await db.get(AnswerTrace, trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Answer trace not found")
+    return trace
+
+
+@router.put("/admin/answer-traces/{trace_id}/review")
+async def set_answer_trace_review(
+    trace_id: UUID,
+    data: TraceReviewUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """답변 문제의 원인을 표시하거나 지운다. 누가 언제 표시했는지 함께 남는다."""
+    require_admin(current_user)
+    trace = await _trace_or_404(db, trace_id)
+    previous = trace.review_cause
+    trace.review_cause = data.cause
+    trace.reviewed_by = str(current_user.id) if data.cause else None
+    trace.reviewed_at = datetime.now(timezone.utc) if data.cause else None
+    log_audit(
+        db, str(current_user.id), "answer_trace.review", "answer_trace", str(trace.id),
+        detail={"cause": data.cause, "previous": previous},
+    )
+    await db.commit()
+    await db.refresh(trace)
+    return {"id": str(trace.id), **await _review_view(db, trace)}
+
+
+@router.post("/admin/answer-traces/{trace_id}/golden-query", response_model=GoldenQueryResponse)
+async def register_trace_golden_query(
+    trace_id: UUID,
+    data: TraceGoldenQueryCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """질문을 골든 쿼리로 등록하고 추적 기록에 잇는다. 한 질문은 한 번만 등록한다(지운 뒤에는 다시 할 수 있다)."""
+    from app.api.v1.endpoints.golden_queries import add_golden_query
+
+    require_admin(current_user)
+    trace = await _trace_or_404(db, trace_id)
+    if trace.golden_query_id and await db.get(GoldenQuery, trace.golden_query_id):
+        raise HTTPException(status_code=409, detail="이 질문은 이미 골든 쿼리로 등록했습니다")
+    request = GoldenQueryCreate(
+        query=data.query or trace.query.strip()[:1000],
+        expected_document_ids=data.expected_document_ids,
+        expected_facts=data.expected_facts,
+    )
+    gq = await add_golden_query(
+        db, data.collection_id, request, current_user, detail={"answer_trace_id": str(trace.id)}
+    )
+    trace.golden_query_id = str(gq.id)
+    await db.commit()
+    await db.refresh(gq)
+    return gq

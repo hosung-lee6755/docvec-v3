@@ -51,18 +51,20 @@ class BlockCollector:
 
     def table(
         self, blocks: list[RawTextBlock], tables: list[RawTableCandidate], rows: list[list[str]], page_number: int,
-        spans: list[dict] | None = None,
+        spans: list[dict] | None = None, title: str | None = None,
     ) -> None:
-        """spans는 합친 칸({"row", "col", "row_span", "col_span"}, 0부터)이다. 빈 줄을 빼면 그만큼 당겨 적는다."""
+        """spans는 합친 칸({"row", "col", "row_span", "col_span"}, 0부터)이다. 빈 줄을 빼면 그만큼 당겨 적는다.
+        title 은 표 번호 다음 줄에 적는다(칸 안에서 떼어 낸 표가 어느 칸에 있었는지, nested_tables.py)."""
         kept = [index for index, row in enumerate(rows) if any(cell for cell in row)]
         if not kept:
             return
         cleaned = [rows[index] for index in kept]
         remapped = _remap_spans(spans or [], kept)
         self._table_ordinal += 1
-        tables.append(RawTableCandidate(page_number=page_number, rows=cleaned, spans=remapped or None))
+        tables.append(RawTableCandidate(page_number=page_number, rows=cleaned, spans=remapped or None, title=title))
+        head = f"[표 {self._table_ordinal}]\n{title}" if title else f"[표 {self._table_ordinal}]"
         blocks.append(RawTextBlock(
-            text=f"[표 {self._table_ordinal}]\n{rows_to_markdown(cleaned)}",
+            text=f"{head}\n{rows_to_markdown(cleaned)}",
             page_number=page_number,
             block_type="table",
         ))

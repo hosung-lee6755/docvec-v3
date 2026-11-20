@@ -255,6 +255,8 @@ def _apply_marker_order(blocks: list[list], sizes: list[float | None], max_level
         recent[rank] = (block[1], size)
 
 
+_FONT_TIER_LIMIT = 3
+
 # "3.", "3.2", "3.2.1" 같은 점 번호. 마디는 1~99 이고 번호 뒤에 공백과 글이 이어져야 한다(날짜·수치 제외)
 _DECIMAL_NUMBER_RE = re.compile(r"^\s*([1-9]\d?(?:\.[1-9]\d?)*)\.?\s+\S")
 _DECIMAL_MIN_SUB_HEADINGS = 2
@@ -316,7 +318,8 @@ def _apply_decimal_depth(blocks: list[list], max_level: int) -> None:
         return steps
 
     deepest = min(max(depth(i) for i in parent_of) + 1, max_level)
-    ceiling = max(1, max_level - deepest + 1)
+    # 뿌리를 올리는 기준은 글자 크기 단계 수다. 상한(5)으로 재면 3단계 문서의 장 제목이 3단계에 머문다
+    ceiling = max(1, min(max_level, _FONT_TIER_LIMIT) - deepest + 1)
     original = {i: b[1] for i, b in enumerate(blocks)}
     for index in sorted(parent_of):
         parent = parent_of[index]
@@ -347,7 +350,7 @@ def _nest_under_containers(blocks: list[list], parent_of: dict, original: dict, 
     if not scopes:
         return
     needed = max(depth(i) if i in parent_of else 0 for members in scopes.values() for i in members) + 1
-    container_level = max(1, min(min(original[c] for c in scopes), max_level - needed))
+    container_level = max(1, min(min(original[c] for c in scopes), min(max_level, _FONT_TIER_LIMIT) - needed))
     for container, members in scopes.items():
         blocks[container][1] = container_level
         for i in members:
@@ -390,7 +393,9 @@ def refine_element_blocks(
         return estimate_font_size(block[4], bbox_by_id.get(element_id))
 
     sizes = [size_of(b) if b[0] == "HEADING" else None for b in work]
-    _refine_levels(work, sizes, max_level, measured=bool(font_sizes))
+    # 글자 크기 무리는 많아야 세 개로 나눈다. 상한을 5로 올리자 표지 제목 같은 드문 큰 글자가 1·2단계를 차지해
+    # 장 제목이 3~4단계로 밀려났다(기계설비 매뉴얼 1단계 595개 → 3개, 2026-11-20). 더 깊은 단계는 번호와 기호 순서로만 내린다
+    _refine_levels(work, sizes, min(max_level, _FONT_TIER_LIMIT), measured=bool(font_sizes))
     _apply_marker_order(work, sizes, max_level)
     _apply_decimal_depth(work, max_level)
     return [tuple(b) for b in work]

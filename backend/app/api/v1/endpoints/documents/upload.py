@@ -23,6 +23,7 @@ from app.pipeline.formats import EXTENSION_CONTENT_TYPES, SUPPORTED_LABEL, SUPPO
 from app.services.access_policy import build_access_context
 from app.services.document_lifecycle import copy_access, new_version_fields
 from app.services.document_storage import release_original
+from app.services.workflow_scope import collection_project_id, default_preprocess_workflow_id, ensure_fits_project
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,27 +70,15 @@ async def _resolve_preprocess_version_id(
         # Project-specific workflows must have user access to the project
         if workflow.project_id is not None and current_user is not None:
             await check_project_access(db, str(workflow.project_id), current_user, min_role="viewer")
+        # 프로젝트 워크플로우는 같은 프로젝트의 컬렉션에만 쓴다(2026-11-20, services/workflow_scope.py)
+        await ensure_fits_project(db, workflow, await collection_project_id(db, collection_id))
 
         return version.id
 
-    workflow_id = None
-    pinned_version_number = None
-    if collection_id:
-        collection = await db.get(Collection, collection_id)
-        if collection is not None and collection.default_workflow_id:
-            workflow_id = collection.default_workflow_id
-            pinned_version_number = collection.default_workflow_version
-
+    collection = await db.get(Collection, collection_id) if collection_id else None
+    workflow_id, pinned_version_number = await default_preprocess_workflow_id(db, collection)
     if workflow_id is None:
-        system_workflow = await db.scalar(
-            select(WorkflowDefinition).where(
-                WorkflowDefinition.project_id.is_(None),
-                WorkflowDefinition.kind == "PREPROCESS",
-            )
-        )
-        if system_workflow is None:
-            raise HTTPException(status_code=500, detail="표준 전처리 워크플로우가 설정되어 있지 않습니다")
-        workflow_id = system_workflow.id
+        raise HTTPException(status_code=500, detail="표준 전처리 워크플로우가 설정되어 있지 않습니다")
 
     version_query = select(WorkflowVersion).where(WorkflowVersion.workflow_id == workflow_id)
     if pinned_version_number is not None:

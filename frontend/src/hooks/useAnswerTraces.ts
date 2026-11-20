@@ -1,10 +1,12 @@
 import type { AgentSteps } from './useChat'
 import type { RetrievalEvidence } from '../components/chat/CitationEvidence'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
 
 export type Grounding = 'passed' | 'failed' | 'skipped'
 export type SourceAccess = 'visible' | 'hidden' | 'deleted'
+// 관리자가 표시하는 답변 문제의 원인(2026-11-20, 개선 루프)
+export type ReviewCause = 'retrieval' | 'document' | 'answer' | 'other'
 
 export interface AnswerTraceItem {
   id: string
@@ -25,6 +27,8 @@ export interface AnswerTraceItem {
   cited_count: number
   // 질문한 사람이 남긴 평가. 없으면 null
   feedback?: 'up' | 'down' | null
+  review_cause?: ReviewCause | null
+  golden_query_id?: string | null
 }
 
 export interface AnswerTraceSource {
@@ -51,6 +55,12 @@ export interface AnswerTraceDetail {
   // 질문한 사람이 남긴 평가와 메모
   feedback?: 'up' | 'down' | null
   feedback_note?: string | null
+  // 관리자 검토. 골든 쿼리는 지워지면 null 이다
+  review_cause?: ReviewCause | null
+  reviewed_by_name?: string | null
+  reviewed_at?: string | null
+  golden_query_id?: string | null
+  golden_query_collection_id?: string | null
   username: string | null
   user_role: string | null
   clearance_level: string | null
@@ -84,6 +94,8 @@ export interface AnswerTraceDetail {
 export interface AnswerTraceFilters {
   // any는 좋아요와 싫어요 모두
   feedback?: 'up' | 'down' | 'any'
+  // unreviewed 는 원인을 아직 표시하지 않은 답
+  cause?: ReviewCause | 'unreviewed'
   document_id?: string
   grounding?: Grounding
   from_date?: string
@@ -110,6 +122,47 @@ export function useAnswerTrace(traceId: string | null) {
       return data
     },
     enabled: !!traceId,
+  })
+}
+
+function useInvalidateTrace(traceId: string) {
+  const queryClient = useQueryClient()
+  return () => {
+    queryClient.invalidateQueries({ queryKey: ['answer-trace', traceId] })
+    queryClient.invalidateQueries({ queryKey: ['answer-traces'] })
+  }
+}
+
+export function useSetTraceReview(traceId: string) {
+  const invalidate = useInvalidateTrace(traceId)
+  return useMutation({
+    mutationFn: async (cause: ReviewCause | null) => {
+      const { data } = await apiClient.put(`/admin/answer-traces/${traceId}/review`, { cause })
+      return data
+    },
+    onSuccess: invalidate,
+  })
+}
+
+export interface TraceGoldenQueryInput {
+  collection_id: string
+  query: string
+  expected_document_ids: string[]
+  expected_facts?: string[]
+}
+
+export function useRegisterTraceGoldenQuery(traceId: string) {
+  const queryClient = useQueryClient()
+  const invalidate = useInvalidateTrace(traceId)
+  return useMutation({
+    mutationFn: async (input: TraceGoldenQueryInput) => {
+      const { data } = await apiClient.post(`/admin/answer-traces/${traceId}/golden-query`, input)
+      return data
+    },
+    onSuccess: (_data, input) => {
+      invalidate()
+      queryClient.invalidateQueries({ queryKey: ['golden-queries', input.collection_id] })
+    },
   })
 }
 

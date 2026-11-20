@@ -7,6 +7,7 @@ import {
   type AnswerTraceItem,
   type AnswerTraceSource,
   type Grounding,
+  type ReviewCause,
   type SourceAccess,
 } from '../hooks/useAnswerTraces'
 import { useAuthStore } from '../store/authStore'
@@ -17,6 +18,8 @@ import { CitationEvidence, LowOcrBadge } from '../components/chat/CitationEviden
 import { Badge, Button, DescriptionList, EmptyState, ErrorAlert, IconButton, Page, PageBody, PageHeader, SearchInput, Select, Spinner, Split, Stat, StatStrip, Toolbar } from '../components/ui'
 import type { DescriptionItem } from '../components/ui'
 import { roleLabel } from '../lib/roleLabels'
+import { TraceReview } from '../components/answerTraces/TraceReview'
+import { REVIEW_CAUSE_LABELS, REVIEW_CAUSE_SHORT } from '../components/answerTraces/reviewCauses'
 
 const PAGE_SIZE = 50
 
@@ -130,6 +133,8 @@ function TraceDetail({ traceId, onClose }: { traceId: string; onClose: () => voi
 
       <DescriptionList items={buildFacts(data)} />
 
+      <TraceReview trace={data} />
+
       <div>
         <h3 className="ds-section-title" style={{ marginBottom: 'var(--space-1)' }}>질문</h3>
         <p style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)' }}>{data.query}</p>
@@ -158,12 +163,14 @@ function TraceDetail({ traceId, onClose }: { traceId: string; onClose: () => voi
 
 type FeedbackFilter = 'up' | 'down' | 'any'
 const FEEDBACK_LABELS: Record<'up' | 'down', string> = { up: '도움이 됨', down: '도움이 안 됨' }
+type CauseFilter = ReviewCause | 'unreviewed'
 
 export default function AnswerTracesPage() {
   const currentUser = useAuthStore((s) => s.user)
   const [searchParams] = useSearchParams()
   const [grounding, setGrounding] = useState<Grounding | ''>('')
   const [feedback, setFeedback] = useState<FeedbackFilter | ''>('')
+  const [cause, setCause] = useState<CauseFilter | ''>('')
   const [documentId, setDocumentId] = useState(searchParams.get('document_id') ?? '')
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
@@ -171,6 +178,7 @@ export default function AnswerTracesPage() {
   const { data, isLoading, isError, error, refetch } = useAnswerTraces({
     grounding: grounding || undefined,
     feedback: feedback || undefined,
+    cause: cause || undefined,
     document_id: documentId.trim() || undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
@@ -210,6 +218,7 @@ export default function AnswerTracesPage() {
                 <th scope="col">근거 검증</th>
                 <th scope="col">근거·인용</th>
                 <th scope="col">사용자 평가</th>
+                <th scope="col">원인</th>
                 <th scope="col">모델</th>
               </tr>
             </thead>
@@ -236,6 +245,10 @@ export default function AnswerTracesPage() {
                     {t.feedback
                       ? <Badge tone={t.feedback === 'down' ? 'danger' : 'success'} isPlain>{FEEDBACK_LABELS[t.feedback]}</Badge>
                       : <span className="ds-cell-muted">-</span>}
+                  </td>
+                  <td>
+                    {t.review_cause ? REVIEW_CAUSE_SHORT[t.review_cause] : <span className="ds-cell-muted">-</span>}
+                    {t.golden_query_id && <> <Badge tone="success" isPlain>골든 쿼리</Badge></>}
                   </td>
                   <td className="ds-cell-muted">{t.cache_hit ? '캐시 재사용' : t.model_key ?? '-'}</td>
                 </tr>
@@ -288,6 +301,16 @@ export default function AnswerTracesPage() {
           <option value="down">도움이 안 됨</option>
           <option value="up">도움이 됨</option>
           <option value="any">평가가 달린 답</option>
+        </Select>
+        <Select
+          controlSize="sm"
+          aria-label="답변 문제의 원인으로 거르기"
+          value={cause}
+          onChange={(e) => { setCause(e.target.value as CauseFilter | ''); setPage(0) }}
+        >
+          <option value="">원인 전체</option>
+          <option value="unreviewed">원인 표시 안 함</option>
+          {Object.entries(REVIEW_CAUSE_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
         </Select>
         <SearchInput
           label="근거 문서 ID로 찾기"

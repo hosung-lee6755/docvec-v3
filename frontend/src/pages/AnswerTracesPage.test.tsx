@@ -10,7 +10,13 @@ vi.mock('../store/authStore', () => ({
   useAuthStore: (select: (s: { user: { role: string } }) => unknown) => select({ user: { role } }),
 }))
 
+vi.mock('../hooks/useCollections', () => ({
+  useCollections: () => ({ data: { items: [{ id: 'c-1', name: '인사 규정' }] } }),
+}))
+
 vi.mock('../hooks/useAnswerTraces', () => ({
+  useSetTraceReview: () => ({ mutate: vi.fn(), isPending: false, isError: false, error: null }),
+  useRegisterTraceGoldenQuery: () => ({ mutate: vi.fn(), isPending: false, isError: false, error: null }),
   useAnswerTraces: (filters: unknown) => {
     listArgs.push(filters)
     return {
@@ -22,6 +28,7 @@ vi.mock('../hooks/useAnswerTraces', () => ({
           id: 't-1', created_at: '2026-11-11T01:00:00Z', user_id: 'u-1', username: 'asker',
           query: '휴가 규정 알려줘', status: 'DONE', grounding: 'failed', broadened: true,
           cache_hit: false, model_key: 'qwen2.5-3b', source_count: 2, cited_count: 1,
+          review_cause: 'retrieval', golden_query_id: 'gq-1',
         }],
       },
     }
@@ -81,11 +88,21 @@ describe('AnswerTracesPage', () => {
     expect(detail).toHaveTextContent('문서 정보 비공개')
     expect(detail).toHaveTextContent('열람 권한 없음')
     expect(detail).toHaveTextContent('AI가 생성한 답변')
+    expect(within(detail).getByRole('region', { name: '개선 조치' })).toBeInTheDocument()
   })
 
   it('prefills the document filter from the URL for reverse lookup', () => {
     renderPage('/answer-traces?document_id=d-9')
     expect(screen.getByLabelText('근거 문서 ID로 찾기')).toHaveValue('d-9')
     expect(listArgs[0]).toMatchObject({ document_id: 'd-9' })
+  })
+
+  it('shows the marked cause and golden query in the list and filters by cause', () => {
+    renderPage()
+    const table = within(screen.getByRole('table'))
+    expect(table.getByText('검색')).toBeInTheDocument()
+    expect(table.getByText('골든 쿼리')).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', { name: '답변 문제의 원인으로 거르기' }), { target: { value: 'unreviewed' } })
+    expect(listArgs[listArgs.length - 1]).toMatchObject({ cause: 'unreviewed', offset: 0 })
   })
 })

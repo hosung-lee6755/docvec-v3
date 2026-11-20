@@ -125,6 +125,7 @@
 .user-chat__feedback .ds-icon-btn.is-active { background: var(--color-primary-subtle); color: var(--color-primary); }
 .user-chat__feedback-note { display: flex; gap: var(--space-2); flex: 1 1 240px; min-width: 0; }
 .user-chat__feedback-note > :first-child { flex: 1; min-width: 0; }
+.user-chat__feedback-status { font-size: var(--text-xs); color: var(--color-success, var(--color-text-muted)); }
 .user-chat__cite-list { display: flex; flex-direction: column; gap: var(--space-2); }
 .user-chat__cite {
   padding: var(--space-3);
@@ -664,3 +665,5 @@
   overflow-wrap: anywhere;
 }
 .user-chat__cite-context-body mark { background: #fff3a3; color: inherit; padding: 1px 0; }
+.trace-review { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-subtle, var(--color-surface)); }
+.trace-review__form { display: flex; flex-direction: column; gap: var(--space-2); }

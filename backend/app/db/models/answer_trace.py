@@ -70,6 +70,17 @@ class AnswerTrace(Base):
     answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # 관리자 검토(2026-11-20, 개선 루프). 답이 왜 틀렸는지 원인을 표시하고, 질문을 골든 쿼리로 등록하면 그 id를 남긴다.
+    # 원인은 대화를 지워도 남도록 메시지가 아니라 추적 기록에 둔다.
+    review_cause: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    reviewed_by: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    golden_query_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("golden_queries.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )

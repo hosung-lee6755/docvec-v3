@@ -678,7 +678,8 @@ def _apply_document_title(doc, built_blocks) -> None:
 
 class StructureAnalyzeConfig(BaseModel):
     detect_headings: bool = True
-    heading_max_level: int = 3
+    # 2026-11-20 3 → 5. 글자 크기로 나누는 무리는 그대로 셋이고, 4·5단계는 점 번호·기호 순서와 HWP 개요 수준으로 정한다
+    heading_max_level: int = 5
     detect_lists: bool = True
     # 문서 파싱 고도화 Phase 2 — 이제 실질 동작(이전엔 no-op).
     detect_toc: bool = True
@@ -743,7 +744,9 @@ class StructureAnalyzeBlock(BaseBlock):
         # 1.19.0: 점 번호 깊이("3." < "3.2" < "3.2.1")로 단계를 나눈다. 번호의 부모-자식 관계가 이어지는 제목에만
         # 적용하고, 하위 절이 없는 장은 앞뒤 장과 번호가 이어지면 같은 단계로 둔다. "해설 N"·"부록 N" 같은 묶음 제목은
         # 그 아래 번호 장보다 한 단계 위에 둔다(KRS SG, KR S-03010 등 규격 문서, 2026-11-20).
-        return "1.19.0"
+        # 1.20.0: 제목 단계 상한을 3에서 5로 올린다. 글자 크기 무리는 셋까지만 나누고, "1.1.2"처럼 네 겹 이상인
+        # 번호와 하위 기호 제목만 4·5단계로 내린다(KR S-03010 해설 아래 1.1.2, 2026-11-20).
+        return "1.20.0"
 
     @property
     def category(self) -> str:

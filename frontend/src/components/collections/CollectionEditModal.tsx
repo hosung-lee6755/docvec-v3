@@ -12,6 +12,9 @@ import { apiClient } from '../../lib/apiClient'
 import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../../hooks/useAccess'
 import type { SecurityLevel } from '../../hooks/useDocumentMetadata'
 import { Alert, Button, ErrorAlert, Field, Input, Modal, Select, Textarea } from '../ui'
+import { ANALYSIS_WORKFLOW_HINT } from '../../lib/analysisOutputs'
+import { projectChangeNotice, workflowsForProject } from '../../lib/workflowScope'
+import { AnalysisOutputsNotice } from './AnalysisOutputsNotice'
 import { SearchSettingsSection } from './SearchSettingsSection'
 import type { ProjectOption } from './CollectionCreateModal'
 
@@ -130,10 +133,23 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
   )
   const [analysisVersionNumber, setAnalysisVersionNumber] = useState<number | null>(collection.default_analysis_workflow_version)
 
-  // 시스템 표준 워크플로우는 project_id가 없어 GET /workflows?project_id=에 절대 나오지 않는다 —
-  // 개인(프로젝트 없는) 컬렉션은 "표준 전처리(시스템 기본값)" 옵션 하나만 고를 수 있다.
-  const { data: projectPreprocessWorkflows } = useWorkflows(collection.project_id ?? null, 'PREPROCESS')
-  const { data: projectAnalysisWorkflows } = useWorkflows(collection.project_id ?? null, 'ANALYSIS')
+  // 선택지는 지금 고른 프로젝트의 워크플로우뿐이다(workflowsForProject). 개인(프로젝트 없는) 컬렉션은
+  // "표준 (시스템 기본값)" 선택지만 쓴다. 예전에는 개인 컬렉션이 프로젝트 지정 없는 목록을 불러와
+  // 모든 프로젝트의 워크플로우가 보였다.
+  const { data: projectPreprocessWorkflows } = useWorkflows(projectId || null, 'PREPROCESS')
+  const { data: projectAnalysisWorkflows } = useWorkflows(projectId || null, 'ANALYSIS')
+  const [projectNotice, setProjectNotice] = useState<string | null>(null)
+
+  // 프로젝트를 바꾸면 옛 프로젝트의 워크플로우 지정은 쓸 수 없어 표준으로 되돌리고 알린다(2026-11-20, lib/workflowScope.ts)
+  const handleProjectChange = (next: string) => {
+    if (next === projectId) return
+    const preprocessName = workflowId ? projectPreprocessWorkflows?.items.find((w) => w.id === workflowId)?.name ?? '지정한' : null
+    const analysisName = analysisWorkflowId ? projectAnalysisWorkflows?.items.find((w) => w.id === analysisWorkflowId)?.name ?? '지정한' : null
+    setProjectId(next)
+    setWorkflowId('')
+    setAnalysisWorkflowId('')
+    setProjectNotice(projectChangeNotice({ preprocess: preprocessName, analysis: analysisName }))
+  }
   const { data: editWorkflowVersions } = useWorkflowVersions(workflowId || null)
   const publishedVersions = useMemo(
     () => (editWorkflowVersions?.items ?? []).filter((v) => v.published_at).sort((a, b) => b.version_number - a.version_number),
@@ -284,7 +300,7 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
             hint="프로젝트를 지정하면 해당 프로젝트의 모든 멤버가 이 컬렉션에 자동으로 접근할 수 있습니다. 이미 프로젝트에 속한 컬렉션을 개인 컬렉션으로 되돌리는 것은 이 화면에서 지원하지 않습니다."
           >
             {(id) => (
-              <Select id={id} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+              <Select id={id} value={projectId} onChange={(e) => handleProjectChange(e.target.value)}>
                 <option value="">개인 컬렉션 (프로젝트 없음)</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
@@ -293,6 +309,8 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
             )}
           </Field>
         )}
+
+        {projectNotice && <Alert tone="warning">{projectNotice}</Alert>}
 
         <Field
           label="문서 처리 — 기본 워크플로우"
@@ -309,7 +327,7 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
               }}
             >
               <option value="">표준 전처리 (시스템 기본값)</option>
-              {(projectPreprocessWorkflows?.items ?? []).filter((wf) => !wf.is_system_default).map((wf) => (
+              {workflowsForProject(projectPreprocessWorkflows?.items, projectId).map((wf) => (
                 <option key={wf.id} value={wf.id}>{wf.name}</option>
               ))}
             </Select>
@@ -331,7 +349,7 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
           <Alert tone="info">{buildBlockChainPreview(previewGraph)}</Alert>
         )}
 
-        <Field label="기본 분석 워크플로우" hint="지정하면 전처리가 끝난 직후 이 워크플로우가 문서마다 자동으로 실행됩니다(요약·키워드 등이 문서에 자동 반영).">
+        <Field label="기본 분석 워크플로우" hint={ANALYSIS_WORKFLOW_HINT}>
           {(id) => (
             <Select
               id={id}
@@ -342,8 +360,8 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
                 setAnalysisVersionNumber(null)
               }}
             >
-              <option value="">자동 분석 안 함</option>
-              {(projectAnalysisWorkflows?.items ?? []).map((wf) => (
+              <option value="">표준 분석 (시스템 기본값)</option>
+              {workflowsForProject(projectAnalysisWorkflows?.items, projectId).map((wf) => (
                 <option key={wf.id} value={wf.id}>{wf.name}</option>
               ))}
             </Select>
@@ -358,6 +376,13 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
             versionNumber={analysisVersionNumber}
             onVersionChange={setAnalysisVersionNumber}
             versions={analysisPublishedVersions}
+          />
+        )}
+
+        {analysisWorkflowId && (
+          <AnalysisOutputsNotice
+            workflowId={analysisWorkflowId}
+            pinnedVersion={analysisVersionMode === 'pinned' ? analysisVersionNumber : null}
           />
         )}
 

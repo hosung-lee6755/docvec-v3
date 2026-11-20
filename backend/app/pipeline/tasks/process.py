@@ -514,6 +514,36 @@ def _normalize_ws(text: str) -> str:
 # short anchor stays intact even under reflow while still being distinctive
 # enough for real business-document text.
 _REPAGINATE_ANCHOR_CHARS = 60
+# 표의 앞 글로 쪽을 찾지 못했을 때 쪽을 정하는 데 쓰는 칸 글의 최소 길이(공백 제외). 짧은 칸("구분", "1")은
+# 여러 쪽에 나와 쪽을 정할 수 없다
+_REPAGINATE_MIN_CELL_CHARS = 8
+# 칸 글로는 현재 쪽부터 이만큼 뒤의 쪽까지만 정한다. 같은 표가 여러 쪽에 되풀이되면 우연히 한 쪽에만 나온 칸 하나로
+# 멀리 건너뛰고, 쪽은 앞으로만 가므로 뒤의 표가 모두 그 쪽에 묶인다(NS-AM 05.03 의 안쪽 표가 12쪽으로 갔다)
+_REPAGINATE_MAX_CELL_JUMP = 1
+
+
+def _table_cell_keys(rows: list[list[str]]) -> list[str]:
+    """미리보기 PDF 글과 맞출 칸 글. 칸 안 문단 구분자(" / ")와 칸 안의 표 표시는 미리보기에 없는 글자라 뺀다."""
+    from app.pipeline.adapters.hwp_adapter import CELL_PARAGRAPH_SEP
+    from app.pipeline.adapters.nested_tables import strip_nested_markers
+
+    return [_normalize_ws(strip_nested_markers(cell).replace(CELL_PARAGRAPH_SEP, "")) for row in rows for cell in row]
+
+
+def _page_by_distinct_cell(keys: list[str], normalized_pages: list[str], cursor: int) -> int | None:
+    """현재 쪽이나 바로 다음 쪽 가운데 한 쪽에만 나오는 긴 칸 글이 있는 쪽. 표의 앞 글로 찾지 못했을 때 쓴다.
+
+    NS-AM 검사매뉴얼(2026-11-20)은 모든 표의 머리 칸이 같고 미리보기의 글 순서가 달라 앞 글로는 찾지 못했다.
+    그래서 검사번호 04.01~04.03 표가 모두 이전 쪽(3쪽)에 남았다. 검사번호 칸은 한 쪽에만 나온다."""
+    seen: set[str] = set()
+    for key in keys:
+        if len(key) < _REPAGINATE_MIN_CELL_CHARS or key in seen:
+            continue
+        seen.add(key)
+        hits = [i for i in range(cursor, len(normalized_pages)) if key in normalized_pages[i]]
+        if len(hits) == 1 and hits[0] - cursor <= _REPAGINATE_MAX_CELL_JUMP:
+            return hits[0]
+    return None
 
 
 def _apply_preview_page_count(document_id: str, doc, parsed) -> None:
@@ -577,20 +607,29 @@ def _repaginate_hwp_like(document_id: str, doc, parsed) -> None:
             # table text, so matching on block.text directly would never hit.
             # Match on the raw cell text instead (order matches table_candidates
             # 1:1 — see hwp_adapter.py's enumerate(table_candidates) loop).
-            table = next(table_iter)
-            # 셀 안 문단 구분자(" / ")도 미리보기 PDF에는 없는 글자라 빼고 맞춘다
-            from app.pipeline.adapters.hwp_adapter import CELL_PARAGRAPH_SEP
+            from app.pipeline.adapters.nested_tables import is_inner_table_title
 
-            raw_cells = "".join(cell.replace(CELL_PARAGRAPH_SEP, "") for row in table.rows for cell in row)
-            needle = _normalize_ws(raw_cells)[:_REPAGINATE_ANCHOR_CHARS]
+            table = next(table_iter)
+            cell_keys = _table_cell_keys(table.rows)
+            needle = "".join(cell_keys)[:_REPAGINATE_ANCHOR_CHARS]
+            # 칸 안에서 떼어 낸 표는 바깥 표 바로 뒤에 있다. 뒤쪽의 같은 표와 맞아 멀리 건너뛰지 않게 다음 쪽까지만 찾는다
+            # (NS-AM 05.03 의 성능 표가 12쪽으로 갔다, 2026-11-20)
+            search_end = (
+                min(len(normalized_pages), cursor + 1 + _REPAGINATE_MAX_CELL_JUMP)
+                if is_inner_table_title(table.title) else len(normalized_pages)
+            )
         else:
+            cell_keys = []
             needle = _normalize_ws(block.text)[:_REPAGINATE_ANCHOR_CHARS]
+            search_end = len(normalized_pages)
         found_at = None
         if needle:
-            for i in range(cursor, len(normalized_pages)):
+            for i in range(cursor, search_end):
                 if needle in normalized_pages[i]:
                     found_at = i
                     break
+        if found_at is None and cell_keys:
+            found_at = _page_by_distinct_cell(cell_keys, normalized_pages, cursor)
         if found_at is None:
             # No match from the current page onward — likely reconstruction
             # drift (whitespace, a block spanning a page break). Stay on the
@@ -651,6 +690,14 @@ def _repaginate_hwp_like(document_id: str, doc, parsed) -> None:
     parsed.pages = [pages_by_number[n] for n in sorted(pages_by_number)]
     # 쪽수는 렌더링된 PDF 의 전체 쪽수 — 텍스트 블록이 없는 쪽(빈 쪽·그림 쪽)도 쪽으로 센다.
     parsed.page_count = len(pages_text)
+
+
+def _start_analysis(db, doc) -> None:
+    """처리가 끝난 문서를 분석한다. 컬렉션의 분석 워크플로우(없으면 표준 분석 워크플로우)를 그대로 따른다
+    (workflow.start_auto_analysis, 2026-11-20). 예전에는 요약, 메타데이터 작업을 직접 보냈다."""
+    from app.pipeline.tasks.workflow import start_auto_analysis
+
+    start_auto_analysis(db, doc)
 
 
 @celery_app.task(name="tasks.continue_processing", queue="embed", bind=True, max_retries=3)
@@ -738,10 +785,7 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
             from app.services.document_lifecycle import promote_on_indexed_sync
 
             promote_on_indexed_sync(db, doc)
-            from app.pipeline.tasks.summary import generate_summary
-            generate_summary.delay(document_id)
-            from app.pipeline.tasks.metadata import extract_metadata
-            extract_metadata.delay(document_id)
+            _start_analysis(db, doc)
             return {"document_id": document_id, "status": "INDEXED", "chunks": 0}
         current_job = start_job(db, document_id, "EMBED")
         doc.status = "EMBEDDING"
@@ -796,11 +840,7 @@ def continue_processing(self, document_id: str, edited_text: str | None = None) 
         from app.services.document_lifecycle import promote_on_indexed_sync
 
         promote_on_indexed_sync(db, doc)
-
-        from app.pipeline.tasks.summary import generate_summary
-        generate_summary.delay(document_id)
-        from app.pipeline.tasks.metadata import extract_metadata
-        extract_metadata.delay(document_id)
+        _start_analysis(db, doc)
 
         return {"document_id": document_id, "status": "INDEXED", "chunks": len(chunks)}
 

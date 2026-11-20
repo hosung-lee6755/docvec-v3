@@ -4,7 +4,10 @@ import { useCreateCollection } from '../../hooks/useCollections'
 import { useWorkflows } from '../../hooks/useWorkflows'
 import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../../hooks/useAccess'
 import type { SecurityLevel } from '../../hooks/useDocumentMetadata'
-import { Button, ErrorAlert, Field, Input, Modal, Select, Textarea } from '../ui'
+import { ANALYSIS_WORKFLOW_HINT } from '../../lib/analysisOutputs'
+import { projectChangeNotice, workflowsForProject } from '../../lib/workflowScope'
+import { Alert, Button, ErrorAlert, Field, Input, Modal, Select, Textarea } from '../ui'
+import { AnalysisOutputsNotice } from './AnalysisOutputsNotice'
 
 export interface ProjectOption {
   id: string
@@ -36,6 +39,18 @@ export function CollectionCreateModal({ projects, routeProjectId, initialProject
   const [isNameMissing, setIsNameMissing] = useState(false)
   const { data: preprocessWorkflows } = useWorkflows(projectId || null, 'PREPROCESS')
   const { data: analysisWorkflows } = useWorkflows(projectId || null, 'ANALYSIS')
+  const [projectNotice, setProjectNotice] = useState<string | null>(null)
+
+  // 프로젝트를 바꾸면 옛 프로젝트의 워크플로우 지정은 쓸 수 없어 표준으로 되돌리고 알린다(2026-11-20, lib/workflowScope.ts)
+  const handleProjectChange = (next: string) => {
+    if (next === projectId) return
+    const preprocessName = workflowId ? preprocessWorkflows?.items.find((w) => w.id === workflowId)?.name ?? '지정한' : null
+    const analysisName = analysisWorkflowId ? analysisWorkflows?.items.find((w) => w.id === analysisWorkflowId)?.name ?? '지정한' : null
+    setProjectId(next)
+    setWorkflowId('')
+    setAnalysisWorkflowId('')
+    setProjectNotice(projectChangeNotice({ preprocess: preprocessName, analysis: analysisName }))
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -114,7 +129,7 @@ export function CollectionCreateModal({ projects, routeProjectId, initialProject
         {!routeProjectId && (
           <Field label="프로젝트" hint="프로젝트를 지정하면 해당 프로젝트의 모든 멤버가 이 컬렉션에 자동으로 접근할 수 있습니다.">
             {(id) => (
-              <Select id={id} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+              <Select id={id} value={projectId} onChange={(e) => handleProjectChange(e.target.value)}>
                 <option value="">개인 컬렉션 (프로젝트 없음)</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
@@ -124,27 +139,31 @@ export function CollectionCreateModal({ projects, routeProjectId, initialProject
           </Field>
         )}
 
+        {projectNotice && <Alert tone="warning">{projectNotice}</Alert>}
+
         <Field label="기본 전처리 워크플로우" hint="업로드되는 문서의 임베딩 모델·청킹 방식은 이 워크플로우의 문서분할·RAG저장 블록 설정을 따릅니다.">
           {(id) => (
             <Select id={id} value={workflowId} onChange={(e) => setWorkflowId(e.target.value)}>
               <option value="">표준 전처리 (시스템 기본값)</option>
-              {(preprocessWorkflows?.items ?? []).filter((wf) => !wf.is_system_default).map((wf) => (
+              {workflowsForProject(preprocessWorkflows?.items, projectId).map((wf) => (
                 <option key={wf.id} value={wf.id}>{wf.name}</option>
               ))}
             </Select>
           )}
         </Field>
 
-        <Field label="기본 분석 워크플로우" hint="지정하면 전처리가 끝난 직후 이 워크플로우가 문서마다 자동으로 실행됩니다(요약·키워드 등이 문서에 자동 반영).">
+        <Field label="기본 분석 워크플로우" hint={ANALYSIS_WORKFLOW_HINT}>
           {(id) => (
             <Select id={id} value={analysisWorkflowId} onChange={(e) => setAnalysisWorkflowId(e.target.value)}>
-              <option value="">자동 분석 안 함</option>
-              {(analysisWorkflows?.items ?? []).map((wf) => (
+              <option value="">표준 분석 (시스템 기본값)</option>
+              {workflowsForProject(analysisWorkflows?.items, projectId).map((wf) => (
                 <option key={wf.id} value={wf.id}>{wf.name}</option>
               ))}
             </Select>
           )}
         </Field>
+
+        {analysisWorkflowId && <AnalysisOutputsNotice workflowId={analysisWorkflowId} pinnedVersion={null} />}
 
         {createCollection.isError && <ErrorAlert error={createCollection.error} message="컬렉션을 만들지 못했습니다." />}
       </form>

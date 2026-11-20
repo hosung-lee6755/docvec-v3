@@ -16,7 +16,7 @@ def _ctx(upstreams, config=None, document_id="doc-1", run_id="run-1"):
 def _doc(**kw):
     base = dict(
         id="doc-1", summary=None, summary_status=None, suggested_tags=None, tags=[],
-        category=None, metadata_status=None,
+        category=None, metadata_status=None, dismissed_tags=None,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -200,7 +200,7 @@ def test_output_change_records_before_values():
     by_field = {c["field"]: c for c in result.output["changes"]}
     assert by_field["summary"]["before"] == "이전 요약"
     assert by_field["suggested_tags"]["before"] == ["old"]
-    assert by_field["suggested_tags"]["after"] == ["old", "new"]
+    assert by_field["suggested_tags"]["after"] == ["new"]
 
 
 def test_output_closes_db_when_commit_fails():
@@ -218,7 +218,41 @@ def test_output_closes_db_when_commit_fails():
 def test_block_metadata():
     out, post = ob.OutputBlock(), ob.PostprocessBlock()
     assert out.block_type == "output" and post.block_type == "postprocess"
-    assert out.block_version == "1.6.0"
+    assert out.block_version == "1.7.0"
     assert out.config_schema is ob.OutputConfig
     assert post.config_schema is None
     assert out.category == post.category == "분석"
+
+
+def test_output_can_keep_the_category_out_of_suggested_tags():
+    # 표준 분석 워크플로우는 예전 요약·메타데이터 작업처럼 분류를 추천 태그에 넣지 않는다(2026-11-20)
+    doc = _doc()
+    up = {"keywords": ["에너지"], "category": "보고서"}
+    _run_output({"u": up}, doc, config={"save_to_document": True, "category_as_tag": False})
+    assert doc.category == "보고서"
+    assert doc.suggested_tags == ["에너지"]
+
+
+def test_output_replaces_previous_suggestions_with_this_runs_result():
+    # 추천 태그는 지금 워크플로우가 만든 결과다. 예전 실행의 태그와 섞지 않는다(2026-11-20)
+    doc = _doc(suggested_tags=["예전 작업 태그", "에너지"])
+    _run_output({"u": {"keywords": ["에너지", "서울"]}}, doc)
+    assert doc.suggested_tags == ["에너지", "서울"]
+
+
+def test_output_leaves_out_tags_the_user_dismissed():
+    doc = _doc(dismissed_tags=["서울", "Report"])
+    _run_output({"u": {"keywords": ["에너지", "서울", "report"]}}, doc)
+    assert doc.suggested_tags == ["에너지"]
+
+
+def test_output_leaves_suggestions_empty_when_every_tag_was_dismissed_or_added():
+    doc = _doc(tags=["에너지"], dismissed_tags=["서울"], suggested_tags=["예전"])
+    _run_output({"u": {"keywords": ["에너지", "서울"]}}, doc)
+    assert doc.suggested_tags is None
+
+
+def test_output_clears_old_suggestions_when_this_runs_keyword_step_found_nothing():
+    doc = _doc(suggested_tags=["예전"])
+    _run_output({"u": {"keywords": []}}, doc)
+    assert doc.suggested_tags is None

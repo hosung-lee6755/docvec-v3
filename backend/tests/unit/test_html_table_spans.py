@@ -108,3 +108,27 @@ def test_collector_remaps_spans_when_dropping_empty_rows():
 
     assert tables[0].rows == [["가", "1"], ["가", "2"]]
     assert tables[0].spans == [{"row": 0, "col": 0, "row_span": 2, "col_span": 1}]
+
+
+def test_inner_table_with_two_rows_is_separated_after_the_outer_table():
+    # 2026-11-20: 2행 2열 이상인 안쪽 표는 HWP 와 같이 바깥 표 뒤에 따로 내고 바깥 칸에 표시를 남긴다
+    blocks, tables = _table(
+        "<tr><th>구분</th><th>내용</th></tr>"
+        "<tr><td>설명</td><td>주요 부품<table><tr><td>부품명</td><td>재료</td></tr>"
+        "<tr><td>상체</td><td>GC 200</td></tr></table></td></tr>"
+    )
+
+    assert tables[0].rows == [["구분", "내용"], ["설명", "주요 부품 [칸 안의 표 1]"]]
+    assert tables[1].rows == [["부품명", "재료"], ["상체", "GC 200"]]
+    assert tables[1].title == "[칸 안의 표 1] '설명' 행 '내용' 열 칸에 든 표"
+    assert blocks[1].text.startswith("[표 2]\n[칸 안의 표 1] '설명' 행 '내용' 열 칸에 든 표\n")
+
+
+def test_single_cell_frame_holding_only_a_table_is_replaced_by_that_table():
+    _, tables = _table(
+        "<tr><td><table><tr><td>구분</td><td>값</td></tr><tr><td>a</td><td>1</td></tr></table></td></tr>"
+    )
+
+    assert len(tables) == 1
+    assert tables[0].rows == [["구분", "값"], ["a", "1"]]
+    assert tables[0].title is None

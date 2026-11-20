@@ -184,13 +184,20 @@ async def dismiss_tag_suggestion(
     current_user: User = Depends(get_current_user),
 ):
     """Drops one LLM-suggested tag without adding it to tags. Never touches
-    Qdrant — suggestions are never written there in the first place."""
+    Qdrant — suggestions are never written there in the first place.
+
+    무시한 태그는 dismissed_tags 에 기록한다(2026-11-20). 분석 출력 블록이 추천 태그를 매번 이번 실행
+    결과로 바꿔 넣으므로, 기록하지 않으면 다음 분석이 같은 태그를 다시 제안한다."""
     doc = await db.scalar(select(Document).where(Document.id == document_id))
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="editor")
 
     doc.suggested_tags = [t for t in (doc.suggested_tags or []) if t != body.tag] or None
+    dismissed = list(doc.dismissed_tags or [])
+    if body.tag.lower() not in {t.lower() for t in dismissed}:
+        # JSON 열은 제자리 변경을 감지하지 못하므로 새 목록을 넣는다
+        doc.dismissed_tags = [*dismissed, body.tag]
     await db.commit()
     return {"suggested_tags": doc.suggested_tags}
 
@@ -269,14 +276,14 @@ async def get_document_pages_text(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Per-page text powering page-synced navigation in the 원문 대조 tab.
-    Native PDFs use parsed_text split via page_map (real page boundaries from
-    the source). DOCX/HWP/HWPX have no such boundaries, so their pages come
-    from extracting text directly out of the generated preview PDF instead —
-    that pagination is the only page structure that actually exists for
-    those formats."""
+    """원문 대조 탭이 원본과 함께 쪽을 넘길 때 쓰는 쪽별 파싱 본문.
+
+    PDF 는 page_map(원본의 실제 쪽 경계)으로 자른다. DOCX·HWP·HWPX 는 미리보기 PDF 의 쪽 나눔이 유일한 쪽
+    구조라서, 미리보기 쪽마다 첫머리 글을 파싱 본문에서 찾아 같은 쪽으로 자른다(page_text_align).
+    예전에는 미리보기 PDF 에서 뽑은 글을 돌려주고 화면은 파싱 본문 전체를 보여 줘 두 쪽이 함께 움직이지 않았다."""
     import asyncio
 
+    from app.services.page_text_align import split_text_by_pages
     from app.services.preview_service import pdf_pages_text_for
 
     doc = await db.scalar(select(Document).where(Document.id == document_id))
@@ -284,12 +291,17 @@ async def get_document_pages_text(
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="viewer")
 
-    if not doc.original_filename.lower().endswith(".pdf"):
-        pages = await asyncio.to_thread(pdf_pages_text_for, str(doc.id))
-        if pages:
-            return {"document_id": str(doc.id), "pages": pages}
-
     text = doc.parsed_text or ""
+    if not doc.original_filename.lower().endswith(".pdf"):
+        preview_pages = await asyncio.to_thread(pdf_pages_text_for, str(doc.id))
+        if preview_pages:
+            # 미리보기 PDF 쪽에 맞춰 파싱 본문을 자른다. 맞추지 못하면 미리보기 글을 그대로 주고 synced=False 로 알린다
+            pieces = split_text_by_pages(text, [p["text"] for p in preview_pages])
+            if pieces is not None:
+                pages = [{"page_number": i + 1, "text": piece} for i, piece in enumerate(pieces)]
+                return _pages_response(doc, pages, len(preview_pages), synced=True)
+            return _pages_response(doc, preview_pages, len(preview_pages), synced=False)
+
     pages = []
     start = 0
     for end_offset, page_number in doc.page_map or []:
@@ -297,7 +309,15 @@ async def get_document_pages_text(
         start = end_offset
     if not pages and text:
         pages = [{"page_number": 1, "text": text}]
-    return {"document_id": str(doc.id), "pages": pages}
+    last_page = max((p["page_number"] for p in pages), default=0)
+    # 글이 없는 쪽(그림·빈 쪽)은 page_map 에 없다. 원본 쪽 수까지 넘길 수 있도록 page_count 를 함께 준다
+    total = max(doc.page_count or 0, last_page)
+    return _pages_response(doc, pages, total, synced=bool(doc.page_map))
+
+
+def _pages_response(doc: Document, pages: list[dict], total_pages: int, synced: bool) -> dict:
+    """synced 는 pages 가 원문 미리보기와 같은 쪽 번호로 나뉘었는지(원문 대조 탭이 함께 넘길 수 있는지)다."""
+    return {"document_id": str(doc.id), "pages": pages, "total_pages": total_pages, "synced": synced}
 
 
 @router.get("/{document_id}/download", response_model=DocumentDownloadResponse)

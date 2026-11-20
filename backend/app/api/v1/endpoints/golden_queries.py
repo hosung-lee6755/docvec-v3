@@ -115,14 +115,12 @@ async def _golden_query_or_404(db: AsyncSession, collection_id: UUID, query_id: 
     return gq
 
 
-@router.post("/collections/{collection_id}/golden-queries", response_model=GoldenQueryResponse)
-async def create_golden_query(
-    collection_id: UUID,
-    data: GoldenQueryCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    await check_collection_access(db, collection_id, current_user, min_role="editor")
+async def add_golden_query(
+    db: AsyncSession, collection_id: UUID, data: GoldenQueryCreate, user: User, detail: dict | None = None,
+) -> GoldenQuery:
+    """골든 쿼리 한 건을 더한다(커밋은 부르는 쪽이 한다). 컬렉션 화면과 답변 추적 화면(질문을 그대로 등록)이
+    같은 검사를 거친다. 컬렉션 편집 권한, 컬렉션당 상한, 기대 문서가 이 컬렉션에서 볼 수 있는 문서인지 본다."""
+    await check_collection_access(db, collection_id, user, min_role="editor")
     count = await db.scalar(
         select(func.count()).select_from(GoldenQuery).where(GoldenQuery.collection_id == str(collection_id))
     )
@@ -130,18 +128,29 @@ async def create_golden_query(
         raise HTTPException(
             status_code=409, detail=f"골든 쿼리는 컬렉션당 {MAX_GOLDEN_QUERIES_PER_COLLECTION}개까지 만들 수 있습니다"
         )
-    await _check_expected_documents(db, collection_id, data.expected_document_ids, current_user)
+    await _check_expected_documents(db, collection_id, data.expected_document_ids, user)
     gq = GoldenQuery(
         collection_id=str(collection_id),
         query=data.query,
         expected_document_ids=[str(d) for d in data.expected_document_ids],
         expected_facts=list(data.expected_facts) if data.expected_facts else None,
-        created_by=str(current_user.id),
+        created_by=str(user.id),
     )
     db.add(gq)
     await db.flush()
-    log_audit(db, str(current_user.id), "golden_query.create", "collection", str(collection_id),
-              detail={"golden_query_id": str(gq.id)})
+    log_audit(db, str(user.id), "golden_query.create", "collection", str(collection_id),
+              detail={"golden_query_id": str(gq.id), **(detail or {})})
+    return gq
+
+
+@router.post("/collections/{collection_id}/golden-queries", response_model=GoldenQueryResponse)
+async def create_golden_query(
+    collection_id: UUID,
+    data: GoldenQueryCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    gq = await add_golden_query(db, collection_id, data, current_user)
     await db.commit()
     await db.refresh(gq)
     return gq

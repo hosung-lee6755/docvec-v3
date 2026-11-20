@@ -264,6 +264,31 @@ async def test_pages_text_non_pdf_uses_preview_pdf_pages_then_falls_back(db_sess
         assert (await md.get_document_pages_text(doc.id, db_session, owner_user()))["pages"] == [{"page_number": 1, "text": "본문"}]
 
 
+async def test_pages_text_reports_total_pages_including_pages_without_text(db_session):  # noqa: F811
+    # 그림만 있는 마지막 쪽은 page_map 에 없다. 원본 쪽 수(page_count)까지 넘길 수 있어야 한다
+    doc = await add_doc(db_session, "m-pages-total", original_filename="a.pdf", parsed_text="AAABBB",
+                        page_map=[[3, 1], [6, 2]], page_count=4)
+
+    result = await md.get_document_pages_text(doc.id, db_session, owner_user())
+
+    assert (result["total_pages"], result["synced"]) == (4, True)
+
+
+async def test_pages_text_non_pdf_splits_parsed_text_by_preview_pages(db_session):  # noqa: F811
+    body = "제1장 총칙 이 지침의 목적을 정한다\n제2장 사업 대상 축산 농가와 생산자 단체\n"
+    doc = await add_doc(db_session, "m-pages-hwp", original_filename="a.hwp", parsed_text=body)
+    preview_pages = [
+        {"page_number": 1, "text": "제1장 총칙 이 지침의 목적을 정한다"},
+        {"page_number": 2, "text": "- 2 - 제2장 사업 대상 축산 농가와 생산자 단체"},
+    ]
+
+    with patch("app.services.preview_service.pdf_pages_text_for", return_value=preview_pages):
+        result = await md.get_document_pages_text(doc.id, db_session, owner_user())
+
+    assert result["synced"] is True and result["total_pages"] == 2
+    assert [p["text"].split("\n")[0] for p in result["pages"]] == ["제1장 총칙 이 지침의 목적을 정한다", "제2장 사업 대상 축산 농가와 생산자 단체"]
+
+
 async def test_pages_text_404_and_403(db_session):  # noqa: F811
     doc = await add_doc(db_session, "m-pages-g", original_filename="a.pdf")
     await assert_http_error(md.get_document_pages_text(uuid4(), db_session, owner_user()), 404)
@@ -293,3 +318,15 @@ async def test_error_endpoint_returns_failure_details_only_for_failed_documents(
     await assert_http_error(md.get_document_error(healthy.id, db_session, owner_user()), 400)
     await assert_http_error(md.get_document_error(uuid4(), db_session, owner_user()), 404)
     await assert_http_error(md.get_document_error(failed.id, db_session, stranger_user()), 403)
+
+
+async def test_dismissed_suggestion_is_remembered_once(db_session, qdrant):  # noqa: F811
+    """무시한 추천 태그를 기록해 다음 분석이 다시 제안하지 않게 한다(2026-11-20). 같은 태그는 한 번만 남긴다."""
+    doc = await add_doc(db_session, "m-dismiss-memory", suggested_tags=["a", "b"], dismissed_tags=["예전"])
+
+    await md.dismiss_tag_suggestion(doc.id, DocumentTagSuggestionRequest(tag="a"), db_session, owner_user())
+    await md.dismiss_tag_suggestion(doc.id, DocumentTagSuggestionRequest(tag="a"), db_session, owner_user())
+
+    await db_session.refresh(doc)
+    assert doc.dismissed_tags == ["예전", "a"]
+    assert doc.suggested_tags == ["b"]

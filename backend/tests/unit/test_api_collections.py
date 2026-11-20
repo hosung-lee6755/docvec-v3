@@ -123,7 +123,7 @@ async def test_create_collection_validates_default_workflow_kinds(world):
         api.CollectionCreate(name="c", default_analysis_workflow_id=U(preprocess.id)), db, owner))
 
     ok = await api.create_collection(api.CollectionCreate(
-        name="d", default_workflow_id=U(preprocess.id), default_workflow_version=2,
+        name="d", project_id=U(world["project"].id), default_workflow_id=U(preprocess.id), default_workflow_version=2,
         default_analysis_workflow_id=U(analysis.id), default_analysis_workflow_version=3), db, owner)
     assert str(ok.default_workflow_id) == str(preprocess.id) and ok.default_workflow_version == 2
     assert str(ok.default_analysis_workflow_id) == str(analysis.id)
@@ -504,3 +504,67 @@ async def test_update_collection_rejects_out_of_range_search_settings():
         api.CollectionUpdate.model_validate({"search_settings": {"top_k": 50}})
     with pytest.raises(ValidationError):
         api.CollectionUpdate.model_validate({"search_settings": {"mode": "magic"}})
+
+
+# ---------- 프로젝트 전용 워크플로우(2026-11-20) ----------
+
+@pytest.mark.asyncio
+async def test_create_collection_rejects_another_projects_workflow(world):
+    """프로젝트 워크플로우는 같은 프로젝트의 컬렉션에만 지정한다. 개인 컬렉션은 시스템 워크플로우만 쓴다."""
+    db, owner = world["db"], world["owner"]
+    other = await make_project(db, owner, "P-other")
+    foreign_pre = await make_workflow(db, owner, other, kind="PREPROCESS")
+    foreign_ana = await make_workflow(db, owner, other, kind="ANALYSIS")
+    system_pre = await make_workflow(db, owner, None, kind="PREPROCESS")
+
+    for data in (
+        api.CollectionCreate(name="x1", project_id=U(world["project"].id), default_workflow_id=U(foreign_pre.id)),
+        api.CollectionCreate(name="x2", project_id=U(world["project"].id), default_analysis_workflow_id=U(foreign_ana.id)),
+        api.CollectionCreate(name="x3", default_workflow_id=U(foreign_pre.id)),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await api.create_collection(data, db, owner)
+        assert exc.value.status_code == 400
+        assert "P-other" in exc.value.detail
+
+    personal = await api.create_collection(api.CollectionCreate(name="x4", default_workflow_id=U(system_pre.id)), db, owner)
+    assert str(personal.default_workflow_id) == str(system_pre.id)
+
+
+@pytest.mark.asyncio
+async def test_update_collection_rejects_another_projects_workflow(world):
+    db, owner, cid = world["db"], world["owner"], U(world["collection"].id)
+    other = await make_project(db, owner, "P-other")
+    foreign = await make_workflow(db, owner, other, kind="ANALYSIS")
+
+    await _expect(400, api.update_collection(cid, api.CollectionUpdate(default_analysis_workflow_id=U(foreign.id)), db, owner))
+
+
+@pytest.mark.asyncio
+async def test_moving_a_collection_to_another_project_resets_workflows_that_no_longer_fit(world):
+    """컬렉션을 다른 프로젝트로 옮기면 옛 프로젝트의 워크플로우 지정은 표준으로 되돌린다(화면이 저장 전에 알린다)."""
+    db, owner, cid = world["db"], world["owner"], U(world["collection"].id)
+    pre = await make_workflow(db, owner, world["project"], kind="PREPROCESS")
+    ana = await make_workflow(db, owner, world["project"], kind="ANALYSIS")
+    await api.update_collection(cid, api.CollectionUpdate(
+        default_workflow_id=U(pre.id), default_workflow_version=2,
+        default_analysis_workflow_id=U(ana.id), default_analysis_workflow_version=3), db, owner)
+    target = await make_project(db, owner, "P2")
+
+    moved = await api.update_collection(cid, api.CollectionUpdate(project_id=U(target.id)), db, owner)
+
+    assert str(moved.project_id) == str(target.id)
+    assert moved.default_workflow_id is None and moved.default_workflow_version is None
+    assert moved.default_analysis_workflow_id is None and moved.default_analysis_workflow_version is None
+
+
+@pytest.mark.asyncio
+async def test_moving_a_collection_can_pick_the_new_projects_workflow_in_the_same_request(world):
+    db, owner, cid = world["db"], world["owner"], U(world["collection"].id)
+    target = await make_project(db, owner, "P2")
+    new_pre = await make_workflow(db, owner, target, kind="PREPROCESS")
+
+    moved = await api.update_collection(cid, api.CollectionUpdate(
+        project_id=U(target.id), default_workflow_id=U(new_pre.id)), db, owner)
+
+    assert str(moved.default_workflow_id) == str(new_pre.id)

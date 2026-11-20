@@ -115,10 +115,12 @@ async def test_explicit_project_workflow_requires_project_access(db_session):  #
     db_session.add(project)
     await db_session.flush()
     _, [version] = await _workflow(db_session, project_id=project.id)
+    collection = await _collection(db_session, project_id=project.id)
 
-    assert await up._resolve_preprocess_version_id(db_session, None, str(version.id), current_user=owner_user()) == version.id
+    assert await up._resolve_preprocess_version_id(
+        db_session, str(collection.id), str(version.id), current_user=owner_user()) == version.id
     await assert_http_error(
-        up._resolve_preprocess_version_id(db_session, None, str(version.id), current_user=stranger_user()), 403
+        up._resolve_preprocess_version_id(db_session, str(collection.id), str(version.id), current_user=stranger_user()), 403
     )
 
 
@@ -420,3 +422,18 @@ async def test_new_version_inherits_security_level_and_acl_of_previous_version(d
     )).all()
     assert v2.security_level == "Confidential"
     assert [str(p) for p in inherited] == [principal]
+
+
+async def test_explicit_project_workflow_only_for_that_projects_collection(db_session):  # noqa: F811
+    """업로드 때 고른 프로젝트 워크플로우는 같은 프로젝트의 컬렉션에만 쓴다(2026-11-20)."""
+    project = Project(id=uuid4(), name="공정 프로젝트", created_by=OWNER_ID)
+    other = Project(id=uuid4(), name="다른 프로젝트", created_by=OWNER_ID)
+    db_session.add_all([project, other])
+    await db_session.flush()
+    _, [version] = await _workflow(db_session, project_id=project.id)
+    foreign_collection = await _collection(db_session, project_id=other.id)
+
+    for collection_id in (str(foreign_collection.id), None):
+        err = await assert_http_error(
+            up._resolve_preprocess_version_id(db_session, collection_id, str(version.id), current_user=owner_user()), 400)
+        assert "공정 프로젝트" in err.detail

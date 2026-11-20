@@ -169,6 +169,9 @@ class Document(Base):
     # 사용자가 직접 고친 자동 생성 필드 이름(title/language/category). 여기 있는 필드는 재처리가
     # 덮어쓰지 않는다 — PATCH /documents/{id}/metadata 의 reset_fields 로만 해제된다.
     user_edited_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # 사용자가 무시한 추천 태그(2026-11-20). 분석 출력 블록이 다시 제안하지 않는다. 추천 태그는 분석할 때마다
+    # 이번 실행 결과로 바뀌므로, 무시한 판단을 따로 기억하지 않으면 같은 태그가 다시 나타난다.
+    dismissed_tags: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # 문서 내용에서 신뢰성 있게 자동 추출할 수 없어, 자동 생성 로직 없이
     # PATCH /documents/{id}/metadata를 통해 사용자가 직접 입력해야만 채워지는 필드.
     # 기본값은 항상 None.
