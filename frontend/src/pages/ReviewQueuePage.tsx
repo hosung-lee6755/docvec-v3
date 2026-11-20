@@ -1,11 +1,12 @@
 // 검토 대기: 처리가 검토 단계에서 멈춘 문서와 멈춘 이유를 모아 보여 주고, 바로 승인하거나 반려한다.
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CheckCircle2 } from 'lucide-react'
 import {
-  useApproveReview, useRejectReview, useReviewQueue,
-  type ReviewQueueItem, type ReviewReason,
+  useApproveReview, useBulkApproveReview, useBulkRejectReview, useRejectReview, useReviewQueue,
+  type BulkReviewResult, type ReviewQueueItem, type ReviewReason,
 } from '../hooks/useDocumentQueues'
+import PiiDetectionsTab from '../components/document-detail/PiiDetectionsTab'
 import {
   PII_TYPE_LABELS, QUALITY_CATEGORY_LABELS, QUALITY_STATUS_LABELS, REVIEW_REASON_LABELS,
   formatElapsed, isStale,
@@ -23,12 +24,51 @@ export default function ReviewQueuePage() {
   const { data, isLoading, isError, error, refetch } = useReviewQueue()
   const approve = useApproveReview()
   const reject = useRejectReview()
+  const bulkApprove = useBulkApproveReview()
+  const bulkReject = useBulkRejectReview()
   const [filter, setFilter] = useState<ReasonFilter>('all')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [bulkResult, setBulkResult] = useState<string | null>(null)
 
   const items = data?.items ?? []
   const visible = filter === 'all' ? items : items.filter((item) => item.reasons.includes(filter))
   const staleCount = items.filter((item) => isStale(item.waiting_since)).length
   const toggle = (next: ReasonFilter) => setFilter((current) => (current === next ? 'all' : next))
+  const isBusy = approve.isPending || reject.isPending || bulkApprove.isPending || bulkReject.isPending
+
+  // 지금 보이는 문서 중 고른 것만 대상으로 한다. 필터를 바꾸거나 처리가 끝나 목록에서 빠진 문서는 세지 않는다
+  const actionable = visible.filter((item) => item.run_id)
+  const selected = actionable.filter((item) => selectedIds.has(item.document_id))
+  const isAllSelected = selected.length > 0 && selected.length === actionable.length
+  const toggleAll = () => setSelectedIds(isAllSelected ? new Set() : new Set(actionable.map((item) => item.document_id)))
+  const toggleSelect = (documentId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(documentId)) next.delete(documentId)
+      else next.add(documentId)
+      return next
+    })
+  }
+
+  const runBulk = (targets: ReviewQueueItem[], shouldApprove: boolean, scope: string) => {
+    if (targets.length === 0) return
+    const message = shouldApprove
+      ? `${scope} 문서 ${targets.length}건을 승인하고 남은 처리를 이어서 진행할까요?`
+      : `${scope} 문서 ${targets.length}건을 반려할까요? 처리가 멈추고 문서는 실패 목록으로 옮겨집니다.`
+    if (!window.confirm(message)) return
+    const mutation = shouldApprove ? bulkApprove : bulkReject
+    const verb = shouldApprove ? '승인' : '반려'
+    setBulkResult(null)
+    mutation.mutate(targets.map((item) => item.run_id as string), {
+      onSuccess: ({ succeeded, failed }: BulkReviewResult) => {
+        setSelectedIds(new Set())
+        setBulkResult(failed > 0
+          ? `${succeeded}건을 ${verb}했고 ${failed}건은 ${verb}하지 못했습니다. 남은 문서를 다시 시도해 주세요.`
+          : `${succeeded}건을 ${verb}했습니다.`)
+      },
+    })
+  }
 
   const handleApprove = (item: ReviewQueueItem) => {
     if (!item.run_id) return
@@ -64,6 +104,7 @@ export default function ReviewQueuePage() {
         {isError && <ErrorAlert error={error} message="검토 대기 목록을 불러오지 못했습니다." onRetry={() => refetch()} />}
         {approve.isError && <ErrorAlert error={approve.error} message="승인하지 못했습니다." />}
         {reject.isError && <ErrorAlert error={reject.error} message="반려하지 못했습니다." />}
+        {bulkResult && <p className="ds-cell-muted" role="status" style={{ margin: 0 }}>{bulkResult}</p>}
         {data && data.total > items.length && (
           <p className="ds-cell-muted" style={{ margin: 0 }}>
             전체 {data.total}건 중 오래 기다린 {items.length}건을 보여 줍니다.
@@ -79,11 +120,30 @@ export default function ReviewQueuePage() {
           />
         )}
         {visible.length > 0 && (
+          <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="ds-cell-muted" style={{ marginRight: 'auto' }}>
+              {selected.length > 0 ? `${selected.length}건 선택` : '문서를 골라 한꺼번에 승인하거나 반려할 수 있습니다.'}
+            </span>
+            <Button size="sm" variant="primary" disabled={isBusy || selected.length === 0} onClick={() => runBulk(selected, true, '선택한')}>
+              선택 승인하고 계속
+            </Button>
+            <Button size="sm" variant="ghost" disabled={isBusy || selected.length === 0} onClick={() => runBulk(selected, false, '선택한')}>
+              선택 반려
+            </Button>
+            <Button size="sm" variant="secondary" disabled={isBusy || actionable.length === 0} onClick={() => runBulk(actionable, true, '목록의')}>
+              전체 승인하고 계속
+            </Button>
+          </div>
+        )}
+        {visible.length > 0 && (
           <div className="ds-table-wrap">
             <table className="ds-table">
               <caption className="sr-only">검토 대기 문서</caption>
               <thead>
                 <tr>
+                  <th scope="col" className="ds-cell-check">
+                    <input type="checkbox" aria-label="검토 대기 문서 전체 선택" checked={isAllSelected} onChange={toggleAll} />
+                  </th>
                   <th scope="col">문서</th>
                   <th scope="col">멈춘 이유</th>
                   <th scope="col">대기</th>
@@ -92,13 +152,25 @@ export default function ReviewQueuePage() {
               </thead>
               <tbody>
                 {visible.map((item) => (
-                  <ReviewRow
-                    key={item.document_id}
-                    item={item}
-                    isBusy={approve.isPending || reject.isPending}
-                    onApprove={() => handleApprove(item)}
-                    onReject={() => handleReject(item)}
-                  />
+                  <Fragment key={item.document_id}>
+                    <ReviewRow
+                      item={item}
+                      isBusy={isBusy}
+                      isSelected={selectedIds.has(item.document_id)}
+                      isExpanded={expandedId === item.document_id}
+                      onToggleSelect={() => toggleSelect(item.document_id)}
+                      onToggleExpand={() => setExpandedId((cur) => (cur === item.document_id ? null : item.document_id))}
+                      onApprove={() => handleApprove(item)}
+                      onReject={() => handleReject(item)}
+                    />
+                    {expandedId === item.document_id && (
+                      <tr>
+                        <td colSpan={5} style={{ background: 'var(--color-surface-subtle)' }}>
+                          <PiiDetectionsTab documentId={item.document_id} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -109,16 +181,31 @@ export default function ReviewQueuePage() {
   )
 }
 
-function ReviewRow({ item, isBusy, onApprove, onReject }: {
+function ReviewRow({
+  item, isBusy, isSelected, isExpanded, onToggleSelect, onToggleExpand, onApprove, onReject,
+}: {
   item: ReviewQueueItem
   isBusy: boolean
+  isSelected: boolean
+  isExpanded: boolean
+  onToggleSelect: () => void
+  onToggleExpand: () => void
   onApprove: () => void
   onReject: () => void
 }) {
   const reviewTab = item.reasons.includes('pii') && !item.reasons.includes('quality') ? 'pii' : 'quality'
   const stale = isStale(item.waiting_since)
   return (
-    <tr>
+    <tr className={isSelected ? 'is-selected' : undefined}>
+      <td className="ds-cell-check">
+        <input
+          type="checkbox"
+          aria-label={`${item.filename} 선택`}
+          checked={isSelected}
+          disabled={!item.run_id}
+          onChange={onToggleSelect}
+        />
+      </td>
       <td>
         <Link to={`/documents/${item.document_id}`} className="ds-link-btn">{item.filename}</Link>
         <span className="ds-cell-sub">{item.collection_name ?? '컬렉션 없음'}</span>
@@ -131,6 +218,11 @@ function ReviewRow({ item, isBusy, onApprove, onReject }: {
       </td>
       <td>
         <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          {item.reasons.includes('pii') && (
+            <Button size="sm" variant="ghost" onClick={onToggleExpand} aria-expanded={isExpanded}>
+              {isExpanded ? '민감정보 접기' : '민감정보 보기'}
+            </Button>
+          )}
           <Link to={`/documents/${item.document_id}?tab=${reviewTab}`} className={buttonClass('secondary', 'sm')}>
             검토하기
           </Link>

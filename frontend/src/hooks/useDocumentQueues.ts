@@ -73,6 +73,36 @@ export function useApproveReview() {
   })
 }
 
+export interface BulkReviewResult {
+  succeeded: number
+  failed: number
+}
+
+// 여러 실행을 한꺼번에 보내고, 일부가 실패해도 나머지는 끝까지 처리한다
+async function postEach(runIds: string[], action: 'resume' | 'cancel'): Promise<BulkReviewResult> {
+  const results = await Promise.allSettled(runIds.map((id) => apiClient.post(`/workflows/runs/${id}/${action}`)))
+  const failed = results.filter((r) => r.status === 'rejected').length
+  return { succeeded: results.length - failed, failed }
+}
+
+/** 고른 문서들을 한꺼번에 승인하고 이어서 처리한다. */
+export function useBulkApproveReview() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (runIds: string[]) => postEach(runIds, 'resume'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['documents'] }),
+  })
+}
+
+/** 고른 문서들을 한꺼번에 반려한다. */
+export function useBulkRejectReview() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (runIds: string[]) => postEach(runIds, 'cancel'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['documents'] }),
+  })
+}
+
 /** 검토 게이트에서 멈춘 실행을 반려한다. 문서는 실패 상태가 되고 반려 사유가 남는다. */
 export function useRejectReview() {
   const queryClient = useQueryClient()

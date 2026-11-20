@@ -45,8 +45,8 @@ describe('PiiDetectionsTab bulk actions', () => {
     fireEvent.click(screen.getByRole('button', { name: '전체 승인' }))
     fireEvent.click(screen.getByRole('button', { name: '전체 해제' }))
 
-    expect(bulkMutate).toHaveBeenNthCalledWith(1, { documentId: 'doc-1', approve: true })
-    expect(bulkMutate).toHaveBeenNthCalledWith(2, { documentId: 'doc-1', approve: false })
+    expect(bulkMutate).toHaveBeenNthCalledWith(1, { documentId: 'doc-1', approve: true }, expect.anything())
+    expect(bulkMutate).toHaveBeenNthCalledWith(2, { documentId: 'doc-1', approve: false }, expect.anything())
   })
 
   it('does nothing when the confirmation is cancelled', () => {
@@ -76,6 +76,29 @@ describe('PiiDetectionsTab bulk actions', () => {
     expect(screen.getByText('010-1234-5678')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '전체 숨기기' }))
     expect(screen.queryByText('010-1234-5678')).not.toBeInTheDocument()
+  })
+
+  it('approves or releases only the checked detections', () => {
+    render(<PiiDetectionsTab documentId="doc-1" />)
+    expect(screen.getByRole('button', { name: '선택 승인' })).toBeDisabled()
+
+    fireEvent.click(screen.getAllByRole('checkbox')[1])
+    fireEvent.click(screen.getByRole('button', { name: '선택 승인' }))
+
+    expect(bulkMutate).toHaveBeenCalledWith(
+      { documentId: 'doc-1', approve: true, detectionIds: ['d-1'] }, expect.anything(),
+    )
+  })
+
+  it('selects every detection with the header checkbox', () => {
+    render(<PiiDetectionsTab documentId="doc-1" />)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '민감정보 전체 선택' }))
+    fireEvent.click(screen.getByRole('button', { name: '선택 해제' }))
+
+    expect(bulkMutate).toHaveBeenCalledWith(
+      { documentId: 'doc-1', approve: false, detectionIds: ['d-1', 'd-2'] }, expect.anything(),
+    )
   })
 
   it('shows the original-text buttons only to administrators', () => {

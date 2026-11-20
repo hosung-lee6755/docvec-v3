@@ -365,21 +365,34 @@ async def _tab_pii_detections(db: AsyncSession, doc: Document) -> tuple[str | No
     return run_id, list(detections)
 
 
-async def _bulk_review_pii(db: AsyncSession, document_id: UUID, current_user: User, approve: bool) -> dict:
+class PiiBulkReviewRequest(BaseModel):
+    # 비우면 탭의 탐지 전체, 주면 그중 고른 탐지만 바꾼다
+    detection_ids: list[UUID] | None = None
+
+
+async def _bulk_review_pii(
+    db: AsyncSession, document_id: UUID, current_user: User, approve: bool, detection_ids: list[UUID] | None = None,
+) -> dict:
     doc = await db.scalar(select(Document).where(Document.id == document_id))
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     await check_document_access(db, doc, current_user, min_role="editor")
 
     run_id, detections = await _tab_pii_detections(db, doc)
+    targets = detections
+    if detection_ids is not None:
+        wanted = {str(i) for i in detection_ids}
+        targets = [d for d in detections if str(d.id) in wanted]
+        if len(targets) != len(wanted):
+            raise HTTPException(status_code=404, detail="PII detection not found")
     now = datetime.utcnow()
-    for detection in detections:
+    for detection in targets:
         detection.approved_by = current_user.id if approve else None
         detection.approved_at = now if approve else None
         detection.rejected = not approve
     log_audit(
         db, str(current_user.id), "pii.approve_all" if approve else "pii.reject_all",
-        resource_type="document", resource_id=str(document_id), detail={"count": len(detections)},
+        resource_type="document", resource_id=str(document_id), detail={"count": len(targets), "selected": detection_ids is not None},
     )
     await db.commit()
     for detection in detections:
@@ -392,9 +405,12 @@ async def approve_all_pii_detections(
     document_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    body: PiiBulkReviewRequest | None = None,
 ):
-    """민감정보 탭의 탐지를 모두 승인한다(이미 해제한 것도 승인으로 바뀐다)."""
-    return await _bulk_review_pii(db, document_id, current_user, approve=True)
+    """민감정보 탭의 탐지를 모두(또는 detection_ids 로 고른 것만) 승인한다. 이미 해제한 것도 승인으로 바뀐다."""
+    return await _bulk_review_pii(
+        db, document_id, current_user, approve=True, detection_ids=body.detection_ids if body else None,
+    )
 
 
 @router.post("/{document_id}/pii/reject-all", response_model=PiiDetectionsResponse)
@@ -402,9 +418,12 @@ async def reject_all_pii_detections(
     document_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    body: PiiBulkReviewRequest | None = None,
 ):
-    """민감정보 탭의 탐지를 모두 해제한다(이미 승인한 것도 해제로 바뀐다)."""
-    return await _bulk_review_pii(db, document_id, current_user, approve=False)
+    """민감정보 탭의 탐지를 모두(또는 detection_ids 로 고른 것만) 해제한다. 이미 승인한 것도 해제로 바뀐다."""
+    return await _bulk_review_pii(
+        db, document_id, current_user, approve=False, detection_ids=body.detection_ids if body else None,
+    )
 
 
 class PiiRevealAllResponse(BaseModel):

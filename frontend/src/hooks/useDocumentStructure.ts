@@ -271,12 +271,17 @@ export function useRejectPii() {
   })
 }
 
-/** 민감정보 탭의 탐지를 모두 승인(approve=true)하거나 모두 해제한다. */
+/** 민감정보 탭의 탐지를 승인(approve=true)하거나 해제한다. detectionIds를 주면 고른 탐지만, 없으면 전체를 바꾼다. */
 export function useBulkReviewPii() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ documentId, approve }: { documentId: string; approve: boolean }) => {
-      const { data } = await apiClient.post(`/documents/${documentId}/pii/${approve ? 'approve-all' : 'reject-all'}`)
+    mutationFn: async ({ documentId, approve, detectionIds }: {
+      documentId: string; approve: boolean; detectionIds?: string[]
+    }) => {
+      const { data } = await apiClient.post(
+        `/documents/${documentId}/pii/${approve ? 'approve-all' : 'reject-all'}`,
+        detectionIds ? { detection_ids: detectionIds } : undefined,
+      )
       return data as PiiDetectionsResult
     },
     onSuccess: (data, { documentId }) => {

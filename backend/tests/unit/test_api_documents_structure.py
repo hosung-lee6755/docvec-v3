@@ -277,6 +277,23 @@ async def test_pii_approve_all_then_reject_all_covers_every_detection_on_the_tab
     assert {log.action for log in logs} >= {"pii.approve_all", "pii.reject_all"}
 
 
+async def test_pii_bulk_review_changes_only_the_selected_detections(db_session):  # noqa: F811
+    doc, run = await doc_with_run(db_session, "s-pii-bulk-sel")
+    first, second = await _pii(db_session, doc, run), await _pii(db_session, doc, run)
+    user = owner_user()
+
+    result = await st.approve_all_pii_detections(
+        doc.id, db_session, user, st.PiiBulkReviewRequest(detection_ids=[first.id]),
+    )
+
+    by_id = {str(d.id): d for d in result["detections"]}
+    assert str(by_id[str(first.id)].approved_by) == str(user.id)
+    assert by_id[str(second.id)].approved_by is None and not by_id[str(second.id)].rejected
+    await assert_http_error(
+        st.reject_all_pii_detections(doc.id, db_session, user, st.PiiBulkReviewRequest(detection_ids=[uuid4()])), 404,
+    )
+
+
 async def test_pii_bulk_review_guards(db_session):  # noqa: F811
     doc, run = await doc_with_run(db_session, "s-pii-bulk-guard")
     await _pii(db_session, doc, run)

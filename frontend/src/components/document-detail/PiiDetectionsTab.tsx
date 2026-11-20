@@ -20,6 +20,7 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
   const bulkReview = useBulkReviewPii()
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
   const [revealed, setRevealed] = useState<Record<string, string>>({})
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   const handleReveal = (detectionId: string) => {
     if (revealed[detectionId] != null) {
@@ -44,7 +45,24 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
       ? '탐지된 민감정보를 모두 승인합니다. 이미 해제한 항목도 승인으로 바뀝니다. 계속할까요?'
       : '탐지된 민감정보를 모두 해제합니다. 이미 승인한 항목도 해제로 바뀝니다. 계속할까요?'
     if (!window.confirm(message)) return
-    bulkReview.mutate({ documentId, approve: shouldApprove })
+    bulkReview.mutate({ documentId, approve: shouldApprove }, { onSuccess: () => setSelectedIds(new Set()) })
+  }
+
+  const handleSelectedReview = (shouldApprove: boolean) => {
+    if (selectedIds.size === 0) return
+    bulkReview.mutate(
+      { documentId, approve: shouldApprove, detectionIds: [...selectedIds] },
+      { onSuccess: () => setSelectedIds(new Set()) },
+    )
+  }
+
+  const toggleSelect = (detectionId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(detectionId)) next.delete(detectionId)
+      else next.add(detectionId)
+      return next
+    })
   }
 
   if (isError) return <ErrorText error={error} message="민감정보 탐지 결과를 불러오지 못했습니다." />
@@ -65,13 +83,34 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
   const rejectedCount = detections.filter((d) => !d.approved_by && d.rejected).length
   const revealedCount = Object.keys(revealed).length
   const isReviewBusy = approve.isPending || reject.isPending || bulkReview.isPending
+  // 재처리 등으로 목록이 바뀌면 사라진 탐지는 선택에서 뺀다
+  const selectedCount = detections.filter((d) => selectedIds.has(d.id)).length
+  const isAllSelected = selectedCount > 0 && selectedCount === detections.length
+  const toggleAll = () => setSelectedIds(isAllSelected ? new Set() : new Set(detections.map((d) => d.id)))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0, marginRight: 'auto' }}>
           탐지 {detections.length}건, 승인 {approvedCount}건, 해제 {rejectedCount}건
+          {selectedCount > 0 && `, 선택 ${selectedCount}건`}
         </p>
+        <button
+          type="button"
+          onClick={() => handleSelectedReview(true)}
+          disabled={isReviewBusy || selectedCount === 0}
+          className="ds-btn ds-btn--ghost ds-btn--sm"
+        >
+          선택 승인
+        </button>
+        <button
+          type="button"
+          onClick={() => handleSelectedReview(false)}
+          disabled={isReviewBusy || selectedCount === 0}
+          className="ds-btn ds-btn--ghost ds-btn--sm"
+        >
+          선택 해제
+        </button>
         <button
           type="button"
           onClick={() => handleBulkReview(true)}
@@ -118,6 +157,9 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ background: 'var(--color-surface-subtle)' }}>
+              <th style={{ width: 28, padding: '6px 10px', borderBottom: '1px solid var(--color-border)' }}>
+                <input type="checkbox" aria-label="민감정보 전체 선택" checked={isAllSelected} onChange={toggleAll} />
+              </th>
               {[
                 '유형', '탐지 값(마스킹)', '위치', '신뢰도', '조치', '승인',
                 ...(isAdmin ? ['원문'] : []),
@@ -129,6 +171,14 @@ export default function PiiDetectionsTab({ documentId }: { documentId: string })
           <tbody>
             {detections.map((d) => (
               <tr key={d.id}>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)' }}>
+                  <input
+                    type="checkbox"
+                    aria-label={`${PII_TYPE_LABELS[d.entity_type] ?? d.entity_type} ${d.masked_value ?? ''} 선택`}
+                    checked={selectedIds.has(d.id)}
+                    onChange={() => toggleSelect(d.id)}
+                  />
+                </td>
                 <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)' }}>{PII_TYPE_LABELS[d.entity_type] ?? d.entity_type}</td>
                 <td style={{ padding: '6px 10px', borderBottom: '1px solid var(--color-surface-muted)', fontFamily: 'var(--font-mono)' }}>
                   {d.masked_value ?? '-'}
