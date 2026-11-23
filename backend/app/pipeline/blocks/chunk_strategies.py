@@ -9,9 +9,33 @@ import re
 from dataclasses import dataclass, field
 
 from app.pipeline.blocks.table_markdown import rows_to_markdown
-from app.pipeline.tasks.process import _chunk_text, _sentence_spans
+from app.pipeline.tasks.process import _chunk_text, _last_sentence_end, _sentence_spans
 
 _HANGUL_TOKEN_RE = re.compile(r"[가-힣]")
+
+# 쪽이나 단이 넘어가며 한 문장이 두 노드로 나뉜 경우(Pub120 "... with all procedures specified" /
+# "in the vessel security plan ...", 2026-11-23). 앞 글이 문장 끝 없이 끝나고 다음 노드가 영문 소문자로
+# 시작하면 이어지는 문장으로 본다. "b. Southern ..." 같은 목록 기호와 주소는 새 항목이다
+_OPEN_END_RE = re.compile(r"[^.!?。！？:;)\]\"'”’\s]\s*$")
+_CONTINUATION_START_RE = re.compile(r"\s*[a-z]")
+_NEW_ITEM_START_RE = re.compile(r"\s*(?:[a-z]{1,2}\.\s|https?:|www\.)")
+_SENTENCE_CLOSED_RE = re.compile(r"[.!?。！？:;)\]\"'”’]\s*$")
+_END_WINDOW = 12
+
+
+def _continues_sentence(text: str, buf_end: int | None, node) -> bool:
+    if buf_end is None or node.span_start is None:
+        return False
+    head = text[node.span_start:node.span_start + 40]
+    tail = text[max(0, buf_end - 40):buf_end]
+    # 띄어쓰기가 있는 글(문장)끼리만 잇는다. 코드·기호 덩어리는 문장이 아니다
+    if " " not in head.strip() or " " not in tail.strip():
+        return False
+    return (
+        bool(_OPEN_END_RE.search(text, max(0, buf_end - _END_WINDOW), buf_end))
+        and bool(_CONTINUATION_START_RE.match(head))
+        and not _NEW_ITEM_START_RE.match(head)
+    )
 
 
 def _estimate_token_count(text: str) -> int:
@@ -69,7 +93,10 @@ def group_children_into_parents(
             bool(current) and group_start is not None
             and (end - group_start) > max_chars * _PARENT_SIZE_MULTIPLIER
         )
-        if section_changed or flat_group_full or too_big:
+        # 큰 표를 행 묶음으로 나눈 조각은 모두 표 전체 범위를 공유한다. 앞 조각과 범위가 같으면 같은 parent 에 둔다.
+        # 예전에는 조각마다 표 전체를 담은 parent 가 따로 생겼다(2026-11-20 감사)
+        same_span_as_previous = bool(current) and spans[current[-1]][2:4] == (start, end)
+        if (section_changed or flat_group_full or too_big) and not same_span_as_previous:
             flush()
             current = []
             group_start = None
@@ -174,6 +201,31 @@ def _table_rows_and_ordinal(
     return None, None
 
 
+def mask_table_cells(tables: list[dict] | None, replacements: list[tuple[str, str]]) -> list[dict] | None:
+    """표 칸에 글과 같은 민감정보 가리기를 적용한 새 표 목록. 큰 표 조각은 Document.tables 의 칸으로 만들어,
+    예전에는 가리기로 한 전화번호와 이메일이 검색 청크에 그대로 들어갔다(2026-11-20 감사). 원본 표는 그대로 둔다."""
+    if not tables or not replacements:
+        return tables
+    ordered = sorted(replacements, key=lambda pair: len(pair[0]), reverse=True)
+
+    def mask(cell):
+        if not isinstance(cell, str):
+            return cell
+        for original, masked in ordered:
+            if original and original in cell:
+                cell = cell.replace(original, masked)
+        return cell
+
+    masked_tables = []
+    for table in tables:
+        rows = table.get("rows") if isinstance(table, dict) else None
+        if not rows:
+            masked_tables.append(table)
+            continue
+        masked_tables.append({**table, "rows": [[mask(cell) for cell in row] for row in rows]})
+    return masked_tables
+
+
 def _table_title(source_table_id: str | None, tables: list[dict] | None) -> str | None:
     """`Document.tables`에 남은 표 제목(캡션이나 맨 위 제목 줄). 없으면 None."""
     for table in tables or []:
@@ -184,6 +236,8 @@ def _table_title(source_table_id: str | None, tables: list[dict] | None) -> str 
 
 # 머리 행과 첫 열만으로 예산을 거의 다 쓰는 표에서도 셀 글을 담을 최소 자리
 _MIN_ROW_TEXT_BUDGET = 100
+# 나뉜 행마다 되풀이할 행 이름(첫 열)의 최대 길이. 이보다 길면 이름이 아니라 내용이다
+_MAX_ROW_LABEL_CHARS = 100
 
 
 def _row_segments(text: str, budget: int) -> list[str]:
@@ -207,11 +261,16 @@ def _split_long_row(header: list[str], row: list[str], max_chars: int) -> list[l
         return [list(row)]
 
     label = padded[0]
+    # 첫 열이 행 이름이 아니라 가로로 합친 긴 설명이면(고도화보고서 "왜 바꿨나 …" 행) 그 글도 나눠 담는다.
+    # 예전에는 첫 열을 되풀이할 이름으로만 봐서, 나머지 열이 빈 설명 행을 통째로 버렸다(2026-11-20 감사)
+    first_col = 1
+    if len(label) > _MAX_ROW_LABEL_CHARS:
+        label, first_col = "", 0
     empty = [label] + [""] * (width - 1)
     budget = max(max_chars - len(rows_to_markdown([header, empty])), _MIN_ROW_TEXT_BUDGET)
     pieces: list[list[str]] = []
     current = empty
-    for col in range(1, width):
+    for col in range(first_col, width):
         for segment in _row_segments(padded[col], budget):
             joined = f"{current[col]} {segment}" if current[col] else segment
             candidate = [*current[:col], joined, *current[col + 1:]]
@@ -274,6 +333,27 @@ def _split_table_rows(
     return rendered
 
 
+def _headings_without_body(nodes: list) -> set[str]:
+    """아래에 본문(표 포함) 없이 같은 수준 이상의 제목이나 문서 끝이 바로 오는 제목의 id.
+    한 줄짜리 조문("제4조(효력기간) 본 협정서는 …")이나 제목으로 분류된 번호 줄이 여기에 든다(2026-11-20 감사)."""
+    body_less: set[str] = set()
+    open_headings: list[tuple[int, str]] = []
+    for node in nodes:
+        node_type = getattr(node, "node_type", None)
+        if node_type == "DOCUMENT" or node_type in _NON_BODY_NODE_TYPES:
+            continue
+        if node_type == "HEADING":
+            level = node.level if node.level is not None else 1
+            while open_headings and open_headings[-1][0] >= level:
+                body_less.add(open_headings.pop()[1])
+            open_headings.append((level, str(node.id)))
+            continue
+        if node.span_start is not None and node.span_end is not None:
+            open_headings.clear()
+    body_less.update(node_id for _level, node_id in open_headings)
+    return body_less
+
+
 def _tree_based_chunks(
     nodes: list,
     text: str,
@@ -313,10 +393,14 @@ def _tree_based_chunks(
     chunks: list[ChunkSpan] = []
     stack: list[tuple[int, str]] = []  # (level, heading_text) — 조상 제목 경로
     table_node_ids = {str(n.id) for n in nodes if getattr(n, "node_type", None) == "TABLE"}
+    body_less_headings = _headings_without_body(nodes)
 
     buf_node_ids: list[str] = []
+    buf_spans: list[tuple[str, int, int]] = []  # 버퍼에 든 노드별 (id, 시작, 끝) — 문장 이어 담기에서 나눌 때 쓴다
     buf_start: int | None = None
     buf_end: int | None = None
+    # 큰 문단을 나눈 마지막 조각이 문장 중간에서 끝나 다음 노드를 기다리는 중인지
+    open_tail = False
 
     def current_section_path() -> list[str]:
         return [heading_text for _, heading_text in stack]
@@ -327,20 +411,53 @@ def _tree_based_chunks(
         return chunk_text
 
     def flush() -> None:
-        nonlocal buf_node_ids, buf_start, buf_end
+        nonlocal buf_node_ids, buf_spans, buf_start, buf_end, open_tail
+        open_tail = False
         if not buf_node_ids:
             return
         section_path = current_section_path()
         chunk_text = with_prefix(text[buf_start:buf_end], section_path)
         chunks.append(ChunkSpan(chunk_text, buf_start, buf_end, section_path, list(buf_node_ids)))
-        buf_node_ids, buf_start, buf_end = [], None, None
+        buf_node_ids, buf_spans, buf_start, buf_end = [], [], None, None
+
+    def set_buffer(spans: list[tuple[str, int, int]]) -> None:
+        nonlocal buf_node_ids, buf_spans, buf_start, buf_end
+        buf_spans = list(spans)
+        buf_node_ids = list(dict.fromkeys(node_id for node_id, _s, _e in spans))
+        buf_start, buf_end = (spans[0][1], spans[-1][2]) if spans else (None, None)
 
     def append_to_buffer(node) -> None:
-        nonlocal buf_start, buf_end
-        if not buf_node_ids:
-            buf_start = node.span_start
-        buf_node_ids.append(str(node.id))
-        buf_end = node.span_end
+        set_buffer([*buf_spans, (str(node.id), node.span_start, node.span_end)])
+
+    def carry_open_sentence() -> None:
+        """버퍼를 마지막 문장 끝에서 닫고, 끝나지 않은 문장은 버퍼에 남겨 다음 노드와 잇는다."""
+        cut = _last_sentence_end(text, buf_start, buf_end)
+        if cut is None or cut <= buf_start or cut >= buf_end:
+            return
+        section_path = current_section_path()
+        head = [(i, s, min(e, cut)) for i, s, e in buf_spans if s < cut]
+        tail = [(i, max(s, cut), e) for i, s, e in buf_spans if e > cut]
+        chunks.append(ChunkSpan(
+            with_prefix(text[buf_start:cut], section_path), buf_start, cut, section_path,
+            list(dict.fromkeys(i for i, _s, _e in head)),
+        ))
+        set_buffer(tail)
+
+    def split_range(spans: list[tuple[str, int, int]]) -> None:
+        """여러 노드에 걸친 구간을 `_chunk_text`로 나눈다. 마지막 조각이 문장 중간에서 끝나면 버퍼에 남긴다."""
+        nonlocal open_tail
+        start, end = spans[0][1], spans[-1][2]
+        node_ids = list(dict.fromkeys(i for i, _s, _e in spans))
+        section_path = current_section_path()
+        pieces = _chunk_text(text[start:end], max_chars=max_chars, overlap=0, min_chars=0)
+        for index, (sub_text, rel_start, rel_end) in enumerate(pieces):
+            piece_start, piece_end = start + rel_start, start + rel_end
+            is_last = index == len(pieces) - 1
+            if is_last and not _SENTENCE_CLOSED_RE.search(text, max(start, piece_end - _END_WINDOW), piece_end):
+                set_buffer([(node_ids[-1], piece_start, piece_end)])
+                open_tail = True
+                return
+            chunks.append(ChunkSpan(with_prefix(sub_text, section_path), piece_start, piece_end, section_path, node_ids))
 
     def split_oversized(node) -> None:
         section_path = current_section_path()
@@ -362,12 +479,16 @@ def _tree_based_chunks(
             # rows를 못 찾음(방어적 폴백, 예: source_table_id 없음/오래된 문서)
             # — 기존 문자수 컷으로 진행.
 
-        for sub_text, rel_start, rel_end in _chunk_text(
-            text[node.span_start:node.span_end], max_chars=max_chars, overlap=0, min_chars=0
-        ):
-            start = node.span_start + rel_start
-            end = node.span_start + rel_end
-            chunks.append(ChunkSpan(with_prefix(sub_text, section_path), start, end, section_path, [str(node.id)]))
+        if node.node_type == "TABLE":
+            # 표는 늘 자기 혼자만의 청크다(preserve_table). 다음 노드와 잇지 않는다
+            for sub_text, rel_start, rel_end in _chunk_text(
+                text[node.span_start:node.span_end], max_chars=max_chars, overlap=0, min_chars=0
+            ):
+                start = node.span_start + rel_start
+                end = node.span_start + rel_end
+                chunks.append(ChunkSpan(with_prefix(sub_text, section_path), start, end, section_path, [str(node.id)]))
+            return
+        split_range([(str(node.id), node.span_start, node.span_end)])
 
     for node in nodes:
         if node.node_type == "DOCUMENT":
@@ -381,8 +502,10 @@ def _tree_based_chunks(
             level = node.level if node.level is not None else 1
             while stack and stack[-1][0] >= level:
                 stack.pop()
-            stack.append((level, node.text or ""))
-            continue
+            if str(node.id) not in body_less_headings:
+                stack.append((level, node.text or ""))
+                continue
+            # 아래에 본문이 없는 제목은 어느 청크의 구획 경로에도 들어가지 않으므로 문단처럼 담는다
 
         if node.span_start is None or node.span_end is None:
             continue  # 방어적 — TABLE을 포함한 모든 내용 노드 타입은 span을 가져야 함
@@ -392,6 +515,10 @@ def _tree_based_chunks(
             continue
 
         node_len = node.span_end - node.span_start
+        continues = not is_table and _continues_sentence(text, buf_end, node)
+        if open_tail and not continues:
+            flush()  # 이어지는 문장이 아니면 남겨 둔 조각은 예전처럼 따로 청크가 된다
+        open_tail = False
 
         if is_table and preserve_table:
             flush()
@@ -403,6 +530,18 @@ def _tree_based_chunks(
             continue
 
         would_overflow = bool(buf_node_ids) and (buf_end - buf_start) + node_len > max_chars
+        if would_overflow and continues:
+            open_tail = False
+            carry_open_sentence()
+            if (buf_end - buf_start) + node_len > max_chars:
+                if split_long_paragraph:
+                    spans = [*buf_spans, (str(node.id), node.span_start, node.span_end)]
+                    set_buffer([])
+                    split_range(spans)
+                    continue
+                flush()
+            append_to_buffer(node)
+            continue
         if would_overflow:
             flush()
 

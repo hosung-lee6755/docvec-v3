@@ -1,5 +1,7 @@
 """칸 안의 표(안쪽 표)를 바깥 표와 잇는 표시와 제목(2026-11-20, NS-AM 검사매뉴얼 검토)."""
 from app.pipeline.adapters.nested_tables import (
+    InnerTables,
+    host_cell,
     is_frame_only,
     is_separable_table,
     nested_marker,
@@ -88,3 +90,29 @@ def test_inner_table_titles_are_recognized():
     assert is_inner_table_title("[칸 안의 표 1] '설 명' 행의 칸에 든 표")
     assert not is_inner_table_title("표 2 선로전환기의 특징 비교")
     assert not is_inner_table_title(None)
+
+
+# ---- 표 B 가 표 A 의 어느 칸에 있었는지 JSON 으로 남긴다(2026-11-20, parent_table_id·parent_cell)
+
+def test_host_cell_is_the_zero_based_cell_holding_the_marker():
+    outer = [["구분", "내용"], ["설명", "주요 부품 / [칸 안의 표 1]"], ["비고", "[칸 안의 표 2]"]]
+    assert host_cell(outer, 1) == {"row": 1, "col": 1}
+    assert host_cell(outer, 2) == {"row": 2, "col": 1}
+    assert host_cell(outer, 3) is None
+
+
+def test_host_cell_does_not_confuse_marker_1_with_marker_10():
+    outer = [["a", "[칸 안의 표 10]"], ["b", "[칸 안의 표 1]"]]
+    assert host_cell(outer, 1) == {"row": 1, "col": 1}
+
+
+def test_titled_gives_the_host_cell_and_names_the_outer_table():
+    inner = InnerTables()
+    inner.add([["x", "y"], ["1", "2"]], [], InnerTables(), None)
+    outer = [["구분", "내용"], ["설명", "[칸 안의 표 1]"]]
+
+    [(rows, _spans, _deeper, title, host)] = inner.titled(outer, outer_title="[표 3]")
+
+    assert rows == [["x", "y"], ["1", "2"]]
+    assert title == "[칸 안의 표 1] [표 3]의 '설명' 행 '내용' 열 칸에 든 표"
+    assert host == {"row": 1, "col": 1}

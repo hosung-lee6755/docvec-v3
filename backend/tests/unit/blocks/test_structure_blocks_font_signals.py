@@ -149,3 +149,13 @@ def test_fallback_matches_pre_phase2_output_when_extraction_layout_absent():
     types = [b[0] for b in blocks]
     assert types == ["HEADING", "PARAGRAPH", "LIST_ITEM"]
     assert all(b[5] is None for b in blocks if b[0] == "PARAGRAPH")
+
+
+def test_addressee_line_of_a_form_is_not_a_heading_even_when_bold_and_large():
+    # 제안요청서 서식 끝의 "한국해양수산개발원장 귀하"(17pt 굵게)가 2단계 제목이 되어, 뒤 서식들의 구획 경로가
+    # "… > 한국해양수산개발원장 귀하"로 이어졌다(2026-11-20 감사). 받는 사람 줄은 제목이 아니다
+    body = 10.0
+    for line in ("한국해양수산개발원장 귀하", "○○기관장  귀 하", "주식회사 디구루 귀중"):
+        assert _classify(line, _line(line, font_size=17.0, is_bold=True), body) == ("PARAGRAPH", None)
+    # 같은 크기의 일반 제목은 그대로 제목이다
+    assert _classify("사업 개요", _line("사업 개요", font_size=17.0, is_bold=True), body)[0] == "HEADING"

@@ -304,3 +304,61 @@ def test_font_size_tiers_stay_at_three_when_max_level_is_five():
     five = {b[4]: b[1] for b in refine_element_blocks(blocks, elements, max_level=5, font_sizes=sizes)}
 
     assert five == three
+
+
+def test_korean_letter_and_paren_number_headings_nest_under_numbered_heading():
+    # 세원화성 에너지진단보고서(2026-11-20): "2. 에너지 사용현황", "가. 에너지원별 사용량", "(1) 수전현황"이
+    # 같은 크기라 모두 같은 단계가 되어 "2." 제목이 절 경로에서 빠지고 본문 없는 짧은 청크로 남았다
+    ids = ("r", "n2", "ga", "na", "p1", "p2", "n3")
+    elements = [_el(e, "section_header", 1, [0, 100, 10, 90]) for e in ids]
+    blocks = [
+        _block("HEADING", "Ⅰ. 일반현황", "r", 1),
+        _block("HEADING", "2. 에너지 사용현황", "n2", 1),
+        _block("HEADING", "가. 에너지원별 사용량", "ga", 1),
+        _block("HEADING", "나. 전력 사용 현황", "na", 1),
+        _block("HEADING", "(1) 수전현황", "p1", 1),
+        _block("HEADING", "1) 월평균 전력사용량", "p2", 1),
+        _block("HEADING", "3. 온실가스 배출량 현황", "n3", 1),
+    ]
+    sizes = {"r": 16.0, "n2": 12.0, "ga": 12.0, "na": 12.0, "p1": 12.0, "p2": 12.0, "n3": 12.0}
+
+    out = refine_element_blocks(blocks, elements, max_level=5, font_sizes=sizes)
+
+    level = {e: b[1] for e, b in zip(ids, out)}
+    assert level["ga"] == level["na"] == level["n2"] + 1
+    assert level["p1"] == level["p2"] == level["na"] + 1
+    assert level["n3"] == level["n2"]
+
+
+def test_part_divider_and_its_title_become_one_chapter_heading():
+    # 경기도 데이터분석 사례집(2026-11-20): 장 구분 쪽의 "PART 01"과 "분석개요"가 일반 글이라 장 제목이 없었다
+    elements = [_el(e, "text", p, [0, 100, 10, 90]) for e, p in (("p1", 4), ("t1", 4), ("b1", 5), ("p3", 8))]
+    elements.append(_el("h3", "section_header", 8, [0, 100, 10, 90]))
+    blocks = [
+        ("PARAGRAPH", None, 10, 17, "PART 01", {"page_number": 4, "element_id": "p1"}),
+        ("PARAGRAPH", None, 19, 23, "분석개요", {"page_number": 4, "element_id": "t1"}),
+        ("PARAGRAPH", None, 25, 60, "본문 문단은 그대로 둔다. 충분히 긴 설명 문장입니다.", {"page_number": 5, "element_id": "b1"}),
+        ("PARAGRAPH", None, 62, 69, "PART 03", {"page_number": 8, "element_id": "p3"}),
+        ("HEADING", 2, 71, 75, "분석결과", {"page_number": 8, "element_id": "h3"}),
+    ]
+
+    out = refine_element_blocks(blocks, elements)
+
+    assert [(b[0], b[1], b[2], b[3], b[4]) for b in out] == [
+        ("HEADING", 1, 10, 23, "PART 01 분석개요"),
+        ("PARAGRAPH", None, 25, 60, "본문 문단은 그대로 둔다. 충분히 긴 설명 문장입니다."),
+        ("HEADING", 1, 62, 75, "PART 03 분석결과"),
+    ]
+
+
+def test_part_line_without_a_title_on_the_same_page_becomes_a_heading_alone():
+    elements = [_el("p1", "text", 4, [0, 100, 10, 90]), _el("b1", "text", 5, [0, 100, 10, 90])]
+    blocks = [
+        ("PARAGRAPH", None, 0, 6, "PART 2", {"page_number": 4, "element_id": "p1"}),
+        ("PARAGRAPH", None, 8, 14, "다음 쪽 본문", {"page_number": 5, "element_id": "b1"}),
+    ]
+
+    out = refine_element_blocks(blocks, elements)
+
+    assert (out[0][0], out[0][1], out[0][4]) == ("HEADING", 1, "PART 2")
+    assert out[1][0] == "PARAGRAPH"

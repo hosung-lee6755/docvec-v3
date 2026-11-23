@@ -56,6 +56,9 @@ def test_reads_the_outer_table_with_missing_side_borders_and_keeps_the_inner_tab
     assert len(outer.nested) == 1
     assert outer.nested[0].rows == [["DN", "Thickness"], ["20", "25mm"]]
     assert outer.nested[0].title == "[칸 안의 표 1] '2' 행 'Criteria' 열 칸에 든 표"
+    # 표 후보의 parent_cell 이 되는 칸(바깥 표 rows 기준, 0부터)
+    assert outer.nested[0].host == {"row": 2, "col": 1}
+    assert outer.host is None
 
 
 def test_matches_a_docling_table_by_position(nested_pdf):

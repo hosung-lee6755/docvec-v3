@@ -93,6 +93,39 @@ async def test_list_chunks_falls_back_to_postgres_child_rows_when_nothing_embedd
     assert result["chunks"][1]["page_number"] == 4 and result["chunks"][1]["edited"] is True
 
 
+async def test_table_chunks_tell_which_table_and_parent_cell_they_came_from(db_session, qdrant):  # noqa: F811
+    # 2026-11-20: RAG 데이터 수정 탭의 JSON 에서 표 B 가 표 A 의 어느 칸에 있었는지 보이도록 청크에 표 정보를 붙인다
+    from app.db.models.document_node import DocumentNode
+
+    doc, run = await doc_with_run(db_session, "c-list-table")
+    doc.tables = [
+        {"id": "tA", "page_number": 1, "rows": [["설 명", "[칸 안의 표 1]"]]},
+        {"id": "tB", "page_number": 1, "rows": [["x", "y"]], "title": "[칸 안의 표 1] [표 1]의 칸에 든 표",
+         "parent_table_id": "tA", "parent_cell": {"row": 0, "col": 1}},
+    ]
+    node_a = DocumentNode(id=uuid4(), document_id=doc.id, run_id=run.id, node_type="TABLE", source_table_id="tA")
+    node_b = DocumentNode(id=uuid4(), document_id=doc.id, run_id=run.id, node_type="TABLE", source_table_id="tB")
+    db_session.add_all([node_a, node_b])
+    await db_session.flush()
+    outer = await _chunk(db_session, doc, run, 0, "[표 1]", chunk_type="TABLE", source_node_ids=[str(node_a.id)])
+    inner = await _chunk(db_session, doc, run, 1, "[표 2]", chunk_type="TABLE", source_node_ids=[str(node_b.id)])
+    text = await _chunk(db_session, doc, run, 2, "본문", chunk_type="PARAGRAPH")
+    qdrant.scroll_by_document.return_value = []
+
+    result = await chunks_api.list_document_chunks(doc.id, db_session, owner_user())
+
+    by_id = {c["id"]: c for c in result["chunks"]}
+    assert by_id[str(outer.id)]["table"] == {
+        "table_id": "tA", "table_number": 1, "title": None,
+        "parent_table_id": None, "parent_table_number": None, "parent_cell": None,
+    }
+    assert by_id[str(inner.id)]["table"] == {
+        "table_id": "tB", "table_number": 2, "title": "[칸 안의 표 1] [표 1]의 칸에 든 표",
+        "parent_table_id": "tA", "parent_table_number": 1, "parent_cell": {"row": 0, "col": 1},
+    }
+    assert by_id[str(text.id)]["table"] is None
+
+
 async def test_list_chunks_without_run_returns_empty(db_session, qdrant):  # noqa: F811
     doc = await add_doc(db_session, "c-list-norun")
     qdrant.scroll_by_document.return_value = []

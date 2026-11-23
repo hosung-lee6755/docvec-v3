@@ -474,7 +474,8 @@ def test_walk_hwp_body_separates_an_inner_table_and_marks_its_cell():
         [["부품명", "재료"], ["상체", "GC 200"]],
     ]
     assert order == [("t", 0), ("t", 1)]
-    assert ctx.titles == {1: "[칸 안의 표 1] '설명' 행 '내용' 열 칸에 든 표"}
+    assert ctx.titles == {1: "[칸 안의 표 1] [표 1]의 '설명' 행 '내용' 열 칸에 든 표"}
+    assert ctx.parents == {1: (0, {"row": 1, "col": 1})}
 
 
 def test_walk_hwp_body_uses_the_inner_caption_in_the_inner_title():
@@ -485,7 +486,7 @@ def test_walk_hwp_body_uses_the_inner_caption_in_the_inner_title():
 
     hwp._walk_hwp_body(_hwp_xml(_hwp_outer_with(inner)), [], [], [], ctx)
 
-    assert ctx.titles == {1: "[칸 안의 표 1] [표 2] 재질 ('설명' 행 '내용' 열 칸에 든 표)"}
+    assert ctx.titles == {1: "[칸 안의 표 1] [표 2] 재질 ([표 1]의 '설명' 행 '내용' 열 칸에 든 표)"}
 
 
 def test_walk_hwp_body_emits_a_table_inside_an_inner_table_after_it():
@@ -495,12 +496,16 @@ def test_walk_hwp_body_emits_a_table_inside_an_inner_table_after_it():
         _hwp_cell("상체") + "<TableCell>" + _hwp_p("GC 200", inner=deepest) + "</TableCell>",
     )
     tables, order = [], []
+    ctx = hwp._HwpxContext()
 
-    hwp._walk_hwp_body(_hwp_xml(_hwp_outer_with(inner)), [], tables, order, hwp._HwpxContext())
+    hwp._walk_hwp_body(_hwp_xml(_hwp_outer_with(inner)), [], tables, order, ctx)
 
     assert [t[0] for t in tables] == [["구분", "내용"], ["부품명", "재료"], ["x", "y"]]
     assert tables[1][1] == ["상체", "GC 200 / [칸 안의 표 1]"]
     assert order == [("t", 0), ("t", 1), ("t", 2)]
+    # 가장 안쪽 표의 부모는 바로 바깥의 안쪽 표다
+    assert ctx.parents == {1: (0, {"row": 1, "col": 1}), 2: (1, {"row": 1, "col": 1})}
+    assert ctx.titles[2] == "[칸 안의 표 1] [표 2]의 '상체' 행 '재료' 열 칸에 든 표"
 
 
 def test_walk_hwpx_separates_an_inner_table_and_marks_its_cell():
@@ -521,7 +526,8 @@ def test_walk_hwpx_separates_an_inner_table_and_marks_its_cell():
         [["부품명", "재료"], ["상체", "GC 200"]],
     ]
     assert order == [("t", 0), ("t", 1)]
-    assert ctx.titles == {1: "[칸 안의 표 1] '설명' 행 '내용' 열 칸에 든 표"}
+    assert ctx.titles == {1: "[칸 안의 표 1] [표 1]의 '설명' 행 '내용' 열 칸에 든 표"}
+    assert ctx.parents == {1: (0, {"row": 1, "col": 1})}
 
 
 def test_hwpx_one_row_inner_box_stays_in_the_cell_text():
@@ -561,3 +567,24 @@ def test_walk_hwp_body_drops_a_single_cell_frame_that_only_holds_a_table():
     assert tables == [[["구 분", "10㏊미만"], ["시료채취량", "2건"]]]
     assert order == [("t", 0)]
     assert ctx.titles == {}
+
+
+def test_ordered_text_blocks_link_the_inner_table_to_its_outer_table():
+    blocks, candidates = hwp._ordered_text_blocks(
+        [], [[["a", "[칸 안의 표 1]"]], [["x", "y"], ["1", "2"]]], [("t", 0), ("t", 1)],
+        None, {1: "[칸 안의 표 1] [표 1]의 칸에 든 표"}, {1: (0, {"row": 0, "col": 1})},
+    )
+
+    assert (candidates[0].parent_table_id, candidates[0].parent_cell) == (None, None)
+    assert candidates[1].parent_table_id == candidates[0].id
+    assert candidates[1].parent_cell == {"row": 0, "col": 1}
+
+
+def test_frame_dropped_for_its_inner_table_leaves_no_parent():
+    inner = _hwp_table(_hwp_cell("구 분") + _hwp_cell("10㏊미만"), _hwp_cell("시료채취량") + _hwp_cell("2건"))
+    frame = _hwp_table("<TableCell>" + _hwp_p("", inner=inner) + "</TableCell>")
+    ctx = hwp._HwpxContext()
+
+    hwp._walk_hwp_body(_hwp_xml(frame), [], [], [], ctx)
+
+    assert ctx.parents == {}

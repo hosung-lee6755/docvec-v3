@@ -12,6 +12,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
+from app.pipeline.money_units import spell_out_money_units
 
 # Same local-model budget rationale as tasks/summary.py.
 _MAX_LLM_INPUT_CHARS = 12_000
@@ -380,6 +381,11 @@ class SummarizeBlock(BaseBlock):
         return "summarize"
 
     @property
+    def block_version(self) -> str:
+        # 1.1.0: 모델에 넘기는 글의 [천원]·[백만원] 금액을 원 단위로 풀어 쓴다(money_units, 2026-11-23)
+        return "1.1.0"
+
+    @property
     def category(self) -> str:
         return "분석"
 
@@ -406,15 +412,17 @@ class SummarizeBlock(BaseBlock):
         # User-supplied instruction rides in the user turn so it can steer
         # focus/format without being able to unset the Korean-only guard above.
         user_prefix = f"{custom_prompt}\n\n" if custom_prompt else ""
+        # 3B 모델이 [천원]과 [백만원]을 잘못 환산하므로 원 단위로 풀어 쓴 글을 넘긴다(money_units)
+        source = spell_out_money_units(text[:_MAX_LLM_INPUT_CHARS])
         summary = _generate(
             system,
-            f"{user_prefix}다음 문서를 한국어로 요약하세요:\n\n{text[:_MAX_LLM_INPUT_CHARS]}",
+            f"{user_prefix}다음 문서를 한국어로 요약하세요:\n\n{source}",
         )
         if _han_ratio(summary) > 0.05:
             summary = _generate(
                 system,
                 f"{user_prefix}다음 문서를 요약하세요. 반드시 한국어(한글)로만 작성하세요. "
-                f"중국어(한자) 사용 금지.\n\n{text[:_MAX_LLM_INPUT_CHARS]}",
+                f"중국어(한자) 사용 금지.\n\n{source}",
             )
         return BlockResult(output={**_carry(context), "summary": summary.strip(), "text": text})
 

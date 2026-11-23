@@ -296,3 +296,36 @@ def test_html_without_head_and_body_tags_keeps_the_cover_header():
 
     assert title == "문서 제목"
     assert [b.text for b in blocks] == ["화면 연동 가이드", "버전 v1.0", "1. 참조", "본문"]
+
+
+def test_html_back_to_top_link_is_page_control_not_document_text():
+    # 고도화보고서: 문서 끝의 <a class="totop" href="#top">맨 위로</a>가 "맨 위로" 한 줄 청크가 됐다(2026-11-20 감사).
+    # 같은 #top 링크라도 글이 문서 내용(목차 머리의 보고서 제목)이면 남긴다
+    from app.pipeline.adapters.text_adapter import parse_html
+
+    html = (
+        '<body><div><a href="#top">분석 보고서</a></div><p>본문입니다.</p>'
+        '<a class="totop" href="#top">맨 위로</a><a href="#">Back to top ↑</a>'
+        '<p><a href="#sec-2">2장</a>을 보세요.</p></body>'
+    )
+    blocks, _tables, _collector, _title = parse_html(html)
+
+    assert [b.text for b in blocks] == ["분석 보고서", "본문입니다.", "2장을 보세요."]
+
+
+def test_html_summary_children_are_separated_like_the_rendered_columns():
+    # 고도화보고서 부록 E: <summary><span>E.6</span>위험 추세(D4)<span>6건</span><span>날마다…</span></summary>를
+    # 화면은 칸으로 띄워 보이지만 글은 "E.6위험 추세(D4)6건날마다…"로 붙었다(2026-11-20 감사)
+    from app.pipeline.adapters.text_adapter import parse_html
+
+    html = (
+        '<body><details><summary><span class="st-n">E.6</span>위험 추세(D4)<span class="st-c">6건</span>'
+        '<span class="st-d">날마다 따로 예측합니다.</span></summary><p>본문</p></details>'
+        '<details><summary><b>1</b><span>하루 거리</span></summary></details>'
+        '<p>문장 안의 <b>굵은</b>글과 <code>code</code>는 그대로 붙는다.</p></body>'
+    )
+    blocks, _tables, _collector, _title = parse_html(html)
+
+    assert [b.text for b in blocks] == [
+        "E.6 위험 추세(D4) 6건 날마다 따로 예측합니다.", "본문", "1 하루 거리", "문장 안의 굵은글과 code는 그대로 붙는다.",
+    ]

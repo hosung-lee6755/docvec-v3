@@ -186,6 +186,8 @@ _DATE_ONLY_RE = re.compile(
     r"^(?:\d{4}\s*년\s*\d{1,2}\s*월(?:\s*\d{1,2}\s*일)?|\d{4}[.\-/]\s*\d{1,2}(?:[.\-/]\s*\d{1,2})?)\.?$"
 )
 _HEADING_MAX_LEADING_NUMBER = 99
+# 서식 끝의 받는 사람 줄("한국해양수산개발원장 귀하")은 크고 굵어도 제목이 아니다(제안요청서, 2026-11-20 감사)
+_ADDRESSEE_RE = re.compile(r"\S\s*귀\s*[하중]$")
 _WIDE_GAP_RE = re.compile(r"\S {3,}\S|\s\|\s")
 # 참고문헌 항목의 출판 연도 "(2020)."
 _CITATION_YEAR_RE = re.compile(r"\((?:19|20)\d{2}\)\.")
@@ -199,6 +201,8 @@ _REPEATED_LINE_MAX_CHARS = 80
 _BULLET_CHARS = set("•◦▪▫○●■□◆◇ㅇ※-*·")
 # 쪽의 처음과 끝에서 몇 줄까지를 머리말·꼬리말 후보로 볼지
 _PAGE_EDGE_LINES = 2
+# 칸 구분선 "|"가 이만큼 있으면 표 행이다. 머리말에 구분선 하나를 쓰는 경우("보고서 | 2022")는 남긴다
+_TABLE_ROW_MIN_PIPES = 2
 _NON_KEY_RE = re.compile(r"[\d\s]+")
 
 
@@ -224,23 +228,42 @@ def _plausible_numbered_heading(line: str, number: str) -> bool:
     return letters > digits
 
 
+def _is_table_line(stripped: str) -> bool:
+    return (
+        stripped.startswith("|")
+        or stripped.count("|") >= _TABLE_ROW_MIN_PIPES
+        or bool(_TABLE_MARKER_RE.match(stripped))
+    )
+
+
 def _page_edge_line_starts(text: str, page_map: list | None) -> set[int]:
-    """각 쪽의 처음과 끝 몇 줄(빈 줄 제외)의 시작 위치. page_map 항목은 [쪽 끝 위치, 쪽 번호]다."""
+    """각 쪽의 처음과 끝 몇 줄(빈 줄 제외)의 시작 위치. page_map 항목은 [쪽 끝 위치, 쪽 번호]다.
+
+    쪽 끝을 셀 때는 표 줄("[표 N]" 표시, 칸 구분선 "|"가 있는 행, 표시 바로 다음의 표 제목)을 건너뛴다. 스캔 PDF 는
+    쪽의 표 글을 OCR 글 뒤에 붙이므로, 표 줄을 세면 꼬리말이 쪽 끝에서 밀려나 본문으로 남는다(서울 데이터 펠로우십
+    보고서, 2026-11-20). HWP 표 행은 맨 앞에 "|"가 없어("요구사항 고유번호 |  | MPR-002") 구분선 개수로 가린다.
+    쪽 머리는 예전처럼 모든 줄을 센다. 쪽 머리의 표 다음에 오는 본문 소제목이 머리말로 잡히지 않게 하려는 것이다
+    (조사료 지침 "《조사료 장거리 유통비 지원》")."""
     if not page_map or len(page_map) < 2:
         return set()
     starts: list[int] = []
+    body_starts: list[int] = []
     offset = 0
+    after_marker = False
     for line in text.split("\n"):
-        if line.strip():
+        stripped = line.strip()
+        if stripped:
             starts.append(offset)
+            if not (_is_table_line(stripped) or after_marker):
+                body_starts.append(offset)
+            after_marker = bool(_TABLE_MARKER_RE.match(stripped))
         offset += len(line) + 1
     edges: set[int] = set()
     page_start = 0
     for entry in page_map:
         page_end = entry[0]
-        on_page = [s for s in starts if page_start <= s < page_end]
-        edges.update(on_page[:_PAGE_EDGE_LINES])
-        edges.update(on_page[-_PAGE_EDGE_LINES:])
+        edges.update([s for s in starts if page_start <= s < page_end][:_PAGE_EDGE_LINES])
+        edges.update([s for s in body_starts if page_start <= s < page_end][-_PAGE_EDGE_LINES:])
         page_start = page_end
     return edges
 
@@ -299,7 +322,7 @@ def _classify(
     # 고도화 Phase 2) — 번호/장절조 패턴 없이 굵고 큰 글씨로만 된 제목을
     # 놓치지 않기 위함. 정규식이 뭔가를 판단했다면 항상 그 판단이 우선.
     # 표지의 날짜("2025년 12월", "2025.12.21")는 굵고 크게 쓰여도 제목이 아니다(HWPX 실측, 2026-11-16)
-    if _DATE_ONLY_RE.match(line.strip()):
+    if _DATE_ONLY_RE.match(line.strip()) or _ADDRESSEE_RE.search(line.strip()):
         return "PARAGRAPH", None
     if layout and layout.get("is_bold") and body_font_size and layout.get("font_size"):
         if layout["font_size"] >= body_font_size + _HEADING_FONT_DELTA:
@@ -746,7 +769,12 @@ class StructureAnalyzeBlock(BaseBlock):
         # 그 아래 번호 장보다 한 단계 위에 둔다(KRS SG, KR S-03010 등 규격 문서, 2026-11-20).
         # 1.20.0: 제목 단계 상한을 3에서 5로 올린다. 글자 크기 무리는 셋까지만 나누고, "1.1.2"처럼 네 겹 이상인
         # 번호와 하위 기호 제목만 4·5단계로 내린다(KR S-03010 해설 아래 1.1.2, 2026-11-20).
-        return "1.20.0"
+        # 1.21.0: 같은 크기의 "1." 아래 "가.", 그 아래 "(1)"·"1)" 제목을 한 단계씩 내린다(세원화성 에너지진단보고서).
+        #         "○○○ 귀하" 같은 수신인 줄은 제목으로 보지 않는다(제안요청서, 2026-11-20 감사).
+        #         쪽 가장자리 줄을 셀 때 표 줄을 빼서, 표가 뒤에 붙은 쪽의 꼬리말도 머리말·꼬리말로 잡는다.
+        # 1.22.0: Docling 이 일반 글로 읽은 장 구분 쪽의 "PART 01"과 같은 쪽 바로 뒤의 장 이름을 1단계 제목 하나로
+        #         합친다(경기도 데이터분석 사례집, 2026-11-20 감사).
+        return "1.22.0"
 
     @property
     def category(self) -> str:

@@ -5,7 +5,9 @@
 이제 모든 형식이 같은 규칙을 따른다.
 - 2행 2열 이상인 안쪽 표는 바깥 표 바로 뒤에 별도 표로 낸다. 한 줄이나 한 열짜리는 글상자라 칸 글로 둔다.
 - 바깥 칸에는 안쪽 표가 있던 자리에 "[칸 안의 표 k]"를 남긴다. k 는 바깥 표 하나 안에서 매기는 번호다.
-- 안쪽 표 제목은 같은 표시로 시작하고, 들어 있던 칸의 행 이름과 열 이름을 적는다.
+- 안쪽 표 제목은 같은 표시로 시작하고, 바깥 표 번호("[표 1]의")와 들어 있던 칸의 행 이름과 열 이름을 적는다.
+- 안쪽 표는 parent_table_id(바깥 표 id)와 parent_cell(바깥 표 rows 기준 칸, 0부터)을 함께 남긴다. 글을 읽지 않고도
+  프로그램이 표 B 에서 표 A 를 찾아갈 수 있게 하기 위해서다(2026-11-20).
 - 칸 하나짜리 틀 안에 표만 들어 있으면 틀은 표가 아니다. 틀을 빼고 안쪽 표를 그 자리에 바로 낸다
   (R&D 스마트공장 공고의 추진체계도, 2021 조사료 지침의 시료 채취량 표).
 """
@@ -80,6 +82,12 @@ def _label_above(rows: list[list[str]], row: int) -> str:
     return ""
 
 
+def host_cell(outer_rows: list[list[str]], index: int) -> dict | None:
+    """안쪽 표 k 가 들어 있던 바깥 표의 칸({"row", "col"}, 0부터). 표시를 찾지 못하면 None."""
+    host = _host_cell(outer_rows, nested_marker(index))
+    return {"row": host[0], "col": host[1]} if host else None
+
+
 def _place(rows: list[list[str]], row: int, col: int) -> str:
     if _fills_the_row(rows[row], col):
         above = _label_above(rows, row)
@@ -125,9 +133,14 @@ class InnerTables:
 
     def titled(
         self, outer_rows: list[list[str]], outer_title: str | None = None,
-    ) -> list[tuple[list[list[str]], list[dict], InnerTables, str]]:
-        """떼어 낸 순서대로 (행, 합친 칸, 그 안의 표, 제목). outer_rows 는 표시가 들어간 바깥 표다."""
+    ) -> list[tuple[list[list[str]], list[dict], InnerTables, str, dict | None]]:
+        """떼어 낸 순서대로 (행, 합친 칸, 그 안의 표, 제목, 들어 있던 칸). outer_rows 는 표시가 들어간 바깥 표,
+        outer_title 은 제목에 적을 바깥 표 이름("[표 3]")이다."""
         return [
-            (rows, spans, deeper, nested_table_title(outer_rows, number, outer_title=outer_title, name=caption))
+            (
+                rows, spans, deeper,
+                nested_table_title(outer_rows, number, outer_title=outer_title, name=caption),
+                host_cell(outer_rows, number),
+            )
             for number, (rows, spans, deeper, caption) in enumerate(self.found, start=1)
         ]

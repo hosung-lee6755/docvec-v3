@@ -293,6 +293,21 @@ class DocumentChunkDetail(BaseModel):
     # Chunk 계층형 Parent Retrieval — "상위 청크 보기" 토글용. parent 자체는
     # 이 목록에 별도 항목으로 나타나지 않는다.
     parent_chunk_text: str | None = None
+    # 표 청크면 어느 표에서 왔는지(documents.tables). 칸 안에서 떼어 낸 표는 바깥 표와 칸을 함께 준다(2026-11-20)
+    table: "ChunkTableRef | None" = None
+
+
+class ChunkTableRef(BaseModel):
+    """표 청크의 출처 표. 번호는 문서 안의 표 순서([표 N])이고 칸은 바깥 표 rows 기준(0부터)이다."""
+    table_id: str
+    table_number: int
+    title: str | None = None
+    parent_table_id: str | None = None
+    parent_table_number: int | None = None
+    parent_cell: dict | None = None
+
+
+DocumentChunkDetail.model_rebuild()
 
 
 class DocumentChunksResponse(BaseModel):

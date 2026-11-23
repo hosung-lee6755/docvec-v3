@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -236,6 +237,24 @@ async def _after_version_delete(db, removed: list[tuple]) -> None:
             logging.warning(f"Failed to promote previous version after delete: {exc}")
 
 
+_LIVE_RUN_STATUSES = ("QUEUED", "RUNNING", "WAITING_REVIEW")
+
+
+async def _detach_runs(db: AsyncSession, doc_ids: list) -> None:
+    """지우는 문서의 실행 기록은 남기고 문서 연결만 끊는다. 아직 끝나지 않은 실행은 먼저 취소로 닫는다.
+    예전에는 검토 대기 실행이 문서 없이 남아 아무도 승인하거나 취소할 수 없었다(2026-11-20 감사)."""
+    from sqlalchemy import update as sa_update
+
+    from app.db.models.workflow_run import WorkflowRun
+
+    await db.execute(
+        sa_update(WorkflowRun)
+        .where(WorkflowRun.document_id.in_(doc_ids), WorkflowRun.status.in_(_LIVE_RUN_STATUSES))
+        .values(status="CANCELLED", completed_at=datetime.now(timezone.utc))
+    )
+    await db.execute(sa_update(WorkflowRun).where(WorkflowRun.document_id.in_(doc_ids)).values(document_id=None))
+
+
 @router.delete("/batch")
 async def batch_delete_documents(
     body: BatchDeleteRequest,
@@ -258,21 +277,13 @@ async def batch_delete_documents(
         d for d in candidates
         if str(d.created_by) == str(current_user.id) or (d.collection_id and d.collection_id in owned_collection_ids)
     ]
-    from sqlalchemy import update as sa_update
-
-    from app.db.models.workflow_run import WorkflowRun
-
     doc_ids = [doc.id for doc in docs]
     if doc_ids:
         await db.execute(delete(ProcessingJob).where(ProcessingJob.document_id.in_(doc_ids)))
         # Keep workflow run history but drop the document link — the FK would
         # otherwise abort the delete (and previous attempts had already wiped
         # storage before hitting it, leaving zombie documents).
-        await db.execute(
-            sa_update(WorkflowRun)
-            .where(WorkflowRun.document_id.in_(doc_ids))
-            .values(document_id=None)
-        )
+        await _detach_runs(db, doc_ids)
 
     # Commit the DB delete FIRST: external cleanup below is best-effort and
     # must never resurrect rows by failing mid-way.
@@ -408,18 +419,10 @@ async def delete_document(
     if not (is_owner or is_collection_owner):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    from sqlalchemy import update as sa_update
-
-    from app.db.models.workflow_run import WorkflowRun
-
     await db.execute(delete(ProcessingJob).where(ProcessingJob.document_id == document_id))
     # Keep workflow run history but drop the document link (FK would abort
     # the delete otherwise).
-    await db.execute(
-        sa_update(WorkflowRun)
-        .where(WorkflowRun.document_id == document_id)
-        .values(document_id=None)
-    )
+    await _detach_runs(db, [document_id])
     log_audit(
         db, str(current_user.id), "document.delete", "document", str(doc.id),
         detail={"filename": doc.filename},

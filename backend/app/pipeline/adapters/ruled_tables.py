@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 
 from pdfplumber.table import Table
 
-from app.pipeline.adapters.nested_tables import nested_marker, nested_table_title
+from app.pipeline.adapters.nested_tables import host_cell, nested_marker, nested_table_title
 from app.pipeline.adapters.pdf_adapter import _dedupe_tables, _table_iou
 from app.pipeline.adapters.ruled_table_grid import merged_cell_grid
 
@@ -55,6 +55,8 @@ class RuledTable:
     title: str | None = None
     # 합친 칸(row, col, row_span, col_span). Docling 표의 spans 와 같은 모양이다
     spans: tuple[dict, ...] = ()
+    # 칸 안에서 떼어 낸 표라면 바깥 표에서 들어 있던 칸({"row", "col"}, 0부터). nested 의 표에만 있다
+    host: dict | None = None
 
 
 def _contains(outer: Bbox, inner: Bbox) -> bool:
@@ -254,7 +256,7 @@ def find_ruled_tables(page) -> list[RuledTable]:
         title, rows, spans = _split_title_row(*_table_rows(Table(text_page, outer_cells), markers))
         if _is_table(rows):
             titled = tuple(
-                replace(table, title=nested_table_title(rows, number, outer_title=title))
+                replace(table, title=nested_table_title(rows, number, outer_title=title), host=host_cell(rows, number))
                 for number, table in enumerate(nested, start=1)
             )
             results.append(RuledTable(bbox=bbox, rows=rows, nested=titled, title=title, spans=spans))

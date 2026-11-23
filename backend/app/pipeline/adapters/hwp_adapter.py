@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
+from uuid import uuid4
 
 from app.pipeline.adapters.base import (
     AdapterCapabilities,
@@ -168,6 +169,8 @@ class _HwpxContext:
     spans: dict[int, list[dict]] = field(default_factory=dict)
     # 표 번호(0부터) → 표 제목. 칸 안에서 떼어 낸 표가 어느 칸에 있었는지 적는다
     titles: dict[int, str] = field(default_factory=dict)
+    # 칸 안에서 떼어 낸 표 번호(0부터) → (바깥 표 번호, 들어 있던 칸). 표 후보의 parent_table_id·parent_cell 이 된다
+    parents: dict[int, tuple[int, dict | None]] = field(default_factory=dict)
 
 
 def _hwpx_table_rows(tbl_elem) -> list[list[str]]:
@@ -177,12 +180,14 @@ def _hwpx_table_rows(tbl_elem) -> list[list[str]]:
 def _add_table(
     rows: list[list[str]], spans: list[dict], inner: InnerTables, title: str | None,
     tables: list, order: list | None, ctx: "_HwpxContext | None",
+    parent: tuple[int, dict | None] | None = None,
 ) -> None:
     """표를 내고, 그 칸 안에서 떼어 낸 표를 바로 뒤에 낸다. 안쪽 표 안의 표도 같은 방식으로 그 뒤에 낸다.
-    칸 하나짜리 틀에 표만 들어 있으면 틀은 내지 않고 안쪽 표를 그 자리에 낸다."""
+    칸 하나짜리 틀에 표만 들어 있으면 틀은 내지 않고 안쪽 표를 그 자리에 낸다(틀의 부모를 물려받는다).
+    표 번호 [표 N]은 문서 순서(index + 1)라 안쪽 표 제목에 바깥 표 번호를 바로 적는다."""
     if is_frame_only(rows):
         for inner_rows, inner_spans, deeper, caption in inner.found:
-            _add_table(inner_rows, inner_spans, deeper, caption, tables, order, ctx)
+            _add_table(inner_rows, inner_spans, deeper, caption, tables, order, ctx, parent)
         return
     tables.append(rows)
     index = len(tables) - 1
@@ -191,9 +196,11 @@ def _add_table(
             ctx.spans[index] = spans
         if title:
             ctx.titles[index] = title
+        if parent is not None:
+            ctx.parents[index] = parent
     _record(order, "t", index)
-    for inner_rows, inner_spans, deeper, inner_title in inner.titled(rows):
-        _add_table(inner_rows, inner_spans, deeper, inner_title, tables, order, ctx)
+    for inner_rows, inner_spans, deeper, inner_title, host in inner.titled(rows, outer_title=f"[표 {index + 1}]"):
+        _add_table(inner_rows, inner_spans, deeper, inner_title, tables, order, ctx, (index, host))
 
 
 def _add_hwpx_table(tbl_elem, tables: list, order: list | None, ctx: _HwpxContext | None) -> None:
@@ -364,13 +371,20 @@ def _walk_hwpx(
 def _ordered_text_blocks(
     paragraphs: list[str], tables: list[list[list[str]]], order: list[tuple[str, int]],
     spans: dict[int, list[dict]] | None = None, titles: dict[int, str] | None = None,
+    parents: dict[int, tuple[int, dict | None]] | None = None,
 ) -> tuple[list[RawTextBlock], list[RawTableCandidate]]:
     """문단과 표를 문서에 나온 순서대로 블록으로 만든다. 예전에는 표를 모두 문서 끝에 붙여 표가 설명 문단과
     떨어지고, 청크에서 무슨 표인지 알 수 없었다(2026-11-13 검토). 표 번호 [표 N]도 문서 순서다.
     칸 안에서 떼어 낸 표는 제목을 표 번호 다음 줄에 적는다. 구조 분석은 "[표 N]"만 있는 줄을 표의 시작으로 본다."""
     titles = titles or {}
+    parents = parents or {}
+    ids = [str(uuid4()) for _ in tables]
     table_candidates = [
-        RawTableCandidate(page_number=1, rows=rows, spans=(spans or {}).get(index), title=titles.get(index))
+        RawTableCandidate(
+            page_number=1, rows=rows, id=ids[index], spans=(spans or {}).get(index), title=titles.get(index),
+            parent_table_id=ids[parents[index][0]] if index in parents else None,
+            parent_cell=parents[index][1] if index in parents else None,
+        )
         for index, rows in enumerate(tables)
     ]
     text_blocks: list[RawTextBlock] = []
@@ -458,7 +472,7 @@ class HWPAdapter(BaseAdapter):
         # can match each paragraph against the rendered preview PDF's per-page
         # text and assign it a real page number — see hwp_adapter.py's
         # page_number=1 placeholders below, which that pass overwrites.
-        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order, ctx.spans, ctx.titles)
+        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order, ctx.spans, ctx.titles, ctx.parents)
 
         warnings: list[str] = []
         image_regions: list[RawImageRegion] = []
@@ -513,7 +527,7 @@ class HWPAdapter(BaseAdapter):
         # See the matching comment in _extract_hwp: one block per paragraph so
         # the repagination pass can locate each paragraph independently in the
         # rendered preview PDF's per-page text.
-        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order, ctx.spans, ctx.titles)
+        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order, ctx.spans, ctx.titles, ctx.parents)
 
         page = RawPage(
             page_number=1,

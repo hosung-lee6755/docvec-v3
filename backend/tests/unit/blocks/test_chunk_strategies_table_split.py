@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from app.pipeline.blocks.chunk_strategies import (
     _split_table_rows,
+    mask_table_cells,
     _table_rows_and_ordinal,
     _tree_based_chunks,
 )
@@ -172,3 +173,84 @@ def test_every_part_of_a_titled_table_carries_the_title():
 
     assert len(parts) > 1
     assert all(part.startswith("[표 7] 직원 명부 (부분 ") for part in parts)
+
+
+def test_a_long_merged_row_whose_text_is_all_in_the_first_column_is_kept():
+    # 고도화보고서 [표 74]: 가로로 합친 설명 행("왜 바꿨나 …", 600~1200자)은 글이 모두 첫 열에 있고 나머지 열이
+    # 비어 있다. 예전에는 첫 열을 행 이름으로만 보고 나머지 열에서 나눌 글이 없다며 행을 통째로 버려,
+    # 검색 청크에서 설명이 모두 빠졌다(2026-11-20 감사)
+    explanation = "왜 바꿨나 " + " ".join(f"{i}번째 설명 문장입니다." for i in range(80))
+    rows = [["항목", "이전", "실제 예", "고도화"], ["받는 테이블", "원천 대부분", "멈춤", "20개만"], [explanation, "", "", ""]]
+
+    parts = _split_table_rows(rows, ordinal=74, max_chars=500, max_rows=None)
+
+    joined = "".join(parts)
+    assert all(len(p.split("\n", 1)[1]) <= 500 for p in parts)
+    for i in range(80):
+        assert f"{i}번째 설명 문장입니다." in joined
+    assert joined.count("번째 설명 문장입니다.") == 80 and joined.count("왜 바꿨나") == 1
+    assert "| 받는 테이블 | 원천 대부분 | 멈춤 | 20개만 |" in joined
+
+
+def _orphan_heading_document():
+    parts = [
+        ("HEADING", "제3조(구성원) ①구성원은 다음과 같다.", 1),
+        ("PARAGRAPH", "1. 가회사(대표자 : 홍)", None),
+        ("HEADING", "제4조(효력기간) 본 협정서는 서명과 동시에 발효한다.", 1),
+        ("HEADING", "제8조(거래계좌) 선금은 다음 계좌로 받는다.", 1),
+        ("HEADING", "1. 가회사 : 나은행, 계좌번호 123, 예금주 홍", 1),
+        ("HEADING", "제9조(출자비율) ①출자비율은 다음과 같다.", 1),
+        ("PARAGRAPH", "가 : 60%", None),
+    ]
+    text, nodes, offset = "", [], 0
+    for i, (node_type, body, level) in enumerate(parts):
+        nodes.append(_node(node_type, body, offset, offset + len(body), level=level, id=f"n{i}"))
+        text += body + "\n\n"
+        offset = len(text)
+    return text, nodes
+
+
+def test_a_heading_without_body_is_kept_in_chunk_text():
+    # 제안요청서 붙임 9호 서식: 한 줄짜리 조문("제4조(효력기간) 본 협정서는 …")과 번호 줄("1. … 계좌번호 …")이 제목으로
+    # 분류되고 바로 다음에 같은 수준 제목이 오면, 어느 청크의 글에도 구획 경로에도 남지 않아 검색에서 빠졌다(2026-11-20 감사)
+    text, nodes = _orphan_heading_document()
+
+    spans = _tree_based_chunks(
+        nodes, text, max_chars=1000, min_chars=0, respect_headings=True,
+        include_previous_heading=False, preserve_table=True, split_long_paragraph=True,
+    )
+
+    joined = "\n".join(s.text for s in spans)
+    assert "효력기간) 본 협정서는 서명과 동시에 발효한다." in joined
+    assert "제8조(거래계좌) 선금은 다음 계좌로 받는다." in joined
+    assert "계좌번호 123, 예금주 홍" in joined
+    # 본문이 있는 제목은 예전처럼 구획 경로로만 남는다
+    assert "제3조(구성원)" not in joined and "제9조(출자비율)" not in joined
+    last = spans[-1]
+    assert last.text.strip() == "가 : 60%" and last.section_path == ["제9조(출자비율) ①출자비율은 다음과 같다."]
+    orphan = next(s for s in spans if "효력기간" in s.text)
+    assert orphan.section_path == []
+
+
+def test_mask_table_cells_applies_the_same_masks_as_the_text():
+    # 기계설비 매뉴얼·Pub120bk: 큰 표 조각은 가린 글이 아니라 Document.tables 의 원래 칸으로 만들어, 가리기로 한
+    # 전화번호와 이메일이 검색 청크에 그대로 들어갔다(2026-11-20 감사)
+    tables = [
+        {"id": "t1", "title": "연락처", "rows": [["이름", "전화"], ["담당", "010-1234-5678"], ["메일", "a@b.com, 010-1234-5678"]]},
+        {"id": "t2", "rows": [["x"]]},
+    ]
+    replacements = [("010-1234-5678", "*" * 13), ("a@b.com", "*******")]
+
+    masked = mask_table_cells(tables, replacements)
+
+    assert masked[0]["rows"] == [["이름", "전화"], ["담당", "*" * 13], ["메일", "*******, " + "*" * 13]]
+    assert masked[0]["title"] == "연락처" and masked[1] == tables[1]
+    # 원본 표는 바꾸지 않는다(문서 표 탭이 쓰는 값)
+    assert tables[0]["rows"][1][1] == "010-1234-5678"
+
+
+def test_mask_table_cells_without_masks_returns_the_same_tables():
+    tables = [{"id": "t1", "rows": [["a"]]}]
+
+    assert mask_table_cells(tables, []) is tables
+    assert mask_table_cells(None, [("a", "*")]) is None

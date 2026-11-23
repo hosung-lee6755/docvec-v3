@@ -68,6 +68,10 @@ class RawTableCandidate:
     # 합친 칸 목록({"row", "col", "row_span", "col_span"}, 0부터). rows는 이미 열이 맞는 격자이고,
     # 이 값은 화면이 원래 모양(합쳐진 칸)으로 그릴 때만 쓴다. 합친 칸이 없거나 모르면 None(전체 점검 2-2)
     spans: list[dict] | None = None
+    # 칸 안에서 떼어 낸 표(2026-11-20). 바깥 표의 id 와, 이 표가 들어 있던 바깥 표의 칸({"row", "col"}, 0부터,
+    # 바깥 표 rows 기준). 바깥 표나 칸 안에 있지 않은 표는 None 이다(nested_tables.py)
+    parent_table_id: str | None = None
+    parent_cell: dict | None = None
     # 표 제목(캡션이나 표 맨 위의 제목 줄). 큰 표를 나눈 조각마다 붙여 검색에서 표 주제로도 찾게 한다(2026-11-17)
     title: str | None = None
 
@@ -80,6 +84,8 @@ class RawImageRegion:
     # 그림 영역 안에 원본 PDF 텍스트 레이어가 있으면 그 글자(차트 라벨·수치). 어댑터가 그림 안 글자를
     # 본문에서 빼는 경우(Docling)에만 채우며, 그림 인식이 이미지 OCR 보다 먼저 쓴다.
     native_text: str | None = None
+    # Docling 경로의 그림 요소 id. 그림 글 블록이 이 id를 이어받아 구조 노드가 그 글의 위치를 갖게 된다(2026-11-20).
+    element_id: str | None = None
 
 
 @dataclass

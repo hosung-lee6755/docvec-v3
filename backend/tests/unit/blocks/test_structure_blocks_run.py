@@ -342,7 +342,7 @@ def test_run_elements_path_keeps_toc_when_enabled():
 def test_block_metadata():
     block = sb.StructureAnalyzeBlock()
     assert block.block_type == "structure_analyze"
-    assert block.block_version == "1.20.0"
+    assert block.block_version == "1.22.0"
     assert block.category == "구조·보호"
     assert block.config_schema is sb.StructureAnalyzeConfig
     assert sb.StructureAnalyzeConfig().heading_max_level == 5
@@ -405,6 +405,48 @@ def test_lines_repeated_at_page_edges_become_headers():
     assert len(headers) == 3
     assert all("펠로우십" in b[4] for b in headers)
     assert [b[4] for b in blocks if b[0] == "HEADING"] == ["1. 본문 제목 6", "1. 본문 제목 8", "1. 본문 제목 10"]
+
+
+def test_footer_followed_by_a_table_block_is_still_a_page_edge_line():
+    # 스캔 PDF 는 쪽의 표 글을 OCR 글 뒤에 붙인다. 표 줄 때문에 꼬리말이 쪽 끝 몇 줄에서 밀려나면 안 된다
+    # (서울 데이터 펠로우십 보고서 12쪽·18쪽, 2026-11-20)
+    table = "[표 4]\n| 변수 | 결과 |\n|---|---|\n| 가 | 1 |\n| 나 | 2 |"
+    text, page_map = _pages(
+        "본문 첫 줄\n내용\n6 2022 서울 데이터 펠로우십 분석보고서",
+        f"본문 둘째 쪽\n내용\n8 2022 서울 데이터 펠로우십 분석보고서\n{table}",
+        "본문 셋째 쪽\n내용\n10 2022 서울 데이터 펠로우십 분석보고서",
+    )
+    blocks = sb._build_blocks(text, page_map=page_map)
+    assert len([b for b in blocks if b[0] == "HEADER" and "펠로우십" in b[4]]) == 3
+
+
+def test_table_rows_at_page_edges_never_become_headers():
+    # HWP 표 행은 맨 앞에 "|"가 없다("요구사항 고유번호 |  | MPR-002"). 쪽마다 반복돼도 표 내용이다(제안요청서)
+    text, page_map = _pages(*(
+        f"[표 {n}]\n요구사항 고유번호 |  | MPR-00{n}\n요구사항 명칭 |  | 항목 {n}\n본문 {n}\n본문 끝 {n}" for n in (1, 2, 3)
+    ))
+    blocks = sb._build_blocks(text, page_map=page_map)
+    assert not [b for b in blocks if b[0] == "HEADER"]
+
+
+def test_body_label_after_a_table_at_the_top_of_a_page_stays_in_body():
+    # 쪽 머리의 표 다음에 오는 본문 소제목은 머리말이 아니다(조사료 지침 "《조사료 장거리 유통비 지원》")
+    text, page_map = _pages(*(
+        f"[표 {n}]\n농협경제지주(일선조합), 축산단체\n《조사료 장거리 유통비 지원》\n○ 본문 {n}\n○ 본문 끝 {n}"
+        for n in (22, 25, 28)
+    ))
+    blocks = sb._build_blocks(text, page_map=page_map)
+    assert not [b for b in blocks if b[0] == "HEADER"]
+
+
+def test_table_title_line_after_a_table_marker_never_becomes_a_header():
+    # 표 표시 바로 다음 줄은 표 제목이다(NS-AM 매뉴얼 "[칸 안의 표 1] [표 7]의 '설 명' 행의 칸에 든 표")
+    text, page_map = _pages(*(
+        f"[표 {n}]\n[칸 안의 표 1] [표 {n - 1}]의 '설 명' 행의 칸에 든 표\n| 가 | 나 |\n본문 {n}\n본문 끝 {n}"
+        for n in (7, 9, 11)
+    ))
+    blocks = sb._build_blocks(text, page_map=page_map)
+    assert not [b for b in blocks if b[0] == "HEADER"]
 
 
 def test_repeated_body_lines_away_from_page_edges_stay_in_body():

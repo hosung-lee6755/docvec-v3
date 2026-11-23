@@ -276,6 +276,17 @@ export interface DocumentChunk2 {
   // Chunk 계층형 Parent Retrieval(메타 정보 생성.txt 3절, Phase 9) — "상위
   // 청크 보기" 토글용으로 인라인 제공(parent 자체는 목록에 없음).
   parent_chunk_text: string | null
+  // 표 청크의 출처 표. 칸 안에서 떼어 낸 표는 바깥 표와 들어 있던 칸(0부터)을 함께 준다(2026-11-20)
+  table?: ChunkTableRef | null
+}
+
+export interface ChunkTableRef {
+  table_id: string
+  table_number: number
+  title: string | null
+  parent_table_id: string | null
+  parent_table_number: number | null
+  parent_cell: { row: number; col: number } | null
 }
 
 export interface DocumentChunksResult {

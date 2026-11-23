@@ -794,6 +794,37 @@ def test_chunk_text_falls_back_to_a_space_before_a_hard_cut():
         assert chunk_text.endswith(" ")
 
 
+def test_chunk_text_looks_further_back_for_a_sentence_end_before_cutting_at_a_space():
+    # Pub120 실측(2026-11-23): 긴 문장이 끝 1/4 구간을 다 덮으면 띄어쓰기에서 잘려
+    # 다음 청크가 "in fog; it is lighted ..."처럼 문장 중간에서 시작했다
+    short = "Vessels may anchor here. "
+    long_sentence = "This inner passage affords " + "a fair number of anchorages " * 3 + "at night or in fog. "
+    text = short * 3 + long_sentence + short * 3
+
+    chunks = proc._chunk_text(text, max_chars=150, overlap=0)
+
+    assert chunks[0][0] == short * 3
+    assert chunks[1][0].startswith("This inner passage")
+
+
+def test_chunk_text_runs_a_little_past_the_limit_to_finish_a_sentence():
+    sentence = "word " * 28 + "end. "          # 145자: 끝 1/4 구간에도, 앞쪽에도 문장 끝이 없다
+    text = sentence + "Next sentence here. " * 10
+
+    chunks = proc._chunk_text(text, max_chars=140, overlap=0)
+
+    assert chunks[0][0] == sentence
+    assert chunks[1][0].startswith("Next sentence")
+
+
+def test_chunk_text_keeps_the_limit_when_the_sentence_runs_on_too_long():
+    text = "word " * 100 + "end. "
+
+    chunks = proc._chunk_text(text, max_chars=140, overlap=0)
+
+    assert all(len(chunk_text) <= 140 for chunk_text, _s, _e in chunks[:-1])
+
+
 def test_resolve_vision_credentials_never_sends_high_level_documents_to_the_cloud():
     """등급이 높은 문서는 키가 있어도 클라우드 VLM을 쓰지 않는다(전체 점검 2-11)."""
     db = _db_with_keys(user_key=SimpleNamespace(encrypted_key="U"))

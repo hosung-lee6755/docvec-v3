@@ -130,8 +130,11 @@ def test_tree_heading_stack_pops_to_same_or_higher_level():
         _node("p2", "PARAGRAPH", 12, 20),
     ]
     chunks = _tree(nodes, text, respect_headings=True)
-    assert chunks[0].section_path == ["새 상위"]
-    assert chunks[1].section_path == ["레벨없음"]
+    by_node = {tuple(c.source_node_ids): c.section_path for c in chunks}
+    assert by_node[("p",)] == ["새 상위"]
+    assert by_node[("p2",)] == ["레벨없음"]
+    # 본문 없이 같은 수준 제목이 바로 오는 "상위"·"하위"는 글이 사라지지 않도록 문단처럼 담긴다(2026-11-20)
+    assert by_node[("h1",)] == [] and by_node[("h2",)] == []
 
 
 def test_tree_overflow_flushes_buffer_before_adding():
@@ -326,3 +329,41 @@ def test_non_body_ranges_picks_only_header_footer_toc():
     nodes = [N(node_type="FOOTER", span_start=5, span_end=9), N(node_type="PARAGRAPH", span_start=0, span_end=5),
              N(node_type="TOC", span_start=1, span_end=3), N(node_type="HEADER", span_start=None, span_end=None)]
     assert cs.non_body_ranges(nodes) == [(1, 3), (5, 9)]
+
+
+# ---- 쪽·단 경계에서 끊긴 문장(Pub120 실측, 2026-11-23) ----
+def test_sentence_split_across_paragraph_nodes_moves_to_the_next_chunk_whole():
+    # 원본 쪽(단)이 넘어가며 한 문장이 두 문단 노드로 나뉘었다. 넘치는 자리에서 그냥 자르면
+    # 다음 청크가 "in the vessel security plan ..."처럼 문장 중간에서 시작했다
+    first = "Vessels must report. The master shall comply with all procedures specified"
+    second = " in the vessel security plan for that level."
+    text = first + second
+    nodes = [_node("a", "PARAGRAPH", 0, len(first)), _node("b", "PARAGRAPH", len(first), len(text))]
+
+    chunks = _tree(nodes, text, max_chars=100)
+
+    assert [c.text for c in chunks] == ["Vessels must report. ", "The master shall comply with all procedures specified" + second]
+    assert chunks[1].source_node_ids == ["a", "b"]
+
+
+def test_tail_of_an_oversized_paragraph_waits_for_its_continuation():
+    long_node = "Short one. " * 8 + "The firing takes place to seaward in the case of"
+    rest = " those on land. Next."
+    text = long_node + rest
+    nodes = [_node("a", "PARAGRAPH", 0, len(long_node)), _node("b", "PARAGRAPH", len(long_node), len(text))]
+
+    chunks = _tree(nodes, text, max_chars=100)
+
+    assert not any(c.text.lstrip().startswith("those on land") for c in chunks)
+    assert any("in the case of those on land." in c.text for c in chunks)
+
+
+def test_a_new_sentence_in_the_next_node_is_not_treated_as_a_continuation():
+    first = "A" * 60 + " ends here."
+    second = " Another sentence starts with a capital letter and is long."
+    text = first + second
+    nodes = [_node("a", "PARAGRAPH", 0, len(first)), _node("b", "PARAGRAPH", len(first), len(text))]
+
+    chunks = _tree(nodes, text, max_chars=80)
+
+    assert [c.source_node_ids for c in chunks] == [["a"], ["b"]]

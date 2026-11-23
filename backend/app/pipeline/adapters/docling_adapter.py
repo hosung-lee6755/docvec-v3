@@ -29,6 +29,7 @@ from app.pipeline.adapters.base import (
     RawTextBlock,
 )
 from app.pipeline.adapters.docling_toc import TOC_LABELS, choose_toc_lines, grid_text
+from app.pipeline.adapters.native_spacing import NativeRegionReader, choose_spacing
 from app.pipeline.adapters.hwpx_structure import grid_from_cells
 from app.pipeline.adapters.ruled_tables import RuledTable, find_ruled_tables, match_ruled_table
 from app.pipeline.blocks.table_markdown import rows_to_markdown
@@ -243,12 +244,15 @@ def _preceding_caption(page: RawPage) -> str | None:
 
 
 def _emit_table(page: RawPage, elements: list[dict], section_path: list[str], rows: list[list[str]],
-                spans: list[dict] | None, bbox, detected_as: str, title: str | None = None) -> None:
-    """표 하나를 표 후보, 본문 블록, 요소로 남긴다. 제목이 있으면 표 글 맨 위에 한 줄로 둔다."""
+                spans: list[dict] | None, bbox, detected_as: str, title: str | None = None,
+                parent_table_id: str | None = None, parent_cell: dict | None = None) -> str:
+    """표 하나를 표 후보, 본문 블록, 요소로 남기고 표 id 를 돌려준다. 제목이 있으면 표 글 맨 위에 한 줄로 둔다.
+    칸 안에서 떼어 낸 표는 바깥 표 id 와 들어 있던 칸을 함께 남긴다(nested_tables.py)."""
     table_id = str(uuid4())
-    page.table_candidates.append(
-        RawTableCandidate(page_number=page.page_number, rows=rows, bbox=bbox, id=table_id, spans=spans, title=title)
-    )
+    page.table_candidates.append(RawTableCandidate(
+        page_number=page.page_number, rows=rows, bbox=bbox, id=table_id, spans=spans, title=title,
+        parent_table_id=parent_table_id, parent_cell=parent_cell,
+    ))
     markdown = rows_to_markdown(rows)
     if title:
         markdown = f"{title}\n{markdown}"
@@ -267,6 +271,7 @@ def _emit_table(page: RawPage, elements: list[dict], section_path: list[str], ro
             "style": None,
         },
     })
+    return table_id
 
 
 def _page_native_text(page: RawPage) -> str:
@@ -557,6 +562,8 @@ class DoclingAdapter(BaseAdapter):
         table_ordinal = 0
         ruled_source = _RuledTableSource(file_path, warnings)
         native_text = _NativeTextReader(file_path, warnings)
+        # 본문 글의 띄어쓰기를 원본 글자 층과 견준다(Docling 이 "텅레 일의", "V oluntary"처럼 낱말을 떼던 문제, 2026-11-20)
+        native_region = NativeRegionReader(file_path, warnings)
 
         def page_for(page_no: int) -> RawPage:
             if page_no not in pages_by_no:
@@ -581,16 +588,23 @@ class DoclingAdapter(BaseAdapter):
                 if ruled is not None:
                     # 선으로 그린 표는 선 그대로 읽은 결과를 쓴다. 칸 안의 작은 표는 바로 뒤에 따로 낸다
                     caption = _table_caption(item, doc) or _preceding_caption(page)
-                    tables = [
-                        (t.rows, list(t.spans) or None, "ruled_lines", t.title or (caption if t is ruled else None))
-                        for t in (ruled, *ruled.nested)
-                    ]
+                    outer_id = _emit_table(
+                        page, elements, section_path, ruled.rows, list(ruled.spans) or None, bbox, "ruled_lines",
+                        ruled.title or caption,
+                    )
+                    for t in ruled.nested:
+                        _emit_table(
+                            page, elements, section_path, t.rows, list(t.spans) or None, bbox, "ruled_lines",
+                            t.title, parent_table_id=outer_id, parent_cell=t.host,
+                        )
+                    table_ordinal += 1 + len(ruled.nested)
                 else:
                     rows, spans = _table_grid(item)
-                    tables = [(rows, spans, "docling_table", _table_caption(item, doc) or _preceding_caption(page))]
-                for rows, spans, detected_as, title in tables:
                     table_ordinal += 1
-                    _emit_table(page, elements, section_path, rows, spans, bbox, detected_as, title)
+                    _emit_table(
+                        page, elements, section_path, rows, spans, bbox, "docling_table",
+                        _table_caption(item, doc) or _preceding_caption(page),
+                    )
                 continue
 
             if label in _PICTURE_LABELS:
@@ -609,11 +623,13 @@ class DoclingAdapter(BaseAdapter):
                         image_bytes = buf.getvalue()
                 except Exception:
                     image_bytes = None
+                picture_id = str(uuid4())
                 page.image_regions.append(
-                    RawImageRegion(page_number=page_no, bbox=bbox or (0, 0, 0, 0), image_bytes=image_bytes)
+                    RawImageRegion(page_number=page_no, bbox=bbox or (0, 0, 0, 0), image_bytes=image_bytes,
+                                   element_id=picture_id)
                 )
                 elements.append({
-                    "id": str(uuid4()), "page": page_no, "type": "picture", "bbox": bbox,
+                    "id": picture_id, "page": page_no, "type": "picture", "bbox": bbox,
                     "content": {"text": "", "markdown": ""},
                     "metadata": {
                         "section_path": list(section_path), "is_header": False, "is_footer": False,
@@ -636,6 +652,8 @@ class DoclingAdapter(BaseAdapter):
                 continue
 
             text = (getattr(item, "text", "") or "").strip()
+            if text:
+                text = choose_spacing(text, native_region.read(page_no, bbox))
             if label in _HEADING_LABELS:
                 section_path = [text] if text else section_path
             _emit_text(page, elements, section_path, label, text, bbox, level=getattr(item, "level", None))
@@ -646,6 +664,7 @@ class DoclingAdapter(BaseAdapter):
         # 이 블록 자체가 스킵되고 기존 EasyOCR-only 동작과 동일하다.
         ruled_source.close()
         native_text.close()
+        native_region.close()
         _attach_native_text_to_pictures(file_path, pages_by_no, warnings)
 
         vision_backend = options.get("vision_backend")

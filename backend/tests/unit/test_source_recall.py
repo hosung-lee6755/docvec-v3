@@ -58,3 +58,17 @@ def test_low_pages_are_reported_by_one_based_page_number():
 
     assert result.low_pages == [2]
     assert MIN_PAGE_NGRAMS <= len(normalize_for_recall(PAGE))
+
+
+def test_each_page_uses_the_reading_order_that_matches_best():
+    # 세원화성 에너지진단보고서(2026-11-20): PDF 저장 순서에서는 기호가 줄 뒤로 밀린다. 보이는 순서로 고친 본문이
+    # 저장 순서 기준과만 견줘져 누락으로 잡혔다. 쪽마다 저장 순서와 위치 정렬 가운데 더 잘 맞는 쪽을 쓴다
+    stream_order = "가 에너지원별 사용량 . 나 에너지 소비구조 . 다 연료 사용 현황 . 라 전력 사용 현황 ."
+    visual_order = "가. 에너지원별 사용량 나. 에너지 소비구조 다. 연료 사용 현황 라. 전력 사용 현황"
+
+    stream_only = compute_source_recall([stream_order], visual_order).recall
+    either = compute_source_recall([(stream_order, visual_order)], visual_order)
+
+    assert stream_only < 0.9
+    assert either.recall == 1.0
+    assert either.low_pages == []

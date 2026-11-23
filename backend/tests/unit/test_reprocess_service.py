@@ -427,6 +427,32 @@ async def test_latest_version_reprocess_resolves_workflow_from_preprocess_run_no
     resolve.assert_awaited_once_with(db, preprocess_run)
 
 
+@pytest.mark.asyncio
+async def test_latest_version_reprocess_keeps_skip_review_of_the_preprocess_run():
+    """분석 run(skip_review 기본값 False)이 active 여도 '검토 없이 진행'은 전처리 run 에서 물려받는다.
+    예전에는 분석 run 의 값을 물려받아 재처리한 문서가 검토 대기로 멈췄다(NS-AM, 2026-11-20)."""
+    analysis_run = _run(status="COMPLETED")
+    analysis_run.version_id = uuid4()
+    analysis_run.skip_review = False
+    analysis_run.collection_id = None
+    preprocess_run = _run(status="COMPLETED")
+    preprocess_run.version_id = uuid4()
+    preprocess_run.skip_review = True
+    doc = _doc(active_run_id=analysis_run.id)
+    entry = _block("file_validate")
+    entry.id = uuid4()
+    db = _entry_db([entry])
+    db.get = AsyncMock(return_value=analysis_run)
+
+    with patch("app.services.reprocess_service.find_preprocess_run", AsyncMock(return_value=preprocess_run)), \
+         patch("app.services.reprocess_service.resolve_latest_version", AsyncMock(return_value=_version())), \
+         patch("app.services.reprocess_service.current_dictionary_version", AsyncMock(return_value=1)), \
+         patch("app.pipeline.tasks.workflow.run_workflow_step"):
+        run = await start_reprocess_on_latest_version(db, doc, reason=None)
+
+    assert run.skip_review is True
+
+
 # ── 분석 run 이 active 인 문서에서 전처리 블록부터 재처리 ──────────────────────────
 # 컬렉션에 기본 분석 워크플로우가 있으면 active run 은 AUTO_ANALYSIS run 이라, 전처리 블록
 # (file_validate, quality_check 등)은 그 run 의 워크플로우에 없어 재처리가 409 로 막혔다.

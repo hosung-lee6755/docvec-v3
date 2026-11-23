@@ -134,6 +134,8 @@ export function toRagRecordsJson(doc: RagRecordSource, chunks: DocumentChunk2[],
       search_excluded: c.disabled,
       edited: c.edited,
       has_parent_context: !!c.parent_chunk_text,
+      // 표 청크면 출처 표와, 칸 안에서 떼어 낸 표의 바깥 표·칸(parent_table_id, parent_cell)
+      ...(c.table ? { table: c.table } : {}),
       text: c.text,
     })),
   }, null, 2)

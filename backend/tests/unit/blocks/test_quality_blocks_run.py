@@ -286,7 +286,7 @@ def test_run_carries_upstream_output():
 def test_block_metadata():
     block = qb.QualityCheckBlock()
     assert block.block_type == "quality_check"
-    assert block.block_version == "1.8.1"
+    assert block.block_version == "1.10.0"
     assert block.category == "품질·제어"
     assert block.config_schema is qb.QualityCheckConfig
     with pytest.raises(Exception):

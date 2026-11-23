@@ -416,6 +416,24 @@ def _detect_language(text: str) -> str | None:
     return None
 
 
+def _attach_element_spans(
+    elements: list[dict], element_spans: dict[str, tuple[int, int]], full_text: str,
+) -> list[dict]:
+    """각 요소에 본문 위치(span_start, span_end)를 붙인 새 목록을 돌려준다. 위치가 없는 요소는 None이다.
+    그림 요소는 그림 글 블록이 같은 id로 위치를 얻으므로, 비어 있던 글 칸도 그 위치의 글로 채운다.
+    예전에는 그림 요소에 위치가 없어 그림 속 글이 어느 구조 노드에도 속하지 못하고 청크에서 빠졌다(2026-11-20)."""
+    result: list[dict] = []
+    for el in elements:
+        span = element_spans.get(el.get("id"))
+        updated = {**el, "span_start": span[0] if span else None, "span_end": span[1] if span else None}
+        content = el.get("content") or {}
+        if span and el.get("type") == "picture" and not (content.get("text") or "").strip():
+            figure_text = full_text[span[0]:span[1]]
+            updated["content"] = {**content, "text": figure_text, "markdown": figure_text}
+        result.append(updated)
+    return result
+
+
 def _match_image_paths(elements: list[dict], image_records: list[dict]) -> None:
     """PICTURE 타입 element의 metadata.image_path를 Document.images(페이지
     번호로 색인된 storage_key)와 best-effort로 매치한다(메타 정보 생성
@@ -590,7 +608,19 @@ class TextExtractBlock(BaseBlock):
         #         제목을 다음 줄로 옮겼다. 그 결과가 캐시에 남지 않도록 올린다.
         # 1.34.2: HWP·HWPX 쪽 맞춤에서 표의 앞 글로 쪽을 못 찾으면 한 쪽에만 나오는 긴 칸 글(검사번호)로 다음 쪽까지
         #         정한다. 칸 안에서 떼어 낸 표는 다음 쪽까지만 찾는다(NS-AM 04.01~04.03 표가 모두 3쪽에 남던 문제).
-        return "1.34.2"
+        # 1.35.0: 칸 안에서 떼어 낸 표에 parent_table_id(바깥 표 id)와 parent_cell(들어 있던 칸, 0부터)을 남기고,
+        #         제목에 바깥 표 번호("[표 1]의")를 적는다(2026-11-20). 옛 결과가 캐시에서 다시 쓰이지 않도록 올린다.
+        # 1.36.0: DOCX 의 제목 스타일("Heading N", "Title", "제목 N")과 개요 수준을 line_layout 의 heading_level 로
+        #         넘긴다. 글자 크기를 문단에 직접 주지 않은 Word 제목이 본문 문단이 되던 문제(2026-11-20 감사).
+        #         HTML 은 "맨 위로" 같은 페이지 이동 링크를 버리고, <summary> 의 칸 사이를 띄운다.
+        #         Docling PDF 는 본문 글의 띄어쓰기를 원본 글자 층과 견줘 덜 깨진 쪽을 쓴다("텅레 일의", "V oluntary").
+        # 1.37.0: Docling 그림 요소가 그림 글 블록과 같은 id 를 써서 본문 위치와 글을 갖는다. 위치가 없어
+        #         그림 속 글이 청크에서 빠지던 문제(디지털협업공장 공고 "[그림 1]", 2026-11-20 감사).
+        #         Docling 이 숫자·기호를 옮기거나 빠뜨린 글은 한글이 같으면 원본 글자 층 글로 바꾼다
+        #         ("가 에너지원별 사용량 ." → "가. 에너지원별 사용량", 세원화성 에너지진단보고서).
+        # 1.38.0: Tesseract 그림 글에서 줄 평균 신뢰도 40 미만 줄을 뺀다(차트 그림의 "wise waso22 45" 같은 잡음,
+        #         정민산업 에너지진단보고서, 2026-11-23).
+        return "1.38.0"
 
     @property
     def category(self) -> str:
@@ -737,9 +767,7 @@ class TextExtractBlock(BaseBlock):
                 # span_start/span_end를 붙인다. 매칭되는 span이 없는 요소
                 # (예: text_blocks에 항목을 남기지 않는 picture)는 None으로
                 # 남아 structure_analyze가 본문 span 없이 처리한다.
-                for el in raw_elements:
-                    span = element_spans.get(el.get("id"))
-                    el["span_start"], el["span_end"] = span if span else (None, None)
+                raw_elements = _attach_element_spans(raw_elements, element_spans, full_text)
                 # 메타 정보 생성 설계서(2026-07-23) Phase 3 — image_path는
                 # image_records가 방금 계산된 지금에서야 채울 수 있다.
                 _match_image_paths(raw_elements, image_records)
@@ -761,6 +789,9 @@ class TextExtractBlock(BaseBlock):
                     "detected_as": table.detected_as,
                     **({"spans": table.spans} if getattr(table, "spans", None) else {}),
                     **({"title": table.title} if getattr(table, "title", None) else {}),
+                    # 칸 안에서 떼어 낸 표는 바깥 표 id 와 들어 있던 칸(0부터)을 남긴다(2026-11-20)
+                    **({"parent_table_id": table.parent_table_id, "parent_cell": getattr(table, "parent_cell", None)}
+                       if getattr(table, "parent_table_id", None) else {}),
                 }
                 for page in parsed.pages
                 for table in page.table_candidates

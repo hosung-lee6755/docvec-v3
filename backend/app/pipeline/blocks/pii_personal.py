@@ -8,6 +8,7 @@
 그런 문서는 사용자 사전의 PERSON 항목으로 보완한다.
 """
 import re
+from collections import Counter
 
 Match = tuple[int, int, float]
 
@@ -29,6 +30,7 @@ _NOT_NAMES = frozenset({
     "이사", "전무", "상무", "부장", "차장", "과장", "대리", "사원", "조교", "강사", "이하", "이상", "한국",
     "전국", "지역", "기관", "기업", "공단", "제출", "신청", "접수", "서류", "양식", "별지", "별첨", "참고",
     "사용", "경우", "형식", "우측", "좌측", "이용", "가입", "지원", "신규", "정보", "현황", "명의", "인적",
+    "지하",  # "지하주차장"을 "지하주 차장"으로 읽는다(기계설비 성능점검 보고서, 2026-11-21)
 })
 _NAME_LABEL_RE = re.compile(
     r"(?:성\s?명|이\s?름|성\s?함|대표자(?:명)?|담당자(?:명)?|신청인|신청자|작성자|책임자|보호자|수령인|예금주|참석자)"
@@ -45,6 +47,9 @@ _ORG_ENDINGS = frozenset("소단팀과부실회처청")
 _PARTICLES = frozenset("은는이가을를에의과와께도만")
 _LABEL_CONFIDENCE = 0.7
 _TITLE_CONFIDENCE = 0.5
+# 잡은 이름 1건당 표지 없이 다시 나와도 되는 자리 수. 예시 이름("홍길동")은 3건 잡혀 13번 다시 나왔고,
+# 이름으로 잘못 잡힌 일반 낱말("기계설비")은 1건 잡혀 929번 다시 나왔다(2026-11-21 전체 문서 측정)
+_MAX_REPEATS_PER_DETECTION = 20
 
 _REGION = (
     r"(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주"
@@ -132,6 +137,37 @@ def name_matches(text: str) -> list[Match]:
         if match.start(1) not in found and is_plausible_name(candidate) and candidate[-1] not in _ORG_ENDINGS:
             found[match.start(1)] = (match.end(1), _TITLE_CONFIDENCE)
     return [(start, end, confidence) for start, (end, confidence) in sorted(found.items())]
+
+
+def repeated_name_matches(text: str, matches: list[Match]) -> list[Match]:
+    """이미 이름으로 잡은 값이 표지 없이 다시 나온 자리. 표 칸("| 홍길동 / 대표 |")처럼 표지와 떨어진 곳이다.
+
+    낱말 속에 든 경우("정민수산")까지 번지지 않도록 앞은 한글이 아니고, 뒤는 한글이 아니거나 조사 한 글자여야 한다.
+    탐지 1건당 다시 나온 자리가 너무 많으면 그 값은 번지지 않는다("| 담당자 | 기계설비 |"의 "기계설비"가 930곳)."""
+    names = {text[start:end]: confidence for start, end, confidence in matches}
+    detected = Counter(text[start:end] for start, end, _ in matches)
+    taken = {start for start, _, _ in matches}
+    out: list[Match] = []
+    for name, confidence in names.items():
+        repeats = [
+            match.span() for match in re.finditer(re.escape(name), text)
+            if match.start() not in taken and not _is_hangul_at(text, match.start() - 1) and _ends_word(text, match.end())
+        ]
+        # 문서에서 너무 자주 나오는 값은 사람 이름이 아니라 그 문서의 일반 낱말이다
+        if len(repeats) > _MAX_REPEATS_PER_DETECTION * detected[name]:
+            continue
+        out.extend((start, end, confidence) for start, end in repeats)
+    return sorted(out)
+
+
+def _is_hangul_at(text: str, index: int) -> bool:
+    return 0 <= index < len(text) and "가" <= text[index] <= "힣"
+
+
+def _ends_word(text: str, end: int) -> bool:
+    if not _is_hangul_at(text, end):
+        return True
+    return text[end] in _PARTICLES and not _is_hangul_at(text, end + 1)
 
 
 def address_matches(text: str) -> list[Match]:

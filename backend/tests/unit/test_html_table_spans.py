@@ -120,8 +120,10 @@ def test_inner_table_with_two_rows_is_separated_after_the_outer_table():
 
     assert tables[0].rows == [["구분", "내용"], ["설명", "주요 부품 [칸 안의 표 1]"]]
     assert tables[1].rows == [["부품명", "재료"], ["상체", "GC 200"]]
-    assert tables[1].title == "[칸 안의 표 1] '설명' 행 '내용' 열 칸에 든 표"
-    assert blocks[1].text.startswith("[표 2]\n[칸 안의 표 1] '설명' 행 '내용' 열 칸에 든 표\n")
+    assert tables[1].title == "[칸 안의 표 1] [표 1]의 '설명' 행 '내용' 열 칸에 든 표"
+    assert blocks[1].text.startswith("[표 2]\n[칸 안의 표 1] [표 1]의 '설명' 행 '내용' 열 칸에 든 표\n")
+    assert (tables[1].parent_table_id, tables[1].parent_cell) == (tables[0].id, {"row": 1, "col": 1})
+    assert tables[0].parent_table_id is None
 
 
 def test_single_cell_frame_holding_only_a_table_is_replaced_by_that_table():

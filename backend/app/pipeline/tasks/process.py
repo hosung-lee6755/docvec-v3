@@ -20,21 +20,50 @@ _BOUNDARY_LOOKBACK_RATIO = 4
 _SENTENCE_END_RE = re.compile(r"[.!?。！？]\s")
 
 
-def _cut_point(text: str, search_start: int, hard_end: int) -> int | None:
-    """search_start~hard_end 안에서 가장 늦은 자연스러운 자를 곳(그 뒤 첫 글자 위치). 문단, 문장 끝, 줄바꿈, 공백 순."""
-    boundary = text.rfind("\n\n", search_start, hard_end)
-    if boundary > search_start:
-        return boundary + 2
+def _last_sentence_end(text: str, search_start: int, hard_end: int) -> int | None:
     sentence_end = None
     for m in _SENTENCE_END_RE.finditer(text, search_start, hard_end):
         sentence_end = m.end()
-    if sentence_end is not None and sentence_end > search_start:
+    return sentence_end if sentence_end is not None and sentence_end > search_start else None
+
+
+def _cut_point(text: str, search_start: int, hard_end: int, sentence_floor: int | None = None) -> int | None:
+    """search_start~hard_end 안에서 가장 늦은 자연스러운 자를 곳(그 뒤 첫 글자 위치). 문단, 문장 끝, 줄바꿈, 공백 순.
+
+    sentence_floor가 있으면 줄바꿈이나 공백으로 내려가기 전에 그 지점부터 문장 끝을 한 번 더 찾는다.
+    긴 문장이 찾는 구간 전체를 덮으면 띄어쓰기에서 잘려 "in fog; it is lighted ..."처럼
+    다음 청크가 문장 중간에서 시작했다(Pub120 실측, 2026-11-23). 청크가 조금 짧아지더라도 문장을 지킨다.
+    """
+    boundary = text.rfind("\n\n", search_start, hard_end)
+    if boundary > search_start:
+        return boundary + 2
+    sentence_end = _last_sentence_end(text, search_start, hard_end)
+    if sentence_end is None and sentence_floor is not None and sentence_floor < search_start:
+        sentence_end = _last_sentence_end(text, sentence_floor, hard_end)
+    if sentence_end is not None:
         return sentence_end
     for sep in ("\n", " "):
         pos = text.rfind(sep, search_start, hard_end)
         if pos > search_start:
             return pos + 1
     return None
+
+
+# 문장 하나가 청크 대부분을 차지해 문장 끝에서 자를 수 없을 때, 남은 꼬리가 최대 길이의
+# 이 비율 안이면 청크를 그만큼 늘려 문장을 끝까지 담는다("... with all procedures specified" /
+# "in the vessel security plan ..." 같은 조각을 막는다, 2026-11-23)
+_SENTENCE_OVERRUN_RATIO = 8
+_AT_BOUNDARY_RE = re.compile(r"(?:[.!?。！？]\s|\n\n)$")
+
+
+def _finish_sentence(text: str, end: int, allowance: int) -> int:
+    if end >= len(text) or _AT_BOUNDARY_RE.search(text, max(0, end - 2), end):
+        return end
+    limit = min(len(text), end + allowance)
+    if limit == len(text):
+        return limit
+    m = _SENTENCE_END_RE.search(text, end, limit + 1)
+    return m.end() if m else end
 
 
 def _chunk_text(
@@ -58,7 +87,11 @@ def _chunk_text(
         end = hard_end
         if hard_end < len(text):
             lookback = max_chars // _BOUNDARY_LOOKBACK_RATIO
-            end = _cut_point(text, max(start, hard_end - lookback), hard_end) or hard_end
+            # 문장 끝은 청크가 최대 길이의 1/4보다 짧아지지 않는 곳까지 넓혀 찾는다
+            end = _cut_point(
+                text, max(start, hard_end - lookback), hard_end, sentence_floor=start + lookback
+            ) or hard_end
+            end = _finish_sentence(text, end, max_chars // _SENTENCE_OVERRUN_RATIO)
         chunks.append((text[start:end], start, end))
         if end == len(text):
             break
@@ -362,13 +395,33 @@ def _recognize_figure_text(png_bytes: bytes, vision_options: dict) -> str:
 
         from app.pipeline.adapters.pdf_adapter import _TESSERACT_CONFIG, _preprocess_for_ocr
 
-        image = Image.open(io.BytesIO(png_bytes))
-        return pytesseract.image_to_string(
-            _preprocess_for_ocr(image), lang="kor+eng", config=_TESSERACT_CONFIG
-        ).strip()
+        from app.pipeline.ocr_cleanup import drop_low_confidence_lines
+
+        image = _preprocess_for_ocr(Image.open(io.BytesIO(png_bytes)))
+        text = pytesseract.image_to_string(image, lang="kor+eng", config=_TESSERACT_CONFIG).strip()
+        # 차트 그림에서 나온 "wise waso22 45" 같은 저신뢰 줄은 그림 글에서 뺀다(2026-11-23)
+        return drop_low_confidence_lines(text, _figure_line_confidences(image, pytesseract))
     except Exception:
         logger.exception("figure Tesseract OCR failed")
         return ""
+
+
+def _figure_line_confidences(image, pytesseract) -> list[float]:
+    """image_to_data의 줄(block, par, line)마다 단어 신뢰도 평균. image_to_string의 빈 줄이 아닌 줄과 순서가 같다."""
+    from app.pipeline.adapters.pdf_adapter import _TESSERACT_CONFIG
+
+    data = pytesseract.image_to_data(
+        image, lang="kor+eng", config=_TESSERACT_CONFIG, output_type=pytesseract.Output.DICT,
+    )
+    lines: list[tuple[tuple, list[float]]] = []
+    for i, word in enumerate(data["text"]):
+        if not word.strip():
+            continue
+        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        if not lines or lines[-1][0] != key:
+            lines.append((key, []))
+        lines[-1][1].append(max(float(data["conf"][i]), 0.0))
+    return [sum(values) / len(values) for _key, values in lines]
 
 
 def _has_native_figure_text(native_text: str | None) -> bool:
@@ -414,7 +467,7 @@ def _recognize_document_images(
     from app.pipeline.ocr_cleanup import figure_text_for_body
     from app.services.storage import storage_service
 
-    candidates: list[tuple[object, bytes, str | None]] = []  # (RawPage, png_bytes, native_text)
+    candidates: list[tuple] = []  # (RawPage, png_bytes, native_text, anchor, element_id)
     seen_hashes: set[str] = set()
     for page in parsed.pages:
         for region in page.image_regions:
@@ -452,7 +505,8 @@ def _recognize_document_images(
                              extra={"document_id": document_id})
                 continue
             # 그림 글을 넣기 전에 자리를 정해 둔다. 넣으면서 찾으면 먼저 넣은 그림 글에 밀린다
-            candidates.append((page, buf.getvalue(), region.native_text, _figure_anchor(page, region)))
+            candidates.append((page, buf.getvalue(), region.native_text, _figure_anchor(page, region),
+                               region.element_id))
 
     # 블록 설정(max_figures)이 있으면 그 값을, 없으면 기본 상한을 쓴다(전체 점검 2-1).
     # 상한은 이미지 인식(OCR·VLM)이 필요한 그림에만 건다. 원본 텍스트 레이어 글이 있는 그림은 인식 비용이 없는데,
@@ -462,7 +516,7 @@ def _recognize_document_images(
 
     records: list[dict] = []
     placed_after: dict = {}
-    for figure_no, (page, png_bytes, native_text, anchor) in enumerate(candidates, 1):
+    for figure_no, (page, png_bytes, native_text, anchor, element_id) in enumerate(candidates, 1):
         # 그림 안에 원본 텍스트 레이어가 있으면(차트 라벨·수치) 이미지 OCR 보다 정확하므로 그것을 쓴다.
         if native_text and len(native_text.strip()) >= _FIGURE_MIN_MEANINGFUL_CHARS:
             text = native_text.strip()
@@ -483,6 +537,8 @@ def _recognize_document_images(
                 text=f"[그림 {figure_no}]\n{body_text}",
                 page_number=page.page_number,
                 block_type="image",
+                # Docling 그림 요소 id를 이어받아야 구조 노드가 이 글의 위치를 갖고 청크에 들어간다(2026-11-20)
+                element_id=element_id,
             )
             _insert_figure_block(page, figure_block, anchor, placed_after)
     return records

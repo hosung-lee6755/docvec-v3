@@ -35,6 +35,25 @@ _HTML_BLOCKS = {
     "p", "div", "section", "article", "main", "header", "footer", "nav", "aside", "li", "ul", "ol", "dl", "dt",
     "dd", "blockquote", "pre", "figure", "figcaption", "form", "address", "details", "summary", "tr", "body", "html",
 }
+# 페이지 안으로 이동하는 링크 중 이 글만 있는 것은 화면 조작 요소다(문서 끝 "맨 위로", 2026-11-20 감사).
+# 같은 #top 링크라도 글이 문서 내용(목차 머리의 보고서 제목)이면 남긴다
+_BACK_TO_TOP_TEXTS = frozenset({
+    "맨 위로", "맨위로", "위로", "위로 가기", "처음으로", "top", "to top", "back to top", "go to top",
+})
+_ARROWS = " ↑▲⇧"
+# 화면이 칸처럼 나눠 보이는 요소. 자식 요소 사이에 공백이 없어도 글을 띄운다
+# (고도화보고서 <summary><span>E.6</span>위험 추세(D4)<span>6건</span>…가 붙던 문제, 2026-11-20 감사)
+_HTML_SEPARATED_CHILDREN = {"summary"}
+
+
+def _is_back_to_top_link(node) -> bool:
+    href = (node.get("href") or "").strip()
+    if not href.startswith("#"):
+        return False
+    text = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip().lower()
+    return not text.strip(_ARROWS) or text.strip(_ARROWS) in _BACK_TO_TOP_TEXTS
+
+
 _CAPABILITIES = AdapterCapabilities(
     native_text=True, native_table=True, native_image=False, native_structure=True,
     bbox_available=False, reading_order=True, ocr_required=False,
@@ -182,14 +201,20 @@ def _emit_html_table(table, blocks: list[RawTextBlock], tables: list[RawTableCan
 def _emit_rows(
     rows: list[list[str]], spans: list[dict], inner: InnerTables, title: str | None,
     blocks: list[RawTextBlock], tables: list[RawTableCandidate], collector: BlockCollector,
+    parent: tuple[str, dict | None] | None = None,
 ) -> None:
-    if is_frame_only(rows):  # 칸 하나짜리 틀에 표만 들어 있으면 틀 대신 안쪽 표를 낸다
+    if is_frame_only(rows):  # 칸 하나짜리 틀에 표만 들어 있으면 틀 대신 안쪽 표를 낸다(틀의 부모를 물려받는다)
         for inner_rows, inner_spans, deeper, caption in inner.found:
-            _emit_rows(inner_rows, inner_spans, deeper, caption, blocks, tables, collector)
+            _emit_rows(inner_rows, inner_spans, deeper, caption, blocks, tables, collector, parent)
         return
-    collector.table(blocks, tables, rows, 1, spans, title)
-    for inner_rows, inner_spans, deeper, inner_title in inner.titled(rows):
-        _emit_rows(inner_rows, inner_spans, deeper, inner_title, blocks, tables, collector)
+    parent_id, parent_cell = parent if parent else (None, None)
+    emitted = collector.table(blocks, tables, rows, 1, spans, title, parent_id, parent_cell)
+    if emitted is None:
+        return
+    # 칸은 저장한 표(빈 줄을 뺀 rows) 기준으로 찾는다
+    titled = inner.titled(emitted.rows, outer_title=f"[표 {collector.table_count}]")
+    for inner_rows, inner_spans, deeper, inner_title, host in titled:
+        _emit_rows(inner_rows, inner_spans, deeper, inner_title, blocks, tables, collector, (emitted.id, host))
 
 
 def parse_html(html: str) -> tuple[list[RawTextBlock], list[RawTableCandidate], BlockCollector, str | None]:
@@ -208,6 +233,7 @@ def parse_html(html: str) -> tuple[list[RawTextBlock], list[RawTableCandidate], 
         inline.clear()
 
     def walk(node, preformatted: bool = False) -> None:
+        separated = (node.name or "").lower() in _HTML_SEPARATED_CHILDREN
         for child in node.children:
             if isinstance(child, Comment):
                 continue
@@ -215,8 +241,10 @@ def parse_html(html: str) -> tuple[list[RawTextBlock], list[RawTableCandidate], 
                 inline.append(str(child) if preformatted else re.sub(r"\s+", " ", str(child)))
                 continue
             name = (child.name or "").lower()
-            if name in _HTML_SKIPPED:
+            if name in _HTML_SKIPPED or (name == "a" and _is_back_to_top_link(child)):
                 continue
+            if separated:
+                inline.append(" ")
             if name == "table":
                 flush()
                 _emit_html_table(child, blocks, tables, collector)
@@ -231,6 +259,8 @@ def parse_html(html: str) -> tuple[list[RawTextBlock], list[RawTableCandidate], 
                 flush()
             else:
                 walk(child, preformatted)
+            if separated:
+                inline.append(" ")
 
     walk(soup.html or soup)
     flush()

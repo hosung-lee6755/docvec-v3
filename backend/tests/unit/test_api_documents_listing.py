@@ -362,3 +362,44 @@ async def test_batch_reprocess_maps_reprocess_error_and_missing_parent_run(db_se
     assert (error_result.results[0].status, error_result.results[0].detail) == ("failed", "시작 블록 없음")
     assert orphan_result.results[0].status == "failed" and "실행 기록" in orphan_result.results[0].detail
 
+
+
+# ------------------------------------------------- 지운 문서의 진행 중 실행(2026-11-20 감사)
+async def _live_and_finished_runs(db, key):
+    from app.db.models.workflow_run import WorkflowRun
+
+    doc, live = await doc_with_run(db, key)
+    live.status = "WAITING_REVIEW"
+    finished = WorkflowRun(id=uuid4(), version_id=live.version_id, document_id=doc.id, status="COMPLETED", trigger="UPLOAD")
+    db.add(finished)
+    await db.flush()
+    return doc, live.id, finished.id
+
+
+async def _run_states(db, *run_ids):
+    from app.db.models.workflow_run import WorkflowRun
+
+    rows = (await db.execute(select(WorkflowRun.id, WorkflowRun.status, WorkflowRun.document_id).where(WorkflowRun.id.in_(run_ids)))).all()
+    return {row.id: (row.status, row.document_id) for row in rows}
+
+
+async def test_delete_document_cancels_its_live_runs_instead_of_leaving_them_waiting(db_session, externals):  # noqa: F811
+    # 문서를 지우면 실행 기록은 남기고 문서 연결만 끊었다. 검토 대기 실행이 문서 없이 남아 아무도 승인하거나
+    # 취소할 수 없었다(11/16 업로드 뒤 지운 문서 5건)
+    doc, live_id, finished_id = await _live_and_finished_runs(db_session, "d-live")
+
+    await ls.delete_document(doc.id, db_session, owner_user())
+
+    states = await _run_states(db_session, live_id, finished_id)
+    assert states[live_id] == ("CANCELLED", None)
+    assert states[finished_id] == ("COMPLETED", None)
+
+
+async def test_batch_delete_cancels_live_runs_too(db_session, externals):  # noqa: F811
+    doc, live_id, finished_id = await _live_and_finished_runs(db_session, "bd-live")
+
+    await ls.batch_delete_documents(BatchDeleteRequest(ids=[doc.id]), db_session, owner_user())
+
+    states = await _run_states(db_session, live_id, finished_id)
+    assert states[live_id] == ("CANCELLED", None)
+    assert states[finished_id] == ("COMPLETED", None)

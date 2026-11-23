@@ -137,7 +137,13 @@ class ChunkSplitBlock(BaseBlock):
         # 1.7.0: 청크 본문에서 구간 안의 머리말·꼬리말·목차 노드 글자를 지운다(strip_ranges, 2026-11-13).
         # 1.8.0: 표의 행 하나가 max_chars보다 길면 셀 글을 문장 경계에서 나눠 여러 청크로 만든다
         # (2026-11-17, 표 조각만 2000자를 넘던 문제). 표 제목이 있으면 조각마다 "[표 N] 제목 (부분 i/k)"로 붙인다.
-        return "1.8.0"
+        # 1.9.0: 2026-11-20 감사 반영. 큰 표 조각의 칸에도 민감정보 가리기를 적용하고, 본문 없는 제목을 문단처럼
+        # 담고, 큰 표 조각을 한 parent 로 묶는다. parent 글에서도 머리말·꼬리말·목차 줄을 지운다.
+        # 1.10.0: 긴 문단을 나눌 때 문장 끝을 더 넓게 찾고, 남은 꼬리가 짧으면 문장을 끝까지 담는다. 다음 청크가
+        # 문장 중간("in fog; it is lighted ...")에서 시작하던 문제(Pub120, 2026-11-23).
+        # 1.11.0: 쪽이나 단이 넘어가며 두 노드로 나뉜 문장을 잇는다. 앞 글이 문장 끝 없이 끝나고 다음 노드가 영문
+        # 소문자로 시작하면, 청크를 앞 문장 끝에서 닫고 끝나지 않은 문장을 다음 노드와 함께 담는다(2026-11-23).
+        return "1.11.0"
 
     @property
     def category(self) -> str:
@@ -160,6 +166,7 @@ class ChunkSplitBlock(BaseBlock):
             _sentence_based_chunks,
             _tree_based_chunks,
             group_children_into_parents,
+            mask_table_cells,
             non_body_ranges,
             strip_ranges,
         )
@@ -249,7 +256,8 @@ class ChunkSplitBlock(BaseBlock):
                     preserve_table=cfg.preserve_table,
                     split_long_paragraph=cfg.split_long_paragraph,
                     tables_only=strategy == "table_unit",
-                    tables=doc.tables,
+                    # 큰 표 조각은 표 칸으로 만든다. 글과 같은 민감정보 가리기를 칸에도 적용한다(2026-11-20 감사)
+                    tables=mask_table_cells(doc.tables, _pii_cell_masks(db, context.run_id)),
                     table_chunk_max_rows=cfg.table_chunk_max_rows,
                     # 자동으로 구조 기준을 쓸 때만 짧은 구획을 이웃과 합친다(명시적 section_aware는 그대로)
                     merge_small_sections=structure_nodes is not None,
@@ -308,6 +316,11 @@ class ChunkSplitBlock(BaseBlock):
                     group_indices = parent_groups[g]
                     g_start = cleaned_spans[group_indices[0]][2]
                     g_end = cleaned_spans[group_indices[-1]][3]
+                    # parent 도 원문 연속 구간이라 사이의 머리말·꼬리말·목차 줄이 따라 들어온다. child 와 같이
+                    # 지운다(서울 데이터 펠로우십 보고서의 쪽 꼬리말, 2026-11-20 감사). 위치는 그대로 둔다.
+                    parent_text = full_text[g_start:g_end]
+                    if cut_ranges:
+                        parent_text = strip_ranges(parent_text, full_text, g_start, g_end, cut_ranges)
                     parent = DocumentChunk(
                         id=uuid.uuid4(),
                         document_id=doc.id,
@@ -316,8 +329,8 @@ class ChunkSplitBlock(BaseBlock):
                         # 오프셋 — parent는 청크 목록/순회에 노출되지 않아 순서
                         # 자체는 의미가 없다.
                         chunk_order=1_000_000 + g,
-                        chunk_text=full_text[g_start:g_end],
-                        original_text=full_text[g_start:g_end],
+                        chunk_text=parent_text,
+                        original_text=parent_text,
                         page_start=page_locator.page_for(g_start),
                         page_end=page_locator.page_for(max(g_start, g_end - 1)),
                         section_path=cleaned_spans[group_indices[0]][4] or None,
@@ -325,7 +338,7 @@ class ChunkSplitBlock(BaseBlock):
                         span_end=g_end,
                         chunk_tier="parent",
                         embedded=False,
-                        char_count=g_end - g_start,
+                        char_count=len(parent_text),
                         language=doc.language,
                         source_file=doc.original_filename,
                     )
@@ -415,6 +428,35 @@ _CONTEXT_LLM_MAX_CHUNKS = 40
 # 문서 전체가 아니라 앞부분 발췌만 앵커로 준다 — 로컬 모델 컨텍스트 예산을
 # 아끼면서도 "이 문서가 무엇에 관한 것인지" 판단엔 충분하다.
 _CONTEXT_DOC_EXCERPT_CHARS = 3000
+
+
+def _pii_cell_masks(db, run_id) -> list[tuple[str, str]]:
+    """이 실행의 민감정보 탐지 가운데 글에서 가린 값의 (원문, 가린 값). 원문은 메모리에서만 복호화한다.
+    해제한 탐지(이전 결정을 이어받은 것)는 글에서도 가리지 않았으므로 뺀다."""
+    from sqlalchemy import select
+
+    from app.core import crypto
+    from app.db.models.pii_detection import PiiDetection
+
+    if not run_id:
+        return []
+    rows = db.scalars(
+        select(PiiDetection).where(PiiDetection.run_id == run_id, PiiDetection.masked_value.isnot(None))
+    ).all()
+    masks: dict[str, str] = {}
+    for row in rows:
+        if row.rejected:
+            continue
+        try:
+            original = crypto.decrypt_secret(row.original_encrypted)
+        except Exception:  # noqa: BLE001 — 복호화 못 하는 행은 칸에서 찾을 수 없다
+            logging.getLogger(__name__).warning(
+                "pii original decrypt failed for cell masking", extra={"run_id": str(run_id)}
+            )
+            continue
+        if original:
+            masks[original] = row.masked_value
+    return list(masks.items())
 
 
 def _structural_context(doc_title: str | None, section_path: list | None) -> str:

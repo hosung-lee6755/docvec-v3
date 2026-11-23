@@ -4,6 +4,7 @@ from app.pipeline.blocks.quality_blocks import (
     _determine_status,
     _implicit_table_ratio,
     _toc_heading_match_ratio,
+    _unmatched_toc_entries,
 )
 
 
@@ -164,3 +165,56 @@ def test_determine_status_partial_failure_when_some_pages_below_ocr_threshold():
     )
 
     assert status == "PARTIAL_FAILURE"
+
+
+def test_toc_part_entries_match_merged_part_chapter_headings():
+    # 경기도 데이터분석 사례집(2026-11-20): 목차는 "PART 01"과 "분석개요 06"이 따로 있고, 본문 장 제목은
+    # "PART 01 분석개요"로 합쳐진다. 페이지 번호 앞에 점선 없이 공백 하나만 있다
+    toc_texts = ["PART 01", "분석개요 06", "PART 02", "분석설계 08"]
+    heading_texts = ["PART 01 분석개요", "PART 02 분석설계"]
+
+    assert _toc_heading_match_ratio(toc_texts, heading_texts) == 1.0
+
+
+def test_trailing_number_that_is_part_of_the_title_still_needs_a_real_match():
+    # 제목 끝의 번호를 떼는 것은 열쇠를 하나 더 만드는 것일 뿐이다. 없는 제목이 맞는 것으로 되지는 않는다
+    assert _toc_heading_match_ratio(["부록 3"], ["부록 2 서식"]) == 0.0
+
+
+def test_toc_dash_leaders_are_stripped_like_dot_leaders():
+    # 세원화성 에너지진단보고서(2026-11-20): 목차 점선을 하이픈("-----")으로 썼다
+    toc_texts = ["1. 일반현황 --------------------------------------------- 4", "2. 에너지사용현황 ------------ 4"]
+    heading_texts = ["1. 일반현황", "2. 에너지 사용현황"]
+
+    assert _toc_heading_match_ratio(toc_texts, heading_texts) == 1.0
+
+
+def test_toc_entries_with_spaced_dot_leaders_and_roman_page_numbers_match():
+    # Pub120(2026-11-23): 앞붙이 목차는 ". . . ." 점선 뒤에 로마 숫자 쪽 번호를 쓴다
+    toc_texts = ["Preface. . . . . . . . . . . . . . . . . II", "Conversion Tables. . . . . . VII"]
+
+    assert _toc_heading_match_ratio(toc_texts, ["Preface", "Conversion Tables"]) == 1.0
+
+
+def test_two_column_toc_line_is_counted_as_separate_entries():
+    # 두 단 목차가 한 줄로 합쳐져 "AUSTRALIA . . . 1 NEW CALEDONIA . . . 229"가 됐다
+    toc_texts = ["AUSTRALIA . . . . . . . . 1 NEW CALEDONIA . . . . . . 229", "FIJI . . . . . . . . 153"]
+    heading_texts = ["AUSTRALIA", "NEW CALEDONIA"]
+
+    assert _toc_heading_match_ratio(toc_texts, heading_texts) == 2 / 3
+    assert _unmatched_toc_entries(toc_texts, heading_texts) == ["FIJI . . . . . . . . 153"]
+
+
+def test_page_column_label_is_not_a_toc_entry():
+    assert _toc_heading_match_ratio(["Page", "1. 서론 ..... 3"], ["1. 서론"]) == 1.0
+    assert _toc_heading_match_ratio(["쪽"], ["1. 서론"]) is None
+
+
+def test_two_column_toc_without_leaders_is_split_only_for_latin_entries():
+    # Pub120 나라별 소목차: "General 1 Routes 22". 한글 "제 2 장 결론"은 나누지 않는다
+    assert _toc_heading_match_ratio(["General 1 Routes 22"], ["General", "Routes"]) == 1.0
+    assert _toc_heading_match_ratio(["제 2 장 결론 ..... 9"], ["제 2 장 결론"]) == 1.0
+
+
+def test_toc_entry_whose_page_number_wrapped_keeps_its_title():
+    assert _toc_heading_match_ratio(["NIUE . . . . . . . . . ."], ["NIUE"]) == 1.0

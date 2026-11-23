@@ -8,6 +8,7 @@
 설정에서 골랐을 때만 찾는다. NER(로컬 LLM 보조)은 여전히 별도 작업이다.
 """
 import re
+from dataclasses import dataclass
 
 from pydantic import BaseModel
 
@@ -22,6 +23,13 @@ from app.pipeline.blocks.normalization_blocks import (
 
 _RRN_RE = re.compile(r"(?<!\d)(\d{6})-?([1-4]\d{6})(?!\d)")
 _PHONE_RE = re.compile(r"(?<!\d)(01[0-9]-?\d{3,4}-?\d{4}|0\d{1,2}-\d{3,4}-\d{4})(?!\d)")
+# 국제 표기(+82 10-…, +82 (0)10-…)와 띄어 쓴 표기(010 1234 5678, 010 - 1234 - 5678)의 휴대전화.
+# 같은 형식의 유선번호("053) 256-4413", "+82-33-811-2001")와 해외 번호는 실제 문서에서 모두
+# 기관 연락처였으므로 넓히지 않는다(2026-11-23 전체 문서 조사)
+_MOBILE_EXTRA_RE = re.compile(
+    r"(?<![\d+])(?:\+82[\s-]*\)?[\s-]*(?:\(0\)\s*)?1[016789]|01[016789])"
+    r"(?:\s*-\s*|\s)\d{3,4}(?:\s*-\s*|\s)\d{4}(?!\d)"
+)
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # 체크섬 없는 패턴 — 은행 계좌번호는 은행별 자릿수/구분이 제각각이라 오탐
 # 가능성이 있음을 감안해 낮은 confidence를 부여한다.
@@ -93,6 +101,15 @@ def _is_personal_phone(text: str, match: re.Match) -> bool:
     return not (_PUBLIC_CONTACT_RE.search(before) or _ORG_CONTACT_RE.search(before))
 
 
+def _phone_matches(text: str) -> list[tuple[int, int, float]]:
+    found = [(m.start(), m.end(), 0.9) for m in _PHONE_RE.finditer(text) if _is_personal_phone(text, m)]
+    for m in _MOBILE_EXTRA_RE.finditer(text):
+        overlaps = any(start < m.end() and m.start() < end for start, end, _ in found)
+        if not overlaps and not _ID_NUMBER_CONTEXT_RE.search(_preceding(text, m.start())):
+            found.append((m.start(), m.end(), 0.9))
+    return sorted(found)
+
+
 def _is_personal_email(text: str, match: re.Match) -> bool:
     if not match.group().lower().endswith(_PUBLIC_EMAIL_SUFFIXES):
         return True
@@ -149,7 +166,7 @@ def _detect_regex_matches(text: str, entity_type: str) -> list[tuple[int, int, f
                 out.append((m.start(), m.end(), 0.95))
         return out
     if entity_type == "PHONE":
-        return [(m.start(), m.end(), 0.9) for m in _PHONE_RE.finditer(text) if _is_personal_phone(text, m)]
+        return _phone_matches(text)
     if entity_type == "ACCOUNT":
         return _account_matches(text)
     if entity_type == "EMAIL":
@@ -171,11 +188,62 @@ def mask_pii_patterns(text: str, mask_char: str = "*") -> str:
     return "".join(chars)
 
 
+@dataclass(frozen=True)
+class PiiDecision:
+    rejected: bool
+    approved_by: object
+    approved_at: object
+
+
+def _previous_decisions(db, document_id, run_id) -> dict[tuple[str, str], PiiDecision]:
+    """같은 문서의 가장 최근 실행 가운데 사람이 승인·해제한 탐지가 있는 실행의 결정. (유형, 원문) → 결정.
+    재처리하면 탐지를 새로 만들어 결정이 사라지고, 해제(오탐 처리)한 값도 다시 가려졌다(2026-11-20 감사).
+    같은 값에 승인과 해제가 섞여 있으면 가리는 쪽(승인)을 따른다."""
+    from sqlalchemy import or_, select
+
+    from app.core import crypto
+    from app.db.models.pii_detection import PiiDetection
+
+    decided = or_(PiiDetection.rejected.is_(True), PiiDetection.approved_at.isnot(None))
+    source_run = db.scalar(
+        select(PiiDetection.run_id)
+        .where(PiiDetection.document_id == document_id, PiiDetection.run_id != run_id, decided)
+        .order_by(PiiDetection.created_at.desc()).limit(1)
+    )
+    if source_run is None:
+        return {}
+    decisions: dict[tuple[str, str], PiiDecision] = {}
+    for row in db.scalars(select(PiiDetection).where(PiiDetection.run_id == source_run, decided)).all():
+        try:
+            original = crypto.decrypt_secret(row.original_encrypted)
+        except Exception:  # noqa: BLE001 — 복호화 못 하는 옛 행은 결정을 옮기지 않는다
+            continue
+        key = (row.entity_type, original)
+        decision = PiiDecision(rejected=bool(row.rejected), approved_by=row.approved_by, approved_at=row.approved_at)
+        previous = decisions.get(key)
+        if previous is None or (previous.rejected and not decision.rejected):
+            decisions[key] = decision
+    return decisions
+
+
 class PiiDetectConfig(BaseModel):
     entity_types: list[str] | None = None  # None = _ALL_ENTITY_TYPES(사업자등록번호 BIZNO는 골라야 찾는다)
     action: str = "mask"  # mark_only | mask | tokenize | remove | exclude_from_embedding
     mask_char: str = "*"
     require_admin_approval: bool = False
+
+
+def _page_locator(db, document_id: str, text: str):
+    """탐지 위치(정제·치환 뒤 글 기준)를 원문 쪽 번호로 바꾸는 함수. 청크와 같은 방법을 쓴다(storage_blocks).
+    쪽 정보가 없는 문서(HWP, DOCX 등)는 None 을 돌려준다."""
+    from app.db.models.document import Document
+    from app.pipeline.page_alignment import PageLocator
+
+    doc = db.get(Document, document_id)
+    page_map = getattr(doc, "page_map", None)
+    if not page_map:
+        return lambda _offset: None
+    return PageLocator(getattr(doc, "parsed_text", None) or "", page_map, text).page_for
 
 
 class PiiDetectBlock(BaseBlock):
@@ -192,7 +260,12 @@ class PiiDetectBlock(BaseBlock):
         # 1.1.0 — 문맥 기반 이름, 주소, 운전면허, 여권, 사업자등록번호(선택) 탐지
         # 1.2.0 — "유형 이름"처럼 앞 낱말에 붙은 "이름"은 사람 이름 표지로 보지 않는다(2026-11-19)
         # 1.2.1 — 앞 낱말이 사람을 가리키면("담당자 이름") 표지로 보고, 겹친 표지("담당자 이름: …")도 찾는다
-        return "1.2.1"
+        # 1.3.0 — 같은 문서의 이전 승인·해제 결정을 이어받고, 해제한 값은 가리지 않는다(2026-11-20 감사)
+        # 1.4.0 — 잡은 이름이 표지 없이 다시 나온 자리도 가리고, "지하주차장"을 이름으로 읽지 않는다(2026-11-21 감사)
+        # 1.4.1 — 탐지 1건당 20번 넘게 다시 나오는 값은 일반 낱말로 보고 번지지 않는다(기계설비 매뉴얼 "기계설비" 930곳)
+        # 1.4.2 — 탐지마다 원문 쪽 번호를 남긴다(민감정보 탭 "위치"가 모든 문서에서 비어 있었다, 2026-11-21)
+        # 1.4.3 — 국제 표기(+82 10-…)와 띄어 쓴 휴대전화도 찾는다(2026-11-23)
+        return "1.4.3"
 
     @property
     def config_schema(self):
@@ -237,6 +310,8 @@ class PiiDetectBlock(BaseBlock):
                             )
                     # 사전에 없는 이름은 표지와 호칭으로 찾는다. 겹치면 먼저 넣은 사전 쪽이 이긴다
                     matches.extend(pii_personal.name_matches(text))
+                    # 잡은 이름이 표지 없이 다시 나온 자리(표 칸 등)도 같은 이름으로 가린다
+                    matches.extend(pii_personal.repeated_name_matches(text, matches))
                 else:
                     matches = _detect_regex_matches(text, entity_type)
 
@@ -249,9 +324,15 @@ class PiiDetectBlock(BaseBlock):
             excluded_spans: list[list[int]] = []
             new_text = text
             action_enum = _ACTION_TO_ENUM[cfg.action]
+            decisions = _previous_decisions(db, context.document_id, context.run_id) if found else {}
+            page_for = _page_locator(db, context.document_id, text) if found else (lambda _offset: None)
+            undecided = 0
 
             for start, end, entity_type, confidence in sorted(found, key=lambda f: f[0], reverse=True):
                 original = text[start:end]
+                decision = decisions.get((entity_type, original))
+                rejected = bool(decision and decision.rejected)
+                undecided += decision is None
                 masked = None
                 if cfg.action == "mask":
                     masked = cfg.mask_char * len(original)
@@ -259,9 +340,10 @@ class PiiDetectBlock(BaseBlock):
                     masked = f"[MASK:{entity_type}]"
                 elif cfg.action == "remove":
                     masked = ""
-                if masked is not None:
+                # 해제(오탐 처리)한 값은 글에 그대로 둔다. 탐지 기록은 '해제됨'으로 남겨 탭에서 다시 고를 수 있다
+                if masked is not None and not rejected:
                     new_text = new_text[:start] + masked + new_text[end:]
-                if cfg.action == "exclude_from_embedding":
+                if cfg.action == "exclude_from_embedding" and not rejected:
                     excluded_spans.append([start, end])
 
                 db.add(PiiDetection(
@@ -270,6 +352,10 @@ class PiiDetectBlock(BaseBlock):
                     original_encrypted=crypto.encrypt_secret(original),
                     masked_value=masked,
                     confidence=confidence, start_offset=start, end_offset=end,
+                    page_number=page_for(start),
+                    rejected=rejected,
+                    approved_by=decision.approved_by if decision and not rejected else None,
+                    approved_at=decision.approved_at if decision and not rejected else None,
                 ))
             db.commit()
 
@@ -282,7 +368,8 @@ class PiiDetectBlock(BaseBlock):
             return BlockResult(
                 output=output,
                 metrics={"pii_detections": len(found)},
-                requires_review=cfg.require_admin_approval and bool(found),
+                # 모두 이전 실행에서 사람이 정한 값이면 다시 검토를 기다리지 않는다
+                requires_review=cfg.require_admin_approval and undecided > 0,
             )
         finally:
             db.close()

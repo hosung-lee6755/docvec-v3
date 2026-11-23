@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Iterator
 
@@ -12,6 +13,52 @@ from app.pipeline.adapters.base import (
     RawTableCandidate,
     RawTextBlock,
 )
+
+# Word 의 제목 스타일 이름. 한국어 Word 는 "제목 1"로 저장하기도 한다
+_HEADING_STYLE_RE = re.compile(r"^(?:heading|제목)\s*(\d)$", re.IGNORECASE)
+_TITLE_STYLE_NAMES = frozenset({"title", "제목"})
+# w:outlineLvl 은 0부터 세고, 9는 본문 수준이다
+_BODY_OUTLINE_LEVEL = 9
+
+
+def _outline_level(element) -> int | None:
+    """문단이나 스타일의 w:pPr/w:outlineLvl 값을 1부터 세는 제목 수준으로 바꾼다. 없거나 본문 수준이면 None."""
+    from docx.oxml.ns import qn
+
+    ppr = element.find(qn("w:pPr")) if element is not None else None
+    outline = ppr.find(qn("w:outlineLvl")) if ppr is not None else None
+    if outline is None:
+        return None
+    try:
+        value = int(outline.get(qn("w:val")))
+    except (TypeError, ValueError):
+        return None
+    return value + 1 if 0 <= value < _BODY_OUTLINE_LEVEL else None
+
+
+def _heading_level(paragraph) -> int | None:
+    """문서가 스스로 표시한 제목 수준. 문단에 직접 준 개요 수준이 먼저이고, 없으면 스타일과 그 바탕 스타일을
+    차례로 본다("Heading N", "Title", 스타일의 개요 수준). HWPX 의 개요 수준처럼 구조 분석의 heading_level 로 넘긴다.
+    예전에는 스타일 이름만 넘겨, 글자 크기를 문단에 직접 주지 않은 Word 제목이 본문 문단이 됐다(2026-11-20 감사)."""
+    direct = _outline_level(paragraph._p)
+    if direct is not None:
+        return direct
+    style = paragraph.style
+    seen = 0
+    while style is not None and seen < 10:
+        name = (style.name or "").strip()
+        if name.lower() in _TITLE_STYLE_NAMES:
+            return 1
+        match = _HEADING_STYLE_RE.match(name)
+        if match:
+            return int(match.group(1)) or 1
+        level = _outline_level(style.element)
+        if level is not None:
+            return level
+        style = style.base_style
+        seen += 1
+    return None
+
 
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".tif")
 
@@ -147,6 +194,7 @@ class DOCXAdapter(BaseAdapter):
                             "is_italic": any(r.font.italic for r in item.runs if r.font.italic is True),
                             "style_name": item.style.name if item.style else None,
                             "font_name": font_name,
+                            "heading_level": _heading_level(item),
                         })
                 elif isinstance(item, DocxTable):
                     rows = [[cell.text.strip() for cell in row.cells] for row in item.rows]

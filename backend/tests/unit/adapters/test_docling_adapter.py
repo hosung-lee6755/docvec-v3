@@ -465,3 +465,17 @@ def test_toc_prefers_docling_cells_when_the_text_layer_has_no_toc_lines():
     # 스캔 PDF 의 텍스트 레이어에 워터마크만 남은 경우
     assert choose_toc_lines("CONFIDENTIAL", "1. 개요 3\n2. 범위 12") == ["1. 개요 3", "2. 범위 12"]
     assert choose_toc_lines("1. 개요 ····· 3", "엉뚱한 칸") == ["1. 개요 ····· 3"]
+
+
+def test_picture_region_shares_the_picture_element_id(fake_docling_module, tmp_path):
+    # 그림 영역과 그림 요소의 id가 같아야 그림 글이 구조 노드에 연결된다(2026-11-20)
+    from app.pipeline.adapters.docling_adapter import DoclingAdapter
+
+    items = [(_FakePictureItem(page_no=1, image=_FakeImage()), 0)]
+    fake_docling_module["fake_document"] = _FakeDoclingDocument(items)
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4")
+
+    parsed = DoclingAdapter().extract(pdf_path, {})
+
+    assert parsed.pages[0].image_regions[0].element_id == parsed.metadata["elements"][0]["id"]

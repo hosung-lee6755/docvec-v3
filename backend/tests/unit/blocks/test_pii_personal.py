@@ -42,6 +42,8 @@ def test_names_next_to_labels_and_titles_are_found(text, names):
     "배정된 유형 번호와 유형 이름  유형별 소속 확률 8개",
     "| 코드 | 화면 이름 | 원천 이벤트 | 회사 5 룰 |",
     "| tb_code_detail | 이벤트 코드와 이름 | 이벤트 카탈로그 |",
+    # "지하주"+"차장"으로 읽히는 시설 이름(기계설비 성능점검 보고서 실측, 2026-11-21)
+    "지하주차장 환기 설비",
 ])
 def test_words_that_only_look_like_names_are_left_alone(text):
     assert pp.name_matches(text) == []
@@ -94,7 +96,7 @@ def test_block_defaults_include_new_types_but_not_business_numbers():
     assert {"ADDRESS", "DRIVER_LICENSE", "PASSPORT", "NAME"} <= set(pb._ALL_ENTITY_TYPES)
     assert "BIZNO" not in pb._ALL_ENTITY_TYPES and "BIZNO" in pb._ENTITY_PRIORITY
     assert set(pb._ALL_ENTITY_TYPES) <= set(pb._ENTITY_PRIORITY)
-    assert pb.PiiDetectBlock().block_version == "1.2.1"
+    assert pb.PiiDetectBlock().block_version == "1.4.3"
 
 
 def test_block_regex_dispatch_reaches_the_new_detectors():
@@ -105,3 +107,20 @@ def test_block_regex_dispatch_reaches_the_new_detectors():
     assert pb._detect_regex_matches(text, "UNKNOWN") == []
     # 운전면허가 계좌보다 먼저 자리를 차지한다(계좌 모양과 겹친다)
     assert pb._ENTITY_PRIORITY.index("DRIVER_LICENSE") < pb._ENTITY_PRIORITY.index("ACCOUNT")
+
+
+def test_repeated_name_matches_skips_values_that_are_common_words_in_the_document():
+    # 기계설비 매뉴얼(2026-11-21): "담당자 기계설비"에서 잡힌 낱말이 문서 전체 930곳으로 번졌다
+    text = "| 담당자 | 기계설비 |\n" +"\n".join(["기계설비 공사"] * 25)
+    matches = pp.name_matches(text)
+
+    assert pp.repeated_name_matches(text, matches) == []
+
+
+def test_repeated_name_matches_keeps_a_name_that_appears_a_few_times():
+    text = "작성자 홍길동\n| 홍길동 | 2023년 |\n홍길동이 작성"
+    matches = pp.name_matches(text)
+
+    repeats = pp.repeated_name_matches(text, matches)
+
+    assert [text[s:e] for s, e, _ in repeats] == ["홍길동", "홍길동"]

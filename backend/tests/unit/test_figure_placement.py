@@ -179,3 +179,36 @@ def test_server_provider_sends_the_image_as_base64():
     assert seen["messages"] == [
         {"role": "user", "content": "설명해 주세요", "images": [base64.b64encode(b"raw-bytes").decode()]},
     ]
+
+
+def test_figure_text_block_carries_the_picture_element_id():
+    # Docling 경로: 그림 글이 그림 요소 id를 이어받아야 구조 노드가 그 글의 위치를 갖고 청크에 들어간다(2026-11-20)
+    blocks = [_block("첫 문단", 100, 150)]
+    region = RawImageRegion(page_number=1, bbox=(0, 200, 100, 350), image_bytes=_png(), element_id="pic-1")
+    parsed = _parsed(blocks, [region])
+
+    _run(parsed)
+
+    figure = parsed.pages[0].text_blocks[1]
+    assert figure.text.startswith("[그림 1]")
+    assert figure.element_id == "pic-1"
+
+
+def test_tesseract_figure_text_drops_low_confidence_lines(monkeypatch):
+    # 정민산업 에너지진단보고서 차트(2026-11-23): "wise waso22 45" 같은 저신뢰 줄을 그림 글에서 뺀다
+    import sys
+    from types import SimpleNamespace
+
+    fake = SimpleNamespace(
+        Output=SimpleNamespace(DICT="dict"),
+        image_to_string=lambda image, lang, config: "Air COMP. 계통도\nwise waso22 45\n",
+        image_to_data=lambda image, lang, config, output_type: {
+            "text": ["Air", "COMP.", "계통도", "wise", "waso22", "45"],
+            "conf": [95, 90, 88, 10, 2, 5],
+            "block_num": [1, 1, 1, 1, 1, 1], "par_num": [1, 1, 1, 1, 1, 1], "line_num": [1, 1, 1, 2, 2, 2],
+        },
+    )
+    monkeypatch.setitem(sys.modules, "pytesseract", fake)
+    monkeypatch.setattr(proc.settings, "local_vision_model", "")
+
+    assert proc._recognize_figure_text(_png(), {}) == "Air COMP. 계통도"

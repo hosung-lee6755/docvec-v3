@@ -319,6 +319,22 @@ def _extract(doc, parsed=None, config=None, adapter_error=None, extract_error=No
     return result, db, job, adapter, repaginate
 
 
+def test_text_extract_keeps_which_cell_an_inner_table_came_from():
+    # 2026-11-20: 칸 안에서 떼어 낸 표 B 는 표 A 의 id 와 칸(0부터)을 JSON 에 남긴다. 바깥 표에는 칸을 두지 않는다
+    parsed = _parsed()
+    parsed.pages[0].table_candidates = [
+        SimpleNamespace(rows=[["a", "[칸 안의 표 1]"]], id="tA", confidence=1.0, detected_as="ruled"),
+        SimpleNamespace(rows=[["x", "y"], ["1", "2"]], id="tB", confidence=1.0, detected_as="ruled",
+                        title="[칸 안의 표 1] [표 1]의 칸에 든 표", parent_table_id="tA", parent_cell={"row": 0, "col": 1}),
+    ]
+    doc = _doc()
+
+    _extract(doc, parsed=parsed)
+
+    assert "parent_table_id" not in doc.tables[0] and "parent_cell" not in doc.tables[0]
+    assert (doc.tables[1]["parent_table_id"], doc.tables[1]["parent_cell"]) == ("tA", {"row": 0, "col": 1})
+
+
 def test_text_extract_requires_document_id():
     with pytest.raises(ValueError):
         eb.TextExtractBlock().run(_ctx(document_id=None))
@@ -425,7 +441,7 @@ def test_block_metadata(block, btype, schema):
 
 
 def test_text_extract_block_version():
-    assert eb.TextExtractBlock().block_version == "1.34.2"
+    assert eb.TextExtractBlock().block_version == "1.38.0"
 
 
 def test_config_defaults_and_validation():

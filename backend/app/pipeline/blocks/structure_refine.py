@@ -196,11 +196,15 @@ def _mark_running_headers(blocks: list[list], elements: list[dict]) -> None:
 
 # 한국 공문서의 제목 기호 순서(작을수록 상위). 같은 크기의 제목이면 이 순서로 단계를 나눈다.
 # "1.1" 같은 하위 번호는 순서를 정하지 않는다(글자 크기로만 판단).
+# 보고서의 "1. → 가. → (1)/1)" 순서도 따른다(세원화성 에너지진단보고서, 2026-11-20). 한글 기호와 괄호 번호가
+# □·○ 기호와 함께 쓰일 때의 앞뒤는 정해진 규칙이 없어, 번호 체계를 먼저 두고 □·○ 를 그 아래에 둔다.
 _MARKER_RANKS = (
     (re.compile(r"^\s*(?:제\s*\d+\s*[장편부절]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+\s*[.\s]|\d+\s*\.(?!\d)|PART\s*\d+)", re.IGNORECASE), 0),
-    (re.compile(r"^\s*[□■]"), 1),
-    (re.compile(r"^\s*[○◦●◎❍]"), 2),
-    (re.compile(r"^\s*[-–·•※▷▶☞]"), 3),
+    (re.compile(r"^\s*[가나다라마바사아자차카타파하]\s*\.\s*\S"), 1),
+    (re.compile(r"^\s*(?:\(\d{1,2}\)|\d{1,2}\))\s*\S"), 2),
+    (re.compile(r"^\s*[□■]"), 3),
+    (re.compile(r"^\s*[○◦●◎❍]"), 4),
+    (re.compile(r"^\s*[-–·•※▷▶☞]"), 5),
 )
 
 
@@ -398,4 +402,34 @@ def refine_element_blocks(
     _refine_levels(work, sizes, min(max_level, _FONT_TIER_LIMIT), measured=bool(font_sizes))
     _apply_marker_order(work, sizes, max_level)
     _apply_decimal_depth(work, max_level)
-    return [tuple(b) for b in work]
+    return _merge_part_dividers([tuple(b) for b in work])
+
+
+_PART_LINE_RE = re.compile(r"^\s*PART\s*\d{1,2}\s*$", re.IGNORECASE)
+_PART_TITLE_MAX_CHARS = 40
+
+
+def _merge_part_dividers(blocks: list[Block]) -> list[Block]:
+    """장 구분 쪽의 "PART 01" 줄과 같은 쪽 바로 뒤의 짧은 장 이름을 1단계 제목 하나로 합친 새 목록을 돌려준다.
+
+    Docling 은 장 구분 쪽의 큰 글자를 일반 글로 읽기도 한다. 경기도 데이터분석 사례집(2026-11-20)에서 "PART 01",
+    "분석개요"가 문단이 되어 장 제목이 구조에 없었고, 1·2장 본문의 구획 경로에서 장 이름이 빠졌다."""
+    result: list[Block] = []
+    index = 0
+    while index < len(blocks):
+        block = blocks[index]
+        if block[0] not in ("PARAGRAPH", "HEADING") or not _PART_LINE_RE.match(block[4]):
+            result.append(block)
+            index += 1
+            continue
+        part_text, start, end = block[4].strip(), block[2], block[3]
+        nxt = blocks[index + 1] if index + 1 < len(blocks) else None
+        same_page = nxt is not None and (nxt[5] or {}).get("page_number") == (block[5] or {}).get("page_number")
+        if (same_page and nxt[0] in ("PARAGRAPH", "HEADING") and len(nxt[4].strip()) <= _PART_TITLE_MAX_CHARS
+                and not _PART_LINE_RE.match(nxt[4])):
+            result.append(("HEADING", 1, start, nxt[3], f"{part_text} {nxt[4].strip()}", block[5]))
+            index += 2
+            continue
+        result.append(("HEADING", 1, start, end, part_text, block[5]))
+        index += 1
+    return result

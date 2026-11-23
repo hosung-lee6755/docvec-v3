@@ -420,7 +420,9 @@ async def start_reprocess_on_latest_version(
         parent_run_id=parent_run.id,
         dictionary_version=dictionary_version,
         timeout_overrides=timeout_overrides,
-        skip_review=parent_run.skip_review,
+        # 검토 생략 여부는 다시 도는 전처리 run 에서 물려받는다. active run 이 분석 run 이면 그 값은 늘 False 라
+        # '검토 없이 진행'으로 올린 문서가 검토 대기로 멈췄다(NS-AM, 2026-11-20)
+        skip_review=base_run.skip_review,
         impact={
             "reason": reason,
             "changeType": "VERSION_UPGRADE",

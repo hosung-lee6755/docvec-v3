@@ -172,6 +172,51 @@ async def get_chunk_context(
     }
 
 
+def _table_refs(tables: list[dict] | None) -> dict[str, dict]:
+    """documents.tables 의 표 id → 청크에 붙일 표 정보. 번호는 문서 안의 표 순서([표 N])다."""
+    tables = tables or []
+    number_of = {t.get("id"): i + 1 for i, t in enumerate(tables) if t.get("id")}
+    refs: dict[str, dict] = {}
+    for index, table in enumerate(tables):
+        table_id = table.get("id")
+        if not table_id:
+            continue
+        parent_id = table.get("parent_table_id") or None
+        refs[table_id] = {
+            "table_id": table_id,
+            "table_number": index + 1,
+            "title": table.get("title") or None,
+            "parent_table_id": parent_id,
+            "parent_table_number": number_of.get(parent_id) if parent_id else None,
+            "parent_cell": table.get("parent_cell") if parent_id else None,
+        }
+    return refs
+
+
+async def _table_ref_by_chunk(db: AsyncSession, chunks, tables: list[dict] | None) -> dict[str, dict]:
+    """표 청크 id → 출처 표 정보(2026-11-20). 청크의 source_node_ids 가 가리키는 TABLE 노드의
+    source_table_id 로 documents.tables 를 찾는다. 칸 안에서 떼어 낸 표면 바깥 표와 칸도 들어 있다."""
+    from app.db.models.document_node import DocumentNode
+
+    refs = _table_refs(tables)
+    table_chunks = [c for c in chunks if (c.chunk_type or "").upper() == "TABLE" and c.source_node_ids]
+    node_ids = {str(n) for c in table_chunks for n in c.source_node_ids}
+    if not refs or not node_ids:
+        return {}
+    rows = await db.execute(
+        select(DocumentNode.id, DocumentNode.source_table_id).where(
+            DocumentNode.id.in_(node_ids), DocumentNode.source_table_id.isnot(None)
+        )
+    )
+    table_of_node = {str(node_id): table_id for node_id, table_id in rows.all()}
+    result: dict[str, dict] = {}
+    for chunk in table_chunks:
+        table_id = next((table_of_node[str(n)] for n in chunk.source_node_ids if str(n) in table_of_node), None)
+        if table_id in refs:
+            result[str(chunk.id)] = refs[table_id]
+    return result
+
+
 @router.get("/{document_id}/chunks", response_model=DocumentChunksResponse)
 async def list_document_chunks(
     document_id: UUID,
@@ -214,6 +259,7 @@ async def list_document_chunks(
             )
         ).all()
         pg_chunks_by_id = {str(c.id): c for c in pg_rows}
+    table_by_chunk = await _table_ref_by_chunk(db, pg_chunks_by_id.values(), doc.tables)
     # 상위 청크에 child가 하나뿐이면 상위 청크가 곧 이 청크라 "상위 청크 보기"가 같은 글을 되풀이한다
     children_per_parent: dict[str, int] = {}
     for row in pg_chunks_by_id.values():
@@ -249,6 +295,7 @@ async def list_document_chunks(
             "language": c.language,
             "source_file": c.source_file,
             "version": c.version,
+            "table": table_by_chunk.get(chunk_id),
         }
 
     hits = qdrant_service.scroll_by_document(str(document_id))

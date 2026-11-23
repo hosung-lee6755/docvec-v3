@@ -57,6 +57,22 @@ def _is_meaningful_line(line: str) -> bool:
     return sum(_meaningful_chars(t) for t in tokens) >= total * _MIN_LINE_RATIO
 
 
+# Tesseract 줄 평균 신뢰도가 이보다 낮은 줄은 그림 글에서 뺀다. 전체 문서 그림 1,871줄을 다시 재 보니
+# 40 미만 가운데 낱말·숫자 비율 기준을 통과한 264줄은 "wise waso22 45" 같은 잡음이 거의 전부였고,
+# 40~50은 정상 줄과 섞여 있었다(2026-11-23)
+MIN_FIGURE_LINE_CONFIDENCE = 40.0
+
+
+def drop_low_confidence_lines(text: str, line_confidences: list[float]) -> str:
+    """빈 줄이 아닌 줄과 신뢰도를 순서대로 맞대 기준 미만 줄을 뺀다. 줄 수가 다르면 맞댈 수 없으므로 그대로 둔다."""
+    lines = (text or "").splitlines()
+    if sum(1 for line in lines if line.strip()) != len(line_confidences):
+        return text
+    confidences = iter(line_confidences)
+    kept = [line for line in lines if not line.strip() or next(confidences) >= MIN_FIGURE_LINE_CONFIDENCE]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+
 def figure_text_for_body(text: str) -> str:
     """그림 인식 결과 가운데 본문에 넣을 만한 줄만 남긴다. 남는 게 너무 적으면 빈 문자열."""
     kept = [line for line in (text or "").splitlines() if _is_meaningful_line(line)]

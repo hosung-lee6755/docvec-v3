@@ -25,13 +25,14 @@ def _ctx(text, config=None, extra=None, document_id="doc-1"):
     )
 
 
-def _run(text, config=None, entries=None, extra=None):
+def _run(text, config=None, entries=None, extra=None, decisions=None):
     db = MagicMock()
     db.get.return_value = SimpleNamespace(dictionary_version=3)
     with patch("app.db.session.get_sync_db", return_value=db), \
             patch("app.core.crypto.encrypt_secret", side_effect=lambda s: f"enc({s})"), \
             patch.object(pb, "_dictionary_version_cutoff", return_value=None), \
-            patch.object(pb, "_load_entries_as_of", return_value=entries or []):
+            patch.object(pb, "_load_entries_as_of", return_value=entries or []), \
+            patch.object(pb, "_previous_decisions", return_value=decisions or {}):
         result = pb.PiiDetectBlock().run(_ctx(text, config, extra))
     return result, db
 
@@ -298,6 +299,30 @@ def test_landline_without_contact_wording_is_still_found():
     assert _found("자택 02-123-4567", "PHONE") == ["02-123-4567"]
 
 
+@pytest.mark.parametrize("value", [
+    "+82-10-1234-5678",
+    "+82 10 1234 5678",
+    "+82)10-1234-5678",
+    "+82 (0)10-1234-5678",
+    "010 - 1234 - 5678",
+    "010 1234 5678",
+])
+def test_mobile_numbers_in_international_or_spaced_form_are_found(value):
+    # 휴대전화는 어떤 문맥이어도 개인정보로 본다. 국제 표기와 띄어 쓴 표기도 같다(2026-11-23)
+    assert _found(f"연락처 {value} 끝", "PHONE") == [value]
+
+
+@pytest.mark.parametrize("text", [
+    "전화 : 053) 256-4413,5 FAX",          # 협회 대표번호(에너지 진단보고서 표지)
+    "기준 위반 연락처 ('+82-33-811-2001', '1577-1100')",   # 기관 유선번호
+    "| Telephone | 689-87-757547 (mobile) |",            # 해외 구조센터 연락처(Pub120)
+    "PC/Desktop | 1025 - 1920px",
+])
+def test_landlines_in_other_forms_and_foreign_numbers_are_left_alone(text):
+    # 실제 문서에서 이 형식으로 나온 번호는 모두 기관 연락처였다
+    assert _found(text, "PHONE") == []
+
+
 @pytest.mark.parametrize("text", [
     "접수 smart@kosmes.or.kr",
     "문의처 이메일: help@korea.go.kr",
@@ -334,3 +359,104 @@ def test_a_number_after_an_account_in_another_sentence_is_not_an_account():
 
 def test_ordinary_emails_are_still_found():
     assert _found("개인 메일 hong@gmail.com", "EMAIL") == ["hong@gmail.com"]
+
+
+# ---- 재처리 때 이전 승인·해제 결정 이어받기(2026-11-20 감사) ----
+def test_value_rejected_in_the_previous_run_is_not_masked_again():
+    # 해제(오탐 처리)한 값을 재처리가 다시 가리고 결정도 사라져, 해제가 글에 반영될 길이 없었다
+    text = "연락처 010-1234-5678, 담당 010-9999-0000"
+    decisions = {("PHONE", "010-1234-5678"): pb.PiiDecision(rejected=True, approved_by=None, approved_at=None)}
+
+    result, db = _run(text, {"require_admin_approval": True}, decisions=decisions)
+
+    assert "010-1234-5678" in result.output["text"]
+    assert "010-9999-0000" not in result.output["text"]
+    by_value = {d.original_encrypted: d for d in _added(db)}
+    kept = by_value["enc(010-1234-5678)"]
+    assert kept.rejected is True and kept.masked_value == "*" * 13
+    assert by_value["enc(010-9999-0000)"].rejected is False
+    # 새로 나온 값이 있으니 검토는 여전히 필요하다
+    assert result.requires_review is True
+
+
+def test_approved_decision_is_carried_and_no_review_is_needed_when_all_are_decided():
+    when = "2026-11-20T00:00:00"
+    text = "메일 kim@example.com"
+    decisions = {("EMAIL", "kim@example.com"): pb.PiiDecision(rejected=False, approved_by="u1", approved_at=when)}
+
+    result, db = _run(text, {"require_admin_approval": True}, decisions=decisions)
+
+    det = _added(db)[0]
+    assert det.approved_by == "u1" and det.approved_at == when and det.rejected is False
+    assert "kim@example.com" not in result.output["text"]
+    assert result.requires_review is False
+
+
+def test_previous_decisions_reads_the_latest_decided_run_and_prefers_masking_on_mixed_decisions():
+    rows = [
+        SimpleNamespace(entity_type="PHONE", original_encrypted="a", rejected=True, approved_by=None, approved_at=None),
+        SimpleNamespace(entity_type="PHONE", original_encrypted="a", rejected=False, approved_by="u1", approved_at="t"),
+        SimpleNamespace(entity_type="NAME", original_encrypted="b", rejected=True, approved_by=None, approved_at=None),
+        SimpleNamespace(entity_type="NAME", original_encrypted="b", rejected=True, approved_by=None, approved_at=None),
+    ]
+    db = MagicMock()
+    db.scalar.return_value = "old-run"
+    db.scalars.return_value.all.return_value = rows
+    with patch("app.core.crypto.decrypt_secret", side_effect=lambda s: {"a": "010-1", "b": "홍길동"}[s]):
+        decisions = pb._previous_decisions(db, "doc-1", "new-run")
+
+    assert decisions[("PHONE", "010-1")].rejected is False and decisions[("PHONE", "010-1")].approved_by == "u1"
+    assert decisions[("NAME", "홍길동")].rejected is True
+
+
+def test_previous_decisions_is_empty_without_a_decided_run():
+    db = MagicMock()
+    db.scalar.return_value = None
+
+    assert pb._previous_decisions(db, "doc-1", "new-run") == {}
+
+
+def test_detected_name_is_masked_where_it_appears_again_without_a_label():
+    # 정민산업 에너지진단보고서(2026-11-20): "대표자 홍길동"은 잡았지만 표 칸의 같은 이름은 표지가 없어 남았다
+    text = "대표자 홍길동 입니다.\n| 담당자 / 직위 | 홍길동 / 대표 |"
+
+    result, db = _run(text, {"entity_types": ["NAME"], "action": "mask"})
+
+    assert "홍길동" not in result.output["text"]
+    names = [d for d in _added(db) if d.entity_type == "NAME"]
+    assert len(names) == 2
+
+
+def test_repeated_name_inside_a_longer_word_is_not_masked():
+    # 이름으로 잡은 값이 다른 낱말 속에 있으면 번지지 않는다("정민수" → "정민수산")
+    text = "대표자 정민수\n정민수산 납품 내역"
+
+    result, _ = _run(text, {"entity_types": ["NAME"], "action": "mask"})
+
+    assert "정민수산" in result.output["text"]
+    assert "정민수" not in result.output["text"].splitlines()[0]
+
+
+def test_detections_record_the_source_page_from_the_page_map():
+    # 민감정보 탭의 "위치"가 모든 문서에서 비어 있었다(2026-11-21 화면 점검). 원문 쪽 번호를 남긴다
+    page1 = "첫 쪽 본문입니다.\n"
+    text = page1 + "연락처 010-1234-5678"
+    db = MagicMock()
+    db.get.return_value = SimpleNamespace(
+        dictionary_version=3, parsed_text=text, page_map=[[len(page1), 1], [len(text), 2]],
+    )
+    with patch("app.db.session.get_sync_db", return_value=db), \
+            patch("app.core.crypto.encrypt_secret", side_effect=lambda s: f"enc({s})"), \
+            patch.object(pb, "_dictionary_version_cutoff", return_value=None), \
+            patch.object(pb, "_load_entries_as_of", return_value=[]), \
+            patch.object(pb, "_previous_decisions", return_value={}):
+        pb.PiiDetectBlock().run(_ctx(text, {"entity_types": ["PHONE"], "action": "mask"}))
+
+    phones = [d for d in _added(db) if d.entity_type == "PHONE"]
+    assert [d.page_number for d in phones] == [2]
+
+
+def test_detections_without_a_page_map_have_no_page():
+    result, db = _run("연락처 010-1234-5678", {"entity_types": ["PHONE"], "action": "mask"})
+
+    assert [d.page_number for d in _added(db)] == [None]

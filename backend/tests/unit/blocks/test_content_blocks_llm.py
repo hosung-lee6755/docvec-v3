@@ -263,6 +263,16 @@ def test_summarize_bullets_and_custom_prompt(monkeypatch):
     assert calls[0][1].startswith("핵심만\n\n")
 
 
+def test_summarize_sends_money_spelled_out_in_won_but_keeps_the_text(monkeypatch):
+    # 3B 모델이 "7,500[천원]"을 "7500원"으로 옮기던 문제(2026-11-23). 모델 입력만 바꾸고 본문은 그대로 넘긴다
+    calls = _fake_llm(monkeypatch, "요약")
+    result = cb.SummarizeBlock().run(_ctx("투자비 = 7,500[천원]"))
+
+    assert "투자비 = 750만 원" in calls[0][1]
+    assert result.output["text"] == "투자비 = 7,500[천원]"
+    assert cb.SummarizeBlock().block_version == "1.1.0"
+
+
 def test_summarize_retries_when_han_drift(monkeypatch):
     calls = _fake_llm(monkeypatch, "这是中文摘要内容很多漢字", "한국어 요약")
     result = cb.SummarizeBlock().run(_ctx())

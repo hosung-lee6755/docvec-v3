@@ -28,6 +28,18 @@ describe('toRagRecordsJson', () => {
     expect(json).not.toHaveProperty('blocks')
   })
 
+  it('shows which table and parent cell a table chunk came from', () => {
+    // 2026-11-20: 칸 안에서 떼어 낸 표 B 가 표 A 의 어느 칸에 있었는지 JSON 에서 바로 보이게 한다
+    const table = {
+      table_id: 'tB', table_number: 2, title: '[칸 안의 표 1] [표 1]의 칸에 든 표',
+      parent_table_id: 'tA', parent_table_number: 1, parent_cell: { row: 3, col: 2 },
+    }
+    const json = JSON.parse(toRagRecordsJson(DOC, [chunk({ chunk_type: 'TABLE', table }), chunk({ id: 'c2' })]))
+
+    expect(json.chunks[0].table).toEqual(table)
+    expect(json.chunks[1]).not.toHaveProperty('table')
+  })
+
   it('keeps only chunks that start on the given page', () => {
     const json = JSON.parse(toRagRecordsJson(DOC, [chunk({}), chunk({ id: 'c2', page_number: 2 })], 2))
 

@@ -79,3 +79,24 @@ def test_table_block_text_gets_a_span_like_any_other_block():
 
     start, end = spans["table-1"]
     assert full_text[start:end] == "| a | b |\n|---|---|\n| 1 | 2 |"
+
+
+def test_picture_element_gets_span_and_text_of_its_figure_block():
+    from app.pipeline.blocks.extraction_blocks import _attach_element_spans
+
+    full_text = "본문\n\n[그림 1]\n그림 안 글"
+    elements = [
+        {"id": "p1", "type": "text", "content": {"text": "본문", "markdown": "본문"}},
+        {"id": "pic", "type": "picture", "content": {"text": "", "markdown": ""}},
+        {"id": "pic2", "type": "picture", "content": {"text": "", "markdown": ""}},
+    ]
+    spans = {"p1": (0, 2), "pic": (4, len(full_text))}
+
+    result = _attach_element_spans(elements, spans, full_text)
+
+    assert (result[1]["span_start"], result[1]["span_end"]) == (4, len(full_text))
+    assert result[1]["content"]["text"] == "[그림 1]\n그림 안 글"
+    assert result[0]["content"]["text"] == "본문"
+    assert (result[2]["span_start"], result[2]["span_end"]) == (None, None)
+    assert result[2]["content"]["text"] == ""
+    assert elements[1]["content"]["text"] == ""  # 원본은 바꾸지 않는다

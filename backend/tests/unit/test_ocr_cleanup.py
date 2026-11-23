@@ -115,3 +115,21 @@ def test_fix_percent_in_pages_fixes_table_blocks_and_table_candidates():
     assert page.text_blocks[1].text == "[표 1]\n운임 일치울 | 87.00%\n1만원 이내 일치울 | 94.30%"
     assert page.text_blocks[0].text == "본문입니다."
     assert page.table_candidates[0].rows == [["운임 일치울", "87.00%"], ["1만원 이내 일치울", "94.30%"]]
+
+
+# ---------------------------------------------------------------- 그림 OCR 줄 신뢰도(2026-11-23)
+
+
+def test_low_confidence_lines_are_dropped_from_figure_text():
+    # 정민산업 에너지진단보고서 그림: "wise waso22 45"(신뢰도 5.7)는 낱말·숫자 비율 기준은 통과했다
+    text = "Air COMP. 계통도\n\nwise waso22 45\nwilt 0\"\n37[kW]"
+
+    kept = oc.drop_low_confidence_lines(text, [91.0, 5.7, 32.5, 88.0])
+
+    assert kept == "Air COMP. 계통도\n\n37[kW]"
+
+
+def test_figure_text_is_kept_whole_when_lines_cannot_be_aligned():
+    text = "첫 줄\n둘째 줄"
+
+    assert oc.drop_low_confidence_lines(text, [10.0]) == text

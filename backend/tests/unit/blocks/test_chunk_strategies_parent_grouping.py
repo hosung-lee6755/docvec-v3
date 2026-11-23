@@ -91,3 +91,15 @@ def test_flat_span_does_not_join_a_sectioned_group():
     groups = group_children_into_parents(spans, max_chars=1000)
 
     assert groups == [[0], [1, 2]]
+
+
+def test_pieces_of_one_large_table_share_a_single_parent():
+    # 고도화보고서 [표 74]: 큰 표를 나눈 조각은 모두 표 전체 범위(0~6097)를 공유한다. 예전에는 둘째 조각부터
+    # "묶음이 너무 크다"에 걸려 조각마다 표 전체를 담은 parent 가 새로 생겨 같은 글이 4번 저장됐다(2026-11-20 감사)
+    table = [(f"[표 74] (부분 {i}/4)", "raw", 0, 6097, ["부록 E"], ["t"]) for i in range(1, 5)]
+    after = [("다음 문단", "raw", 6100, 6200, ["부록 E"], ["p"])]
+
+    groups = group_children_into_parents(table + after, 500)
+
+    assert groups[0] == [0, 1, 2, 3]
+    assert sum(len(g) for g in groups) == 5

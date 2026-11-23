@@ -39,8 +39,28 @@ _BROKEN_CHAR_RE = re.compile(r"[�\x00-\x08\x0b\x0c\x0e-\x1f]")
 # TOC 항목의 점선/공백 리더 + 페이지 번호 꼬리, 그리고 번호매김/장절조 머리를
 # 각각 벗겨내면 TOC 항목과 실제 HEADING 노드 텍스트를 비교할 수 있는 형태가
 # 된다 — structure_blocks.py의 동일 패턴과 의도적으로 맞춘 정규식.
-# 한글 문서는 "·"·"ㆍ"·"‥" 점선도 많이 쓴다(기계설비 매뉴얼 목차, 2026-11-20)
-_TOC_TRAILING_LEADER_RE = re.compile(r"[.…·ㆍ‥\s]{2,}\d{1,4}\s*$")
+# 한글 문서는 "·"·"ㆍ"·"‥" 점선도 많이 쓴다(기계설비 매뉴얼 목차, 2026-11-20). 하이픈 점선("-----")도
+# 쓴다(세원화성 에너지진단보고서 목차, 2026-11-20)
+_TOC_TRAILING_LEADER_RE = re.compile(
+    r"(?:[.…·ㆍ‥\-─\s]{2,}\d{1,4}|" + r"[.…·ㆍ‥\-─](?:\s*[.…·ㆍ‥\-─])+\s*[IVXLCivxlc]{1,7}"
+    # 쪽 번호가 다음 줄로 넘어가 점선만 남은 항목("NIUE . . . . .")
+    + r"|\s*[.…·ㆍ‥](?:\s*[.…·ㆍ‥]){2,})\s*$"
+)
+# 영문 앞붙이 목차는 ". . . ." 점선 뒤에 로마 숫자 쪽 번호를 쓰고("Preface. . . . II"), 두 단 목차는
+# 한 줄로 합쳐져 "AUSTRALIA . . . 1 NEW CALEDONIA . . . 229"처럼 항목 둘이 붙는다(Pub120, 2026-11-23).
+# 점선과 쪽 번호 뒤에 글이 더 이어지면 거기서 항목을 나눈다
+_TOC_ENTRY_END_RE = re.compile(
+    r"[.…·ㆍ‥\-─](?:\s*[.…·ㆍ‥\-─])+\s*(?:\d{1,4}|[IVXLCivxlc]{1,7})(?=\s+\S)"
+    # 점선 없는 영문 두 단 목차("General 1 Routes 22"). 한글 목차의 "제 2 장"을 나누지 않도록
+    # 영문자 뒤의 번호와 대문자로 시작하는 다음 항목 사이에서만 나눈다
+    r"|(?<=[A-Za-z)])\s\d{1,4}(?=\s+[A-Z])"
+)
+# 목차의 쪽 번호 열 머리글은 항목이 아니다
+_TOC_PAGE_LABELS = {"page", "pages", "쪽", "페이지"}
+# 점선 없이 공백 하나 뒤에 붙은 쪽 번호("분석개요 06"). 숫자가 아닌 글자 뒤에서만 뗀다
+_TOC_TRAILING_PAGE_RE = re.compile(r"(?<=\D)\s\d{1,4}\s*$")
+# 장 구분 "PART 01"과 장 이름을 합친 제목(structure_refine._merge_part_dividers)
+_PART_PREFIX_RE = re.compile(r"^\s*(PART\s*\d{1,2})\s+(\S.*)$", re.IGNORECASE)
 _LEADING_NUMBER_RE = re.compile(r"^(?:\d+(?:\.\d+)*[.\)]?\s+|제?\s*\d+\s*[장절조편]\s*)")
 
 
@@ -86,20 +106,42 @@ def _toc_heading_match_ratio(toc_texts: list[str], heading_texts: list[str]) -> 
     Phase 4) — 번호매김/장절조 머리와 점선 리더+페이지번호 꼬리를 벗겨낸
     뒤 정확히 일치하는지로 판단하는 근사치. TOC 노드가 없는 문서는 이 지표
     자체가 성립하지 않으므로 None(경고 대상 아님)."""
-    if not toc_texts:
+    entries = _toc_entries(toc_texts)
+    if not entries:
         return None
     heading_keys = _all_heading_keys(heading_texts)
-    matched = sum(1 for t in toc_texts if _heading_keys(t) & heading_keys)
-    return matched / len(toc_texts)
+    matched = sum(1 for t in entries if _heading_keys(t) & heading_keys)
+    return matched / len(entries)
+
+
+def _toc_entries(toc_texts: list[str]) -> list[str]:
+    """목차 노드 글을 항목 단위로 나눈다. 한 줄에 붙은 두 단 항목은 둘로 나누고 쪽 번호 열 머리글은 뺀다."""
+    entries: list[str] = []
+    for text in toc_texts:
+        start = 0
+        for end in _TOC_ENTRY_END_RE.finditer(text or ""):
+            entries.append(text[start:end.end()].strip())
+            start = end.end()
+        entries.append((text or "")[start:].strip())
+    return [e for e in entries if e and e.lower() not in _TOC_PAGE_LABELS]
 
 
 def _heading_keys(text: str) -> set[str]:
     """목차 항목과 제목을 맞대는 열쇠. 번호를 뗀 형태와 떼지 않은 형태를 모두 쓰고, 띄어쓰기는 무시한다
-    (목차 링크 "7[D7] …"와 본문 제목 "7 [D7] …"처럼 띄어쓰기만 다른 경우, 완료보고서 실측 2026-11-19)."""
-    with_number = _TOC_TRAILING_LEADER_RE.sub("", text or "")
-    return {
-        key for key in (re.sub(r"\s+", "", _normalize_heading_like(text)), re.sub(r"\s+", "", with_number)) if key
-    }
+    (목차 링크 "7[D7] …"와 본문 제목 "7 [D7] …"처럼 띄어쓰기만 다른 경우, 완료보고서 실측 2026-11-19).
+
+    점선 없이 공백 하나 뒤에 붙은 쪽 번호("분석개요 06")를 뗀 형태와, "PART 01 분석개요"처럼 합친 장 제목의
+    "PART 01"과 장 이름도 열쇠로 쓴다(경기도 데이터분석 사례집, 2026-11-20)."""
+    variants = [text or "", _TOC_TRAILING_PAGE_RE.sub("", text or "")]
+    part = _PART_PREFIX_RE.match(text or "")
+    if part:
+        variants += [part.group(1), part.group(2)]
+    keys: set[str] = set()
+    for variant in variants:
+        with_number = _TOC_TRAILING_LEADER_RE.sub("", variant)
+        keys.update((re.sub(r"\s+", "", _normalize_heading_like(variant)), re.sub(r"\s+", "", with_number)))
+    keys.discard("")
+    return keys
 
 
 def _all_heading_keys(heading_texts: list[str]) -> set[str]:
@@ -114,7 +156,7 @@ MAX_TOC_UNMATCHED_LISTED = 30
 def _unmatched_toc_entries(toc_texts: list[str], heading_texts: list[str]) -> list[str]:
     """제목으로 확인되지 않은 목차 항목. "목차-제목 일치율" 경고가 어느 항목 때문인지 보여 주는 데 쓴다."""
     heading_keys = _all_heading_keys(heading_texts)
-    return [t.strip() for t in toc_texts if not _heading_keys(t) & heading_keys]
+    return [t for t in _toc_entries(toc_texts) if not _heading_keys(t) & heading_keys]
 
 
 def _empty_pages(page_numbers: set[int], max_page: int) -> list[int]:
@@ -144,8 +186,9 @@ def _lineage_run_ids(db, run_id) -> list:
     return ids
 
 
-def _load_pdf_page_texts(doc) -> list[str]:
-    """원본 PDF 를 MinIO 에서 내려받아 페이지별 텍스트 레이어를 돌려준다."""
+def _load_pdf_page_texts(doc) -> list[tuple[str, str]]:
+    """원본 PDF 를 MinIO 에서 내려받아 페이지별 텍스트 레이어를 (저장 순서, 위치 정렬) 두 읽기 순서로 돌려준다.
+    재현율은 쪽마다 본문과 더 잘 맞는 순서로 잰다(compute_source_recall)."""
     import fitz  # pymupdf
 
     from app.core.config import settings
@@ -153,7 +196,7 @@ def _load_pdf_page_texts(doc) -> list[str]:
 
     raw = storage_service.download_file(settings.minio_bucket_originals, doc.minio_key)
     with fitz.open(stream=raw, filetype="pdf") as pdf:
-        return [page.get_text() for page in pdf]
+        return [(page.get_text(), page.get_text(sort=True)) for page in pdf]
 
 
 def _measure_source_recall(doc) -> tuple[SourceRecall | None, str]:
@@ -263,7 +306,11 @@ class QualityCheckBlock(BaseBlock):
         # 항목(toc_unmatched)을 metrics에 남긴다(2026-11-17).
         # 1.8.0: 목차-제목 대조가 띄어쓰기 차이를 무시하고, 번호를 뗀 형태와 떼지 않은 형태를 모두 맞대 본다(2026-11-19).
         # 1.8.1: 목차 점선으로 "·"·"ㆍ"·"‥"도 알아본다(2026-11-20).
-        return "1.8.1"
+        # 1.9.0: 원본 재현율을 쪽마다 PDF 저장 순서와 위치 정렬 가운데 본문과 더 잘 맞는 순서로 잰다. 기호를 보이는
+        #        순서로 바로잡은 본문이 저장 순서 기준과만 견줘져 누락으로 잡히던 문제(세원화성, 2026-11-20 감사).
+        # 1.10.0: 목차 대조가 로마 숫자 쪽 번호, 한 줄에 붙은 두 단 목차, 쪽 번호 열 머리글("Page")을 알아본다
+        #         (Pub120 목차 일치율 30%가 57%로, 2026-11-23).
+        return "1.10.0"
 
     @property
     def category(self) -> str:

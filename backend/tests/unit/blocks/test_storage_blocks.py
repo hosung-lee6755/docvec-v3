@@ -28,8 +28,8 @@ def _doc(**kw):
 
 
 # ---- ChunkSplitBlock ----
-def _split(doc, config=None, upstream=None, nodes=None, run_row="default", settings=None):
-    db = MagicMock()
+def _split(doc, config=None, upstream=None, nodes=None, run_row="default", settings=None, db=None):
+    db = db or MagicMock()
     run = SimpleNamespace(dictionary_version=4, version_id="v1") if run_row == "default" else run_row
 
     def _get(model, _id):
@@ -336,7 +336,7 @@ def test_rag_store_closes_db_on_embedding_error():
 def test_block_metadata():
     split, store = sb.ChunkSplitBlock(), sb.RagStoreBlock()
     assert (split.block_type, store.block_type) == ("chunk_split", "rag_store")
-    assert split.block_version == "1.8.0" and store.block_version == "1.4.0"
+    assert split.block_version == "1.11.0" and store.block_version == "1.4.0"
     assert split.category == store.category == "분할·저장"
     assert split.config_schema is sb.ChunkSplitConfig
     assert store.config_schema is sb.RagStoreConfig
@@ -408,3 +408,73 @@ def test_structure_chunks_follow_the_normalized_text():
     child = [r for r in _added(db) if r.chunk_tier == "child"][0]
     assert child.original_text.startswith("이 사업은")
     assert child.original_text.endswith("2억 원입니다.")
+
+
+def test_chunk_split_masks_pii_in_pieces_of_a_large_table():
+    # 기계설비 매뉴얼·Pub120bk(2026-11-20 감사): 큰 표 조각은 Document.tables 의 원래 칸으로 만들어,
+    # 가리기로 한 전화번호가 검색 청크에 그대로 들어갔다. 같은 실행의 탐지 기록으로 칸도 가린다
+    phone = "010-1234-5678"
+    rows = [["구분", "연락처"]] + [[f"담당{i}", f"{phone} 내선 {i:03d}번 상세 설명 문장입니다"] for i in range(30)]
+    raw_table = "[표 1]\n" + "\n".join("| " + " | ".join(r) + " |" for r in rows)
+    masked_table = raw_table.replace(phone, "*" * len(phone))
+    node = _node("t", "TABLE", raw_table, 0, len(raw_table))
+    node.source_table_id = "t1"
+    doc = _doc(parsed_text=raw_table, tables=[{"id": "t1", "rows": rows}])
+    detection = SimpleNamespace(original_encrypted="enc", masked_value="*" * len(phone), rejected=False)
+
+    with patch("app.core.crypto.decrypt_secret", return_value=phone):
+        def _split_with_detections():
+            db = MagicMock()
+            db.scalars.return_value.all.return_value = [detection]
+            return db
+        result, db = _split(
+            doc, {"strategy": "section_aware", "max_tokens": 400, "min_tokens": 10},
+            upstream={"text": masked_table}, nodes=[node], db=_split_with_detections(),
+        )
+
+    children = [r for r in _added(db) if r.chunk_tier == "child"]
+    assert len(children) > 1
+    assert all(phone not in c.chunk_text for c in children)
+    assert sum(c.chunk_text.count("*" * len(phone)) for c in children) == 30
+    # 원본 표는 그대로다
+    assert doc.tables[0]["rows"][1][1].startswith(phone)
+
+
+def test_pii_cell_masks_skips_rejected_and_undecryptable_rows():
+    rows = [
+        SimpleNamespace(original_encrypted="a", masked_value="***", rejected=False),
+        SimpleNamespace(original_encrypted="b", masked_value="**", rejected=True),
+        SimpleNamespace(original_encrypted="bad", masked_value="*", rejected=False),
+    ]
+    db = MagicMock()
+    db.scalars.return_value.all.return_value = rows
+
+    def decrypt(value):
+        if value == "bad":
+            raise ValueError("broken")
+        return {"a": "010", "b": "홍길"}[value]
+
+    with patch("app.core.crypto.decrypt_secret", side_effect=decrypt):
+        assert sb._pii_cell_masks(db, "run-1") == [("010", "***")]
+    assert sb._pii_cell_masks(db, None) == []
+
+
+def test_parent_chunk_text_drops_running_footer_between_its_children():
+    # 부모 청크는 원문 연속 구간이라 사이의 쪽 꼬리말이 따라 들어왔다(서울 데이터 펠로우십 보고서, 2026-11-20)
+    first = "첫 쪽 마지막 문단입니다. 범죄 발생 패턴을 살펴본다."
+    footer = "6 2022 서울 데이터 펠로우십 분석보고서"
+    second = "다음 쪽 첫 문단입니다. 골목길 특성을 분석한다."
+    text = f"{first}\n\n{footer}\n\n{second}"
+    s2 = len(first) + 2 + len(footer) + 2
+    nodes = [
+        _node("p1", "PARAGRAPH", first, 0, len(first)),
+        _node("f1", "HEADER", footer, len(first) + 2, len(first) + 2 + len(footer)),
+        _node("p2", "PARAGRAPH", second, s2, len(text)),
+    ]
+
+    _, db = _split(_doc(parsed_text=text), {"strategy": "paragraph", "max_tokens": 40, "min_tokens": 5}, nodes=nodes)
+
+    parents = [r for r in _added(db) if r.chunk_tier == "parent"]
+    assert parents
+    assert all("펠로우십" not in p.chunk_text for p in parents)
+    assert any(first in p.chunk_text and second in p.chunk_text for p in parents)

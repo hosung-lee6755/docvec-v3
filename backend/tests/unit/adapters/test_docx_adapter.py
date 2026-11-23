@@ -148,3 +148,71 @@ def test_word_page_count_is_none_when_the_file_has_no_app_properties(tmp_path):
     broken.write_bytes(b"plain bytes")
 
     assert _word_page_count(broken) is None
+
+
+def _heading_levels(path):
+    return {line["text"]: line.get("heading_level") for line in DOCXAdapter().extract(path, {}).metadata["line_layout"]}
+
+
+def test_heading_styles_carry_heading_level_like_hwpx_outline_levels(tmp_path):
+    # 2026-11-20 감사: 'Heading 1' 스타일만 있고 글자 크기를 문단에 직접 주지 않은 Word 제목("alice")이
+    # 구조 분석에서 본문 문단이 됐다. 구조 분석은 heading_level 이 있어야 번호 없는 제목을 제목으로 본다
+    doc = DocxDocument()
+    doc.add_heading("Report", level=0)
+    doc.add_heading("alice", level=1)
+    doc.add_heading("Detail", level=2)
+    doc.add_paragraph("body text.")
+    path = tmp_path / "headings.docx"
+    doc.save(str(path))
+
+    levels = _heading_levels(path)
+
+    assert levels == {"Report": 1, "alice": 1, "Detail": 2, "body text.": None}
+
+
+def test_outline_level_on_paragraph_or_style_sets_heading_level(tmp_path):
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    doc = DocxDocument()
+    direct = doc.add_paragraph("Direct outline")
+    outline = OxmlElement("w:outlineLvl")
+    outline.set(qn("w:val"), "1")
+    direct._p.get_or_add_pPr().append(outline)
+    body = doc.add_paragraph("Body outline nine")
+    body_outline = OxmlElement("w:outlineLvl")
+    body_outline.set(qn("w:val"), "9")
+    body._p.get_or_add_pPr().append(body_outline)
+    path = tmp_path / "outline.docx"
+    doc.save(str(path))
+
+    levels = _heading_levels(path)
+
+    # w:outlineLvl 은 0부터 센다. 9는 본문 수준이다
+    assert levels == {"Direct outline": 2, "Body outline nine": None}
+
+
+def test_docx_heading_style_becomes_heading_node_in_structure_classification(tmp_path):
+    from app.pipeline.blocks.structure_blocks import _classify
+
+    doc = DocxDocument()
+    doc.add_heading("alice", level=1)
+    doc.add_paragraph("alice personal document body.")
+    path = tmp_path / "alice.docx"
+    doc.save(str(path))
+    layout = DOCXAdapter().extract(path, {}).metadata["line_layout"]
+
+    assert _classify("alice", layout[0], None) == ("HEADING", 1)
+    assert _classify("alice personal document body.", layout[1], None) == ("PARAGRAPH", None)
+
+
+def test_korean_heading_style_name_without_outline_level_sets_heading_level(tmp_path):
+    from docx.enum.style import WD_STYLE_TYPE
+
+    doc = DocxDocument()
+    doc.styles.add_style("제목 2", WD_STYLE_TYPE.PARAGRAPH)
+    doc.add_paragraph("사업 개요", style="제목 2")
+    path = tmp_path / "korean.docx"
+    doc.save(str(path))
+
+    assert _heading_levels(path) == {"사업 개요": 2}
