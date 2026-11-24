@@ -227,3 +227,81 @@ def test_analysis_without_summary_step_clears_the_old_summary(session_factory, s
     finally:
         check.close()
     delete_summary.assert_called_once_with(str(scenario["document"].id))
+
+
+def _document_analysis(session_factory, scenario, project_id=None):
+    """문서에 직접 고른 분석 워크플로우(게시된 v1, 입력 블록 하나)를 붙인다."""
+    db: Session = session_factory()
+    user_id = scenario["document"].created_by
+    workflow = WorkflowDefinition(id=uuid4(), name="문서 분석", kind="ANALYSIS", created_by=user_id, project_id=project_id)
+    db.add(workflow)
+    db.flush()
+    version = WorkflowVersion(
+        id=uuid4(), workflow_id=workflow.id, version_number=1, created_by=user_id, published_at=datetime.utcnow(),
+    )
+    db.add(version)
+    db.flush()
+    db.add(WorkflowBlockInstance(id=uuid4(), version_id=version.id, block_type="input", config={}))
+    db.query(Document).filter(Document.id == scenario["document"].id).update({"analysis_workflow_id": workflow.id})
+    db.commit()
+    db.close()
+    return workflow, version
+
+
+def _cleanup_document_analysis(session_factory, scenario, workflow, version):
+    cleanup: Session = session_factory()
+    cleanup.execute(Document.__table__.update().where(Document.id == scenario["document"].id).values(
+        active_run_id=None, analysis_workflow_id=None))
+    cleanup.query(WorkflowRun).filter(WorkflowRun.version_id == version.id).delete()
+    cleanup.query(WorkflowBlockInstance).filter(WorkflowBlockInstance.version_id == version.id).delete()
+    cleanup.query(WorkflowVersion).filter(WorkflowVersion.id == version.id).delete()
+    cleanup.query(WorkflowDefinition).filter(WorkflowDefinition.id == workflow.id).delete()
+    cleanup.commit()
+    cleanup.close()
+
+
+def _auto_analysis_versions(session_factory, document_id):
+    check = session_factory()
+    try:
+        return [r.version_id for r in check.scalars(select(WorkflowRun).where(
+            WorkflowRun.document_id == document_id, WorkflowRun.trigger == "AUTO_ANALYSIS"))]
+    finally:
+        check.close()
+
+
+def test_analysis_workflow_chosen_for_the_document_comes_before_the_collection_default(session_factory, scenario):
+    """업로드 때 문서에 고른 분석 워크플로우가 컬렉션 기본 분석보다 먼저다(2026-11-24). 문서에 남기므로 재처리 뒤에도 같다."""
+    workflow, version = _document_analysis(session_factory, scenario)
+    try:
+        with patch("app.pipeline.tasks.workflow.run_workflow_step"):
+            db = session_factory()
+            _maybe_trigger_analysis(db, scenario["pre_run"])
+            db.close()
+        assert _auto_analysis_versions(session_factory, scenario["document"].id) == [version.id]
+    finally:
+        _cleanup_document_analysis(session_factory, scenario, workflow, version)
+
+
+def test_document_choice_from_another_project_falls_back_to_the_collection_default(session_factory, scenario):
+    """문서가 다른 프로젝트 컬렉션에 있게 되면 그 프로젝트 전용 분석 워크플로우는 쓰지 않고 컬렉션 기본을 쓴다."""
+    from app.db.models.project import Project
+
+    setup = session_factory()
+    project = Project(id=uuid4(), name="옛 프로젝트", created_by=scenario["document"].created_by)
+    setup.add(project)
+    setup.commit()
+    setup.close()
+    workflow, version = _document_analysis(session_factory, scenario, project_id=project.id)
+    try:
+        with patch("app.pipeline.tasks.workflow.run_workflow_step"):
+            db = session_factory()
+            _maybe_trigger_analysis(db, scenario["pre_run"])
+            db.close()
+        versions = _auto_analysis_versions(session_factory, scenario["document"].id)
+        assert len(versions) == 1 and versions[0] != version.id
+    finally:
+        _cleanup_document_analysis(session_factory, scenario, workflow, version)
+        cleanup = session_factory()
+        cleanup.query(Project).filter(Project.id == project.id).delete()
+        cleanup.commit()
+        cleanup.close()

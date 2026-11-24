@@ -1,16 +1,22 @@
 import { describe, it, expect, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { UploadModal } from './UploadModal'
 
+const mocks = vi.hoisted(() => ({
+  upload: vi.fn(async (_input: Record<string, unknown>) => ({ version_number: 1 })),
+  collectionsFor: vi.fn((_projectId?: string | null) => [{ id: 'c1', name: '규정', project_id: null as string | null }]),
+  workflowsFor: vi.fn((_projectId: string | null, _kind: string) => [] as { id: string; name: string; project_id: string | null }[]),
+}))
+
 vi.mock('../../hooks/useDocuments', () => ({
-  useUploadDocument: () => ({ mutateAsync: vi.fn() }),
+  useUploadDocument: () => ({ mutateAsync: mocks.upload }),
   useUploadZip: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }))
 vi.mock('../../hooks/useCollections', () => ({
-  useCollections: () => ({ data: { items: [{ id: 'c1', name: '규정', project_id: null }] } }),
+  useCollections: (projectId?: string | null) => ({ data: { items: mocks.collectionsFor(projectId) } }),
 }))
 vi.mock('../../hooks/useWorkflows', () => ({
-  useWorkflows: () => ({ data: { items: [] } }),
+  useWorkflows: (projectId: string | null, kind: string) => ({ data: { items: mocks.workflowsFor(projectId, kind) } }),
   useWorkflowVersions: () => ({ data: { items: [] } }),
 }))
 
@@ -71,5 +77,33 @@ describe('UploadModal drag and drop', () => {
     dropFiles(screen.getByTestId('upload-zip-dropzone'), [new File(['z'], '묶음.zip', { type: 'application/zip' })])
 
     expect(screen.getByRole('button', { name: /묶음\.zip/ })).toBeTruthy()
+  })
+})
+
+describe('UploadModal project scope and analysis workflow', () => {
+  it('lists only the collections of the project it was opened from', () => {
+    mocks.collectionsFor.mockClear()
+
+    render(<UploadModal isOpen onClose={() => {}} projectId="p1" />)
+
+    expect(mocks.collectionsFor).toHaveBeenCalledWith('p1')
+  })
+
+  it('offers the project analysis workflows and sends the chosen one with the upload', async () => {
+    mocks.collectionsFor.mockReturnValue([{ id: 'c2', name: '공정 문서', project_id: 'p1' }])
+    mocks.workflowsFor.mockImplementation((projectId, kind) =>
+      projectId === 'p1'
+        ? [{ id: kind === 'ANALYSIS' ? 'a1' : 'w1', name: kind === 'ANALYSIS' ? '공정 분석' : '공정 전처리', project_id: 'p1' }]
+        : [])
+    render(<UploadModal isOpen onClose={() => {}} projectId="p1" />)
+
+    fireEvent.change(screen.getByLabelText(/컬렉션/), { target: { value: 'c2' } })
+    fireEvent.change(screen.getByLabelText('분석 워크플로우'), { target: { value: 'a1' } })
+    dropFiles(screen.getByTestId('upload-dropzone'), [new File(['a'], '보고서.pdf', { type: 'application/pdf' })])
+    fireEvent.click(screen.getByRole('button', { name: '업로드' }))
+
+    await waitFor(() => expect(mocks.upload).toHaveBeenCalled())
+    expect(mocks.upload.mock.calls[0][0]).toMatchObject({ collection_id: 'c2', analysis_workflow_id: 'a1' })
+    expect(mocks.workflowsFor).toHaveBeenCalledWith('p1', 'ANALYSIS')
   })
 })

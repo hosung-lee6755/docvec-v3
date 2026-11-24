@@ -560,6 +560,8 @@ export interface UploadDocumentInput {
   workflow_version_id?: string
   // true면 같은 이름의 기존 문서에 새 버전으로 잇지 않고 별개 문서로 올린다.
   new_document?: boolean
+  // 이 문서를 분석할 워크플로우. 없으면 컬렉션 기본 분석(없으면 표준 분석)을 쓴다(2026-11-24)
+  analysis_workflow_id?: string
 }
 
 export interface UploadDocumentResult {
@@ -573,6 +575,7 @@ function appendUploadOptions(form: FormData, input: Omit<UploadDocumentInput, 'f
   if (input.skip_review) form.append('skip_review', 'true')
   if (input.workflow_version_id) form.append('workflow_version_id', input.workflow_version_id)
   if (input.new_document) form.append('new_document', 'true')
+  if (input.analysis_workflow_id) form.append('analysis_workflow_id', input.analysis_workflow_id)
 }
 
 export function useUploadDocument() {

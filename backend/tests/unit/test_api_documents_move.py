@@ -195,3 +195,33 @@ async def test_a_version_still_being_processed_blocks_moving_the_lineage(db_sess
     assert result.results[0].status == "skipped" and "v2" in result.results[0].detail
     assert str(await _collection_of(db_session, v1_id)) == str(source.id)
     assert pushed == []
+
+
+async def test_moving_to_another_project_drops_that_projects_analysis_workflow(db_session, pushed):  # noqa: F811
+    """문서에 고른 프로젝트 전용 분석 워크플로우는 다른 프로젝트 컬렉션으로 옮기면 지운다. 시스템 워크플로우는 남긴다(2026-11-24)."""
+    from app.db.models.project import Project
+    from app.db.models.workflow import WorkflowDefinition
+
+    project = Project(id=uuid4(), name="p1", created_by=OWNER_ID)
+    other = Project(id=uuid4(), name="p2", created_by=OWNER_ID)
+    db_session.add_all([project, other])
+    await db_session.flush()
+    scoped = WorkflowDefinition(id=uuid4(), name="a1", kind="ANALYSIS", project_id=project.id, created_by=OWNER_ID)
+    system = WorkflowDefinition(id=uuid4(), name="a0", kind="ANALYSIS", project_id=None, created_by=OWNER_ID)
+    db_session.add_all([scoped, system])
+    await db_session.flush()
+    source = await _collection(db_session, project_id=project.id)
+    target = await _collection(db_session, project_id=other.id)
+    scoped_doc = await add_doc(db_session, "mv-an-1", collection_id=source.id, analysis_workflow_id=scoped.id)
+    system_doc = await add_doc(db_session, "mv-an-2", collection_id=source.id, analysis_workflow_id=system.id)
+    scoped_id, system_id = scoped_doc.id, system_doc.id
+    await db_session.commit()
+
+    await _move(db_session, [scoped_id, system_id], target)
+
+    chosen = dict((await db_session.execute(
+        select(Document.id, Document.analysis_workflow_id).where(Document.id.in_([scoped_id, system_id]))
+        .execution_options(populate_existing=True)
+    )).all())
+    assert chosen[scoped_id] is None
+    assert str(chosen[system_id]) == str(system.id)

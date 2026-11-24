@@ -415,6 +415,7 @@ export default function DocumentsPage() {
           isOpen={showUploadModal}
           onClose={() => setShowUploadModal(false)}
           onUploaded={(message) => setUploadNotice(message)}
+          projectId={projectId}
         />
       )}
     </Page>

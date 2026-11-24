@@ -73,6 +73,11 @@ class Document(Base):
     collection_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("collections.id"), nullable=True
     )
+    # 업로드 때 이 문서에 고른 분석 워크플로우(2026-11-24). 있으면 컬렉션 기본 분석보다 먼저 쓰고, 재처리 뒤에도
+    # 그대로 따른다(workflow._resolve_analysis_version). 버전은 고정하지 않고 분석할 때의 최신 게시 버전을 쓴다
+    analysis_workflow_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_definitions.id", ondelete="SET NULL"), nullable=True
+    )
     created_by: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(

@@ -16,6 +16,8 @@ interface UploadModalProps {
   onClose: () => void
   // 여러 파일을 올리고 모달이 닫힐 때, 새 버전으로 묶인 파일이 있으면 그 안내를 부모가 보여준다.
   onUploaded?: (message: string) => void
+  // 프로젝트 문서 화면에서 열면 그 프로젝트의 컬렉션만 고른다. 없으면(전체 문서 화면) 모든 컬렉션이다(2026-11-24)
+  projectId?: string | null
 }
 
 type UploadMode = 'files' | 'zip'
@@ -46,12 +48,14 @@ export function UploadModal({
   isOpen,
   onClose,
   onUploaded,
+  projectId,
 }: UploadModalProps) {
   const fileRef = useRef<HTMLInputElement>(null)
   const zipFileRef = useRef<HTMLInputElement>(null)
 
   const [uploadCollectionId, setUploadCollectionId] = useState('')
   const [uploadWorkflowId, setUploadWorkflowId] = useState('')
+  const [analysisWorkflowId, setAnalysisWorkflowId] = useState('')
   const [skipReview, setSkipReview] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [uploadProgress, setUploadProgress] = useState<{ name: string; status: UploadRowStatus; error?: string }[]>([])
@@ -64,11 +68,13 @@ export function UploadModal({
 
   const upload = useUploadDocument()
   const uploadZip = useUploadZip()
-  const { data: collectionsDataFull } = useCollections()
+  const { data: collectionsDataFull } = useCollections(projectId)
   const collectionsData = collectionsDataFull?.items
   const selectedUploadCollection = collectionsData?.find((c) => c.id === uploadCollectionId)
-  const { data: uploadProjectWorkflowsData } = useWorkflows(selectedUploadCollection?.project_id ?? null, 'PREPROCESS')
+  const uploadProjectId = selectedUploadCollection?.project_id ?? null
+  const { data: uploadProjectWorkflowsData } = useWorkflows(uploadProjectId, 'PREPROCESS')
   const uploadProjectWorkflows = uploadProjectWorkflowsData?.items
+  const { data: analysisWorkflowsData } = useWorkflows(uploadProjectId, 'ANALYSIS')
   const { data: uploadWorkflowVersionsData } = useWorkflowVersions(uploadWorkflowId || null)
   const uploadWorkflowVersions = uploadWorkflowVersionsData?.items
 
@@ -85,6 +91,7 @@ export function UploadModal({
     onClose()
     setUploadCollectionId('')
     setUploadWorkflowId('')
+    setAnalysisWorkflowId('')
     setSkipReview(false)
     setSelectedFiles([])
     setUploadProgress([])
@@ -113,6 +120,7 @@ export function UploadModal({
         skip_review: true,
         workflow_version_id: resolvedUploadWorkflowVersionId,
         new_document: newDocument,
+        analysis_workflow_id: analysisWorkflowId || undefined,
       })
       setZipResult(result)
     } catch (err) {
@@ -146,6 +154,7 @@ export function UploadModal({
           skip_review: effectiveSkipReview,
           workflow_version_id: resolvedUploadWorkflowVersionId,
           new_document: newDocument,
+          analysis_workflow_id: analysisWorkflowId || undefined,
         })
         const notice = versionNoticeFor(result.version_number)
         if (notice) versionNotices.push(`${selectedFiles[i].name}: ${notice}`)
@@ -167,8 +176,42 @@ export function UploadModal({
   const filesSubmitDisabled = isBatchUploading || !selectedFiles.length || !uploadCollectionId
   const zipSubmitDisabled = uploadZip.isPending || !zipFile || !uploadCollectionId
   // 업로드할 컬렉션과 같은 프로젝트의 워크플로우만 고른다. 개인 컬렉션은 표준 전처리만 쓴다(2026-11-20)
-  const workflowOptions = workflowsForProject(uploadProjectWorkflows, selectedUploadCollection?.project_id)
-  const collectionMissingHint = !collectionsData?.length ? '컬렉션이 없습니다. 먼저 컬렉션을 생성하세요.' : undefined
+  const workflowOptions = workflowsForProject(uploadProjectWorkflows, uploadProjectId)
+  const analysisOptions = workflowsForProject(analysisWorkflowsData?.items, uploadProjectId)
+  // 컬렉션을 바꾸면 프로젝트가 달라질 수 있어 고른 워크플로우를 비운다
+  const selectCollection = (collectionId: string) => {
+    setUploadCollectionId(collectionId)
+    setUploadWorkflowId('')
+    setAnalysisWorkflowId('')
+  }
+
+  // 전처리가 끝나면 분석 워크플로우가 이어서 돈다. 고르지 않으면 컬렉션 기본 분석(없으면 표준 분석)이다(2026-11-24)
+  const workflowFields = (
+    <>
+      <Field label="전처리 워크플로우">
+        {(id) => (
+          <Select id={id} value={uploadWorkflowId} onChange={(e) => setUploadWorkflowId(e.target.value)}>
+            <option value="">컬렉션 기본값 사용</option>
+            {workflowOptions.map((wf) => (
+              <option key={wf.id} value={wf.id}>{wf.name}</option>
+            ))}
+          </Select>
+        )}
+      </Field>
+      <Field label="분석 워크플로우">
+        {(id) => (
+          <Select id={id} value={analysisWorkflowId} onChange={(e) => setAnalysisWorkflowId(e.target.value)}>
+            <option value="">컬렉션 기본값 사용</option>
+            {analysisOptions.map((wf) => (
+              <option key={wf.id} value={wf.id}>{wf.name}</option>
+            ))}
+          </Select>
+        )}
+      </Field>
+    </>
+  )
+
+  const collectionMissingHint =!collectionsData?.length ? '컬렉션이 없습니다. 먼저 컬렉션을 생성하세요.' : undefined
 
   const footer = uploadMode === 'files' ? (
     <>
@@ -219,7 +262,7 @@ export function UploadModal({
                 <Select
                   id={id}
                   value={uploadCollectionId}
-                  onChange={(e) => { setUploadCollectionId(e.target.value); setUploadWorkflowId('') }}
+                  onChange={(e) => selectCollection(e.target.value)}
                   required
                 >
                   <option value="">컬렉션을 선택하세요</option>
@@ -230,18 +273,7 @@ export function UploadModal({
               )}
             </Field>
 
-            {uploadCollectionId && (
-              <Field label="전처리 워크플로우">
-                {(id) => (
-                  <Select id={id} value={uploadWorkflowId} onChange={(e) => setUploadWorkflowId(e.target.value)}>
-                    <option value="">컬렉션 기본값 사용</option>
-                    {workflowOptions.map((wf) => (
-                      <option key={wf.id} value={wf.id}>{wf.name}</option>
-                    ))}
-                  </Select>
-                )}
-              </Field>
-            )}
+            {uploadCollectionId && workflowFields}
 
             <div className="ds-field">
               <span className="ds-field__label">파일 <span className="documents-text-danger">*</span></span>
@@ -337,7 +369,7 @@ export function UploadModal({
                 <Select
                   id={id}
                   value={uploadCollectionId}
-                  onChange={(e) => { setUploadCollectionId(e.target.value); setUploadWorkflowId('') }}
+                  onChange={(e) => selectCollection(e.target.value)}
                   required
                 >
                   <option value="">컬렉션을 선택하세요</option>
@@ -348,18 +380,7 @@ export function UploadModal({
               )}
             </Field>
 
-            {uploadCollectionId && (
-              <Field label="전처리 워크플로우">
-                {(id) => (
-                  <Select id={id} value={uploadWorkflowId} onChange={(e) => setUploadWorkflowId(e.target.value)}>
-                    <option value="">컬렉션 기본값 사용</option>
-                    {workflowOptions.map((wf) => (
-                      <option key={wf.id} value={wf.id}>{wf.name}</option>
-                    ))}
-                  </Select>
-                )}
-              </Field>
-            )}
+            {uploadCollectionId && workflowFields}
 
             <div className="ds-field">
               <span className="ds-field__label">ZIP 파일 <span className="documents-text-danger">*</span></span>

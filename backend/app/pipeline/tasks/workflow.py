@@ -487,16 +487,40 @@ def run_workflow_step(self, run_id: str, block_instance_id: str) -> dict:
 STANDARD_ANALYSIS_WORKFLOW_ID = "00000000-0000-0000-0000-0000000000e1"
 
 
-def _resolve_analysis_version(db, collection):
+def _document_analysis_version(db, document, collection):
+    """업로드 때 문서에 고른 분석 워크플로우의 최신 게시 버전(2026-11-24). 고른 것이 없거나, 지워졌거나, 분석 종류가
+    아니거나, 지금 컬렉션의 프로젝트에서 쓸 수 없거나(옮겨진 문서), 게시된 버전이 없으면 None 이다."""
+    from app.db.models.workflow import WorkflowDefinition, WorkflowVersion
+    from app.services.workflow_scope import fits_project
+
+    chosen_id = getattr(document, "analysis_workflow_id", None) if document is not None else None
+    if not chosen_id:
+        return None
+    workflow = db.get(WorkflowDefinition, chosen_id)
+    project_id = collection.project_id if collection is not None else None
+    if workflow is None or workflow.kind != "ANALYSIS" or not fits_project(workflow.project_id, project_id):
+        logger.warning("문서에 고른 분석 워크플로우를 쓸 수 없어 컬렉션 기본을 씁니다", extra={"document_id": str(document.id)})
+        return None
+    return db.query(WorkflowVersion).filter(
+        WorkflowVersion.workflow_id == workflow.id, WorkflowVersion.published_at.isnot(None)
+    ).order_by(WorkflowVersion.version_number.desc()).first()
+
+
+def _resolve_analysis_version(db, collection, document=None):
     """전처리가 끝난 문서를 분석할 워크플로우 버전. 컬렉션의 기본 분석 워크플로우(고정 버전 또는 최신 게시 버전)가
     먼저이고, 없으면 시스템 표준 분석 워크플로우(STANDARD_ANALYSIS_WORKFLOW_ID)의 최신 게시 버전이다. 업로드가 전처리
     워크플로우를 고르는 순서(_resolve_preprocess_version_id)와 같다.
 
     예전(2026-11-16~11-20)에는 분석 워크플로우가 없으면 워크플로우 밖에서 요약·메타데이터 작업을 직접 보냈다.
     처리 이력에 남지 않고 화면에서 고칠 수도 없었으며, 컬렉션 화면의 "지정하면 요약·키워드가 생긴다"는 안내와도
-    어긋났다(사용자 검토). 표준 분석 워크플로우가 같은 일(요약, 키워드, 분류, 저장)을 한다."""
+    어긋났다(사용자 검토). 표준 분석 워크플로우가 같은 일(요약, 키워드, 분류, 저장)을 한다.
+
+    업로드 때 문서에 고른 분석 워크플로우가 있으면 그것이 가장 먼저다(2026-11-24, _document_analysis_version)."""
     from app.db.models.workflow import WorkflowDefinition, WorkflowVersion
 
+    chosen = _document_analysis_version(db, document, collection)
+    if chosen is not None:
+        return chosen
     if collection is not None and collection.default_analysis_workflow_id:
         query = db.query(WorkflowVersion).filter(WorkflowVersion.workflow_id == collection.default_analysis_workflow_id)
         if collection.default_analysis_workflow_version is not None:
@@ -561,7 +585,7 @@ def start_auto_analysis(db, document, dictionary_version=None) -> None:
     from app.pipeline.analysis_outputs import SUMMARY, analysis_outputs, clear_unproduced_fields
 
     collection = db.get(Collection, document.collection_id) if document.collection_id else None
-    analysis_version = _resolve_analysis_version(db, collection)
+    analysis_version = _resolve_analysis_version(db, collection, document)
     if analysis_version is None:
         return
 

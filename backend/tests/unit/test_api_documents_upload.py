@@ -437,3 +437,71 @@ async def test_explicit_project_workflow_only_for_that_projects_collection(db_se
         err = await assert_http_error(
             up._resolve_preprocess_version_id(db_session, collection_id, str(version.id), current_user=owner_user()), 400)
         assert "공정 프로젝트" in err.detail
+
+
+# ------------------------------------------- 업로드 때 고른 분석 워크플로우(2026-11-24)
+async def test_explicit_analysis_workflow_is_validated(db_session):  # noqa: F811
+    """업로드 창에서 고른 분석 워크플로우는 분석 종류이고 게시된 버전이 있어야 한다."""
+    _, [preprocess_version] = await _workflow(db_session)
+    draft_only, _ = await _workflow(db_session, kind="ANALYSIS", versions=((1, False),))
+
+    await assert_http_error(up._resolve_analysis_workflow_id(db_session, None, "not-a-uuid"), 400)
+    await assert_http_error(up._resolve_analysis_workflow_id(db_session, None, str(uuid4())), 400)
+    err = await assert_http_error(
+        up._resolve_analysis_workflow_id(db_session, None, str(preprocess_version.workflow_id)), 400)
+    assert "ANALYSIS" in err.detail
+    err = await assert_http_error(up._resolve_analysis_workflow_id(db_session, None, str(draft_only.id)), 400)
+    assert "게시" in err.detail
+    assert await up._resolve_analysis_workflow_id(db_session, None, None) is None
+
+
+async def test_explicit_analysis_workflow_follows_project_scope_and_access(db_session):  # noqa: F811
+    project = Project(id=uuid4(), name="분석 프로젝트", created_by=OWNER_ID)
+    other = Project(id=uuid4(), name="다른 프로젝트", created_by=OWNER_ID)
+    db_session.add_all([project, other])
+    await db_session.flush()
+    analysis, _ = await _workflow(db_session, kind="ANALYSIS", project_id=project.id)
+    own = await _collection(db_session, project_id=project.id)
+    foreign = await _collection(db_session, project_id=other.id)
+
+    assert await up._resolve_analysis_workflow_id(
+        db_session, str(own.id), str(analysis.id), current_user=owner_user()) == analysis.id
+    err = await assert_http_error(
+        up._resolve_analysis_workflow_id(db_session, str(foreign.id), str(analysis.id), current_user=owner_user()), 400)
+    assert "분석 프로젝트" in err.detail
+    await assert_http_error(
+        up._resolve_analysis_workflow_id(db_session, str(own.id), str(analysis.id), current_user=stranger_user()), 403)
+
+
+async def test_upload_keeps_the_chosen_analysis_workflow_on_the_document(db_session, storage, started):  # noqa: F811
+    analysis, _ = await _workflow(db_session, kind="ANALYSIS")
+    collection = await _collection(db_session)
+
+    result = await up.upload_document(
+        _file("a.pdf"), str(collection.id), False, None, db_session, owner_user(), False, str(analysis.id))
+
+    doc = await db_session.get(Document, result["id"])
+    assert str(doc.analysis_workflow_id) == str(analysis.id)
+
+
+async def test_upload_with_a_bad_analysis_workflow_stores_nothing(db_session, storage, started):  # noqa: F811
+    _, [preprocess_version] = await _workflow(db_session)
+    collection = await _collection(db_session)
+
+    await assert_http_error(up.upload_document(
+        _file("a.pdf"), str(collection.id), False, None, db_session, owner_user(), False,
+        str(preprocess_version.workflow_id)), 400)
+
+    assert storage.uploaded == [] and started == []
+
+
+async def test_zip_entries_keep_the_chosen_analysis_workflow(db_session, storage, started):  # noqa: F811
+    analysis, _ = await _workflow(db_session, kind="ANALYSIS")
+
+    result = await up.upload_documents_zip(
+        _zip({"a.pdf": b"%PDF a", "b.pdf": b"%PDF b"}), None, False, None, db_session, owner_user(), False,
+        str(analysis.id))
+
+    ids = [r["document_id"] for r in result["results"]]
+    docs = [await db_session.get(Document, doc_id) for doc_id in ids]
+    assert [str(d.analysis_workflow_id) for d in docs] == [str(analysis.id)] * 2

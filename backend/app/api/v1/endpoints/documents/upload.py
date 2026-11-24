@@ -93,6 +93,40 @@ async def _resolve_preprocess_version_id(
     return version.id
 
 
+async def _resolve_analysis_workflow_id(
+    db: AsyncSession, collection_id: str | None, explicit_workflow_id: str | None,
+    current_user: User | None = None,
+) -> UUID | None:
+    """업로드 창에서 고른 분석 워크플로우를 확인해 그 id 를 돌려준다(2026-11-24). 고르지 않았으면 None 이고, 그러면
+    분석은 컬렉션 기본 분석 워크플로우(없으면 표준 분석)를 쓴다. 분석은 전처리가 끝난 뒤 시작하므로 버전은 고정하지
+    않고 그때의 최신 게시 버전을 쓴다. 그래서 게시된 버전이 하나라도 있어야 한다."""
+    from app.db.models.workflow import WorkflowDefinition, WorkflowVersion
+
+    # 함수를 직접 부르면 인자를 넘기지 않았을 때 Form 기본값 객체가 그대로 온다(new_document is True 와 같은 이유)
+    if not isinstance(explicit_workflow_id, str) or not explicit_workflow_id:
+        return None
+    try:
+        workflow_uuid = UUID(explicit_workflow_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="잘못된 분석 워크플로우 ID 형식입니다")
+    workflow = await db.get(WorkflowDefinition, workflow_uuid)
+    if workflow is None:
+        raise HTTPException(status_code=400, detail="지정한 분석 워크플로우를 찾을 수 없습니다")
+    if workflow.kind != "ANALYSIS":
+        raise HTTPException(status_code=400, detail="분석(ANALYSIS) 워크플로우만 지정할 수 있습니다")
+    if workflow.project_id is not None and current_user is not None:
+        await check_project_access(db, str(workflow.project_id), current_user, min_role="viewer")
+    await ensure_fits_project(db, workflow, await collection_project_id(db, collection_id))
+    published = await db.scalar(
+        select(WorkflowVersion.id).where(
+            WorkflowVersion.workflow_id == workflow.id, WorkflowVersion.published_at.is_not(None)
+        ).limit(1)
+    )
+    if published is None:
+        raise HTTPException(status_code=400, detail=f"'{workflow.name}' 분석 워크플로우에 게시된 버전이 없습니다")
+    return workflow.id
+
+
 async def _start_preprocess_workflow(
     db: AsyncSession, document: Document, workflow_version_id: str | None = None,
     skip_review: bool = False,
@@ -223,6 +257,7 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     new_document: bool = Form(False),
+    analysis_workflow_id: str | None = Form(None),
 ):
     from pathlib import PurePath
 
@@ -230,6 +265,8 @@ async def upload_document(
 
     if collection_id is not None:
         await check_collection_access(db, collection_id, current_user, min_role="editor")
+    # 원본을 저장하기 전에 확인한다. 잘못 고른 분석 워크플로우로 문서만 남으면 안 된다
+    chosen_analysis_id = await _resolve_analysis_workflow_id(db, collection_id, analysis_workflow_id, current_user)
 
     # Defect 4: Validate file size before storing (읽는 단계에서 상한을 강제한다)
     content = await _read_bounded(
@@ -307,6 +344,7 @@ async def upload_document(
         status="QUEUED",
         created_by=str(current_user.id),
         collection_id=collection_id,
+        analysis_workflow_id=chosen_analysis_id,
         **version,
     )
     db.add(document)
@@ -341,6 +379,7 @@ async def upload_documents_zip(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     new_document: bool = Form(False),
+    analysis_workflow_id: str | None = Form(None),
 ):
     """Extracts a .zip and registers each supported document inside it, one by
     one, so a batch that arrives pre-bundled (e.g. downloaded elsewhere) doesn't
@@ -356,6 +395,7 @@ async def upload_documents_zip(
 
     if collection_id is not None:
         await check_collection_access(db, collection_id, current_user, min_role="editor")
+    chosen_analysis_id = await _resolve_analysis_workflow_id(db, collection_id, analysis_workflow_id, current_user)
 
     zip_bytes = await _read_bounded(
         file, _ZIP_MAX_ARCHIVE_BYTES,
@@ -455,6 +495,7 @@ async def upload_documents_zip(
                 status="QUEUED",
                 created_by=str(current_user.id),
                 collection_id=collection_id,
+                analysis_workflow_id=chosen_analysis_id,
                 **version,
             )
             db.add(document)

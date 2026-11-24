@@ -78,6 +78,19 @@ async def _lineage_locked(db: AsyncSession, doc: Document) -> list[Document]:
     return list(versions) or [doc]
 
 
+async def _drop_unfit_analysis_workflow(db: AsyncSession, doc: Document, target: Collection) -> None:
+    """업로드 때 고른 프로젝트 전용 분석 워크플로우는 다른 프로젝트 컬렉션에서 쓸 수 없으므로 지운다. 그러면 옮긴 뒤의
+    분석은 새 컬렉션의 기본 분석을 따른다(2026-11-24, services/workflow_scope.py 규칙)."""
+    from app.db.models.workflow import WorkflowDefinition
+    from app.services.workflow_scope import fits_project
+
+    if not doc.analysis_workflow_id:
+        return
+    workflow = await db.get(WorkflowDefinition, doc.analysis_workflow_id)
+    if workflow is None or not fits_project(workflow.project_id, target.project_id):
+        doc.analysis_workflow_id = None
+
+
 async def move_document(db: AsyncSession, doc: Document, target: Collection, user: User) -> list[str]:
     """문서와 같은 계보의 모든 버전을 대상 컬렉션으로 옮긴다(flush까지). 옮긴 문서 id 목록을 돌려준다.
 
@@ -97,6 +110,7 @@ async def move_document(db: AsyncSession, doc: Document, target: Collection, use
     from_collection = str(doc.collection_id) if doc.collection_id else None
     for version in versions:
         version.collection_id = target.id
+        await _drop_unfit_analysis_workflow(db, version, target)
     log_audit(
         db, str(user.id), "document.move", "document", str(doc.id),
         detail={"from": from_collection, "to": str(target.id), "versions": len(versions)},
