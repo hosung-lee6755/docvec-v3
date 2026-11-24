@@ -216,3 +216,59 @@ def test_korean_heading_style_name_without_outline_level_sets_heading_level(tmp_
     doc.save(str(path))
 
     assert _heading_levels(path) == {"사업 개요": 2}
+
+
+def _extract_single_table(tmp_path, build):
+    doc = DocxDocument()
+    table = doc.add_table(rows=3, cols=3)
+    build(table)
+    path = tmp_path / "merged.docx"
+    doc.save(str(path))
+    result = DOCXAdapter().extract(path, {})
+    (candidate,) = result.pages[0].table_candidates
+    table_text = next(b.text for b in result.pages[0].text_blocks if b.block_type == "table")
+    return candidate, table_text
+
+
+def _fill(table, values):
+    for r, row in enumerate(values):
+        for c, value in enumerate(row):
+            if value is not None:
+                table.cell(r, c).text = value
+
+
+def test_horizontally_merged_cell_is_written_once_with_its_span(tmp_path):
+    # python-docx 의 row.cells 는 가로로 합친 칸을 열 수만큼 되풀이한다. 그대로 쓰면 "직접인건비 소계 | 직접인건비
+    # 소계 | 직접인건비 소계 | 34,000,000"처럼 같은 글이 겹쳐 청크와 표 탭에 들어간다(d5 제안서, 2026-11-24)
+    def build(table):
+        _fill(table, [["구분", "인원", "금액"], ["PM", "1", "100"], ["소계", None, "100"]])
+        table.cell(2, 0).merge(table.cell(2, 1))
+        table.cell(2, 0).text = "소계"
+
+    candidate, table_text = _extract_single_table(tmp_path, build)
+
+    assert candidate.rows[2] == ["소계", "", "100"]
+    assert candidate.spans == [{"row": 2, "col": 0, "row_span": 1, "col_span": 2}]
+    assert table_text.count("소계") == 1
+
+
+def test_vertically_merged_cell_repeats_down_the_grid_and_reports_its_span(tmp_path):
+    # 세로로 합친 칸은 HWP 와 같이 아래 줄에도 글을 되풀이해 줄마다 뜻이 통하게 하고, 화면은 spans 로 합쳐 그린다
+    def build(table):
+        _fill(table, [["직접 인건비", "PM", "100"], [None, "분석가", "80"], ["경비", "회의비", "10"]])
+        table.cell(0, 0).merge(table.cell(1, 0))
+        table.cell(0, 0).text = "직접 인건비"
+
+    candidate, _ = _extract_single_table(tmp_path, build)
+
+    assert [row[0] for row in candidate.rows] == ["직접 인건비", "직접 인건비", "경비"]
+    assert candidate.spans == [{"row": 0, "col": 0, "row_span": 2, "col_span": 1}]
+
+
+def test_table_without_merged_cells_has_no_spans(tmp_path):
+    candidate, _ = _extract_single_table(
+        tmp_path, lambda table: _fill(table, [["가", "나", "다"], ["1", "2", "3"], ["4", "5", "6"]])
+    )
+
+    assert candidate.rows == [["가", "나", "다"], ["1", "2", "3"], ["4", "5", "6"]]
+    assert not candidate.spans

@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 from typing import Iterator
 
+from app.pipeline.adapters.hwpx_structure import grid_from_cells
 from app.pipeline.blocks.table_markdown import rows_to_markdown
 
 from app.pipeline.adapters.base import (
@@ -75,6 +76,39 @@ def _docx_embedded_images(file_path: Path) -> list[bytes]:
             if name.startswith("word/media/") and name.lower().endswith(_IMAGE_SUFFIXES):
                 images.append(z.read(name))
     return images
+
+
+def _table_grid(table) -> tuple[list[list[str]], list[dict]]:
+    """Word 표를 열이 맞는 격자와 합친 칸 목록으로 만든다(HWP 와 같은 grid_from_cells 규칙).
+
+    python-docx 의 row.cells 는 가로로 합친 칸(w:gridSpan)을 열 수만큼 되풀이해 같은 글이 한 줄에 여러 번
+    들어갔다(d5 제안서 "직접인건비 소계", 2026-11-24). 여기서는 칸(w:tc)을 직접 훑어 합친 칸을 한 번만 적고,
+    세로로 이어지는 칸(w:vMerge)은 위 칸의 줄 수를 늘린다."""
+    from docx.table import _Cell
+
+    cells: list[list] = []
+    # 열 번호 → 세로 합치기가 열려 있는 칸(cells 안 위치)
+    open_vertical: dict[int, int] = {}
+    for row_index, tr in enumerate(table._tbl.tr_lst):
+        col = tr.grid_before
+        for tc in tr.tc_lst:
+            span = max(1, tc.grid_span)
+            anchor = open_vertical.get(col)
+            if tc.vMerge == "continue" and anchor is not None:
+                cells[anchor][2] += 1
+            else:
+                cells.append([row_index, col, 1, span, _Cell(tc, table).text.strip()])
+                if tc.vMerge == "restart":
+                    open_vertical[col] = len(cells) - 1
+                else:
+                    open_vertical.pop(col, None)
+            col += span
+    rows, spans = grid_from_cells([tuple(cell) for cell in cells])
+    if rows or not cells:
+        return rows, spans
+    # 격자가 너무 커서 grid_from_cells 가 포기한 표는 예전처럼 python-docx 가 준 칸으로 둔다
+    fallback = [[cell.text.strip() for cell in row.cells] for row in table.rows]
+    return [row for row in fallback if any(row)], []
 
 
 def _iter_block_items(doc) -> Iterator[object]:
@@ -197,12 +231,11 @@ class DOCXAdapter(BaseAdapter):
                             "heading_level": _heading_level(item),
                         })
                 elif isinstance(item, DocxTable):
-                    rows = [[cell.text.strip() for cell in row.cells] for row in item.rows]
-                    cleaned_rows = [row for row in rows if any(cell for cell in row)]
+                    cleaned_rows, spans = _table_grid(item)
                     if not cleaned_rows:
                         continue
                     table_ordinal += 1
-                    table_candidates.append(RawTableCandidate(page_number=1, rows=cleaned_rows))
+                    table_candidates.append(RawTableCandidate(page_number=1, rows=cleaned_rows, spans=spans or None))
                     table_text = rows_to_markdown(cleaned_rows)
                     text_blocks.append(
                         RawTextBlock(

@@ -633,7 +633,9 @@ class TextExtractBlock(BaseBlock):
         # 1.43.0: HWP·HWPX 쪽 나눔이 따르는 원본 미리보기 PDF를 한글과 같게 고쳤다(빈 꼬리말, 표 뒤 빈 줄,
         #         preview_odt_fix.py). 블록 코드는 같아도 쪽 결과가 달라지므로 실행 캐시를 다시 쓰지 않게 올린다.
         #         NS-AM 검사매뉴얼이 34쪽(빈 쪽 포함)에서 원본과 같은 19쪽이 된다(2026-11-23).
-        return "1.43.0"
+        # 1.44.0: DOCX 표의 합친 칸을 한 번만 적고 합친 칸 목록(spans)을 남긴다. 예전에는 가로로 합친 칸이 열 수만큼
+        #         되풀이됐다(d5 제안서 "직접인건비 소계", docx_adapter._table_grid, 2026-11-24).
+        return "1.44.0"
 
     @property
     def category(self) -> str:

@@ -310,7 +310,10 @@ def _classify(
     if _HEADING_KOREAN_RE.match(line):
         return "HEADING", 1
     if _HEADING_SQUARE_BULLET_RE.match(line):
-        return "HEADING", 1
+        # 보도자료·지침은 본문 문장도 □ 로 시작한다. 제목 길이를 넘으면 문단이다(d1 보도자료, 2026-11-24)
+        if len(line.strip()) <= _HEADING_MAX_CHARS:
+            return "HEADING", 1
+        return "PARAGRAPH", None
     if _LIST_RE.match(line):
         return "LIST_ITEM", None
     # 문서가 스스로 "개요 N" 스타일로 표시한 문단은 그 수준의 제목이다(HWPX, 전체 점검 2-12).
@@ -448,11 +451,18 @@ def _build_blocks(
     header_offsets = _running_header_offsets(text, page_map)
     # 마지막 제목 상자의 수준. 그 뒤의 줄 제목은 이만큼 아래로 내린다(title_box.py)
     box_shift = 0
-    nester = _FontHeadingNester(_numbered_heading_sizes(text, layout_entries), sizes_follow_markup=markup_headings)
+    # 번호·붙임 표시가 든 제목 상자를 이미 만났는지. 그 뒤의 번호 없는 표어 상자는 제목으로 올리지 않는다
+    marked_box_seen = False
+    nester =_FontHeadingNester(_numbered_heading_sizes(text, layout_entries), sizes_follow_markup=markup_headings)
 
     def flush() -> None:
         nonlocal buf_type, buf_start, buf_end, buf_lines, box_shift
-        box = title_box_heading(buf_lines, _HEADING_MAX_CHARS) if buf_type == "TABLE" else None
+        nonlocal marked_box_seen
+        box = None
+        if buf_type == "TABLE":
+            marked = title_box_heading(buf_lines, _HEADING_MAX_CHARS, allow_slogan=False)
+            marked_box_seen = marked_box_seen or marked is not None
+            box = marked or title_box_heading(buf_lines, _HEADING_MAX_CHARS, allow_slogan=not marked_box_seen)
         if box:
             blocks.append(("HEADING", box[1], buf_start, buf_end, box[0], None))
             box_shift = box[1]
@@ -774,7 +784,11 @@ class StructureAnalyzeBlock(BaseBlock):
         #         쪽 가장자리 줄을 셀 때 표 줄을 빼서, 표가 뒤에 붙은 쪽의 꼬리말도 머리말·꼬리말로 잡는다.
         # 1.22.0: Docling 이 일반 글로 읽은 장 구분 쪽의 "PART 01"과 같은 쪽 바로 뒤의 장 이름을 1단계 제목 하나로
         #         합친다(경기도 데이터분석 사례집, 2026-11-20 감사).
-        return "1.22.0"
+        # 1.23.0: 제목 길이(50자)를 넘는 □ 줄은 본문 문장이므로 문단으로 둔다. 붙임·참고 표시 상자("참고1 | 법령체계
+        #         개편(안)")와 번호 없는 표어 상자(" | 제명을 바꾼다! (…)")도 제목 상자로 읽는다(title_box.py, 2026-11-24).
+        # 1.23.1: 번호·붙임 제목 상자를 이미 쓴 문서에서는 표어 상자를 제목으로 올리지 않는다. 조사료 지침의 주체 표시
+        #         상자("시·도(시·군), 농협경제지주…")가 1단계 제목이 되어 장 밖으로 튀어나왔다(2026-11-24).
+        return "1.23.1"
 
     @property
     def category(self) -> str:

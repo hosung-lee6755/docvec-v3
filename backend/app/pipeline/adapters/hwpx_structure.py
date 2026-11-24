@@ -148,7 +148,7 @@ def table_grid(table, cell_text) -> tuple[list[list[str]], list[dict]]:
 
 
 def grid_from_cells(cells: list[tuple[int, int, int, int, str]]) -> tuple[list[list[str]], list[dict]]:
-    """(줄, 열, 줄 수, 열 수, 글) 목록으로 격자와 합친 칸 목록을 만든다. HWPX와 구형 HWP가 함께 쓴다."""
+    """(줄, 열, 줄 수, 열 수, 글) 목록으로 격자와 합친 칸 목록을 만든다. HWPX, 구형 HWP, DOCX 가 함께 쓴다."""
     if not cells:
         return [], []
     height = max(row + row_span for row, _, row_span, _, _ in cells)

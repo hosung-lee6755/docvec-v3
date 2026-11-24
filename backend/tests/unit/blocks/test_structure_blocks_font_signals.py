@@ -159,3 +159,12 @@ def test_addressee_line_of_a_form_is_not_a_heading_even_when_bold_and_large():
         assert _classify(line, _line(line, font_size=17.0, is_bold=True), body) == ("PARAGRAPH", None)
     # 같은 크기의 일반 제목은 그대로 제목이다
     assert _classify("사업 개요", _line("사업 개요", font_size=17.0, is_bold=True), body)[0] == "HEADING"
+
+
+def test_long_square_bullet_sentence_is_a_paragraph():
+    # 보도자료와 지침은 "□ 행정안전부는 … 개정하기로 하고 오늘 입법예고했다." 같은 본문 문장을 □ 로 시작한다.
+    # 제목 길이를 넘는 □ 줄까지 1단계 제목으로 올리면 절 경로가 문장으로 채워진다(d1 보도자료, 2026-11-24)
+    sentence = "□ 행정안전부는 최근의 행정환경에 부응하여 정부의 일하는 방식을 개선할 수 있도록 1991년 제정된 규정을 전부 개정한다."
+    assert len(sentence) > 50
+    assert _classify(sentence, None, None) == ("PARAGRAPH", None)
+    assert _classify("□ 기계설비의 착공 전 확인과 사용 전 검사 대상 건축물(시행령 제11조, 별표 5)", None, None) == ("HEADING", 1)
