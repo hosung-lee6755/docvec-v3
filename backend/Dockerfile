@@ -27,11 +27,17 @@ COPY pyproject.toml poetry.lock* ./
 
 FROM base AS production
 RUN poetry install --without dev,embed --no-root
+# 원문 보기용 LibreOffice calc, impress와 한글 확장 H2Orestart(2026-11-23)
+COPY scripts/install_original_preview_tools.sh /tmp/
+RUN sh /tmp/install_original_preview_tools.sh && rm -f /tmp/install_original_preview_tools.sh
 COPY . .
 RUN poetry install --without dev,embed
 
 FROM base AS development
 RUN poetry install --without embed --no-root
+# 원문 보기용 LibreOffice calc, impress와 한글 확장 H2Orestart(2026-11-23)
+COPY scripts/install_original_preview_tools.sh /tmp/
+RUN sh /tmp/install_original_preview_tools.sh && rm -f /tmp/install_original_preview_tools.sh
 COPY . .
 RUN poetry install --without embed
 

@@ -61,7 +61,7 @@ HIGHLIGHT_COUNT_HEADER = "X-Highlight-Count"
 def _highlight_pdf_bytes(document_id: str, filename: str, minio_key: str) -> bytes | None:
     """위치를 그릴 PDF. PDF 원본은 그대로 쓰고, 다른 형식은 미리보기 PDF를 쓴다(없으면 만든다).
     미리보기가 PDF로 만들어지지 않는 형식(TXT, HTML 등)은 None이다."""
-    from app.services.preview_service import preview_url_for
+    from app.services.preview_service import cached_preview_pdf, preview_url_for
     from app.services.storage import storage_service
 
     if filename.lower().endswith(".pdf"):
@@ -69,7 +69,7 @@ def _highlight_pdf_bytes(document_id: str, filename: str, minio_key: str) -> byt
     _url, kind, _approximate = preview_url_for(document_id, filename, minio_key)
     if kind != "pdf":
         return None
-    return storage_service.download_file(settings.minio_bucket_artifacts, f"preview/{document_id}.pdf")
+    return cached_preview_pdf(document_id)
 
 
 @router.get("/{document_id}/chunks/{chunk_id}/highlight")

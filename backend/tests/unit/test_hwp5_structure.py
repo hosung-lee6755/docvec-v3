@@ -131,7 +131,7 @@ def test_extract_hwp_fills_line_layout_and_table_spans():
     )
 
     with patch.dict("sys.modules", {"hwp5": MagicMock(), "hwp5.xmlmodel": module}), \
-         patch.object(hwp, "_hwp_bindata_images", return_value=[]):
+         patch.object(hwp, "_hwp_bindata_named", return_value=[]):
         doc = HWPAdapter().extract(Path("a.hwp"), {})
 
     layout = doc.metadata["line_layout"]

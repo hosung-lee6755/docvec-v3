@@ -5,6 +5,8 @@ LibreOffice 가 다시 배치한다). 원문 대조 탭은 미리보기 PDF 를 
 잘라야 두 화면이 함께 움직인다. 각 미리보기 쪽 첫머리 글을 본문에서 순서대로 찾아 쪽 경계로 삼는다.
 """
 
+import re
+
 # 쪽 첫머리에서 찾는 글자 수(글자·숫자만 센다). 짧으면 엉뚱한 곳에 맞고, 길면 조금만 달라도 못 찾는다
 _ANCHOR_CHARS = 16
 # 첫머리가 본문에 없을 때(머리말이 정제로 지워진 경우 등) 쪽 안에서 앞으로 밀어 가며 다시 찾는 간격과 한도
@@ -43,10 +45,18 @@ def _find_page_start(page_text: str, body: str, cursor: int) -> int | None:
     return None
 
 
+# 파싱 본문이 표와 그림 앞에 붙이는 머리표 줄("[표 3]", "[그림 5]"). 미리보기 쪽에는 이 글이 없다
+_LABEL_BEFORE_RE = re.compile(r"(?:^|\n)(\[(?:표|그림) \d+\])[ \t]*\n\s*$")
+
+
 def _line_start(text: str, position: int, floor: int) -> int:
-    """경계가 줄 가운데에 걸리면 그 줄 처음으로 당긴다(앞 경계보다 앞으로는 가지 않는다)."""
+    """경계가 줄 가운데에 걸리면 그 줄 처음으로 당긴다(앞 경계보다 앞으로는 가지 않는다). 바로 앞 줄이 표·그림
+    머리표뿐이면 머리표 줄 처음으로 당긴다. 미리보기 쪽은 표 칸 글로 시작하므로 그러지 않으면 머리표만 앞 쪽
+    끝에 남는다(NS-AM 3쪽 끝의 "[표 4]", 2026-11-23)."""
     newline = text.rfind("\n", floor, position)
-    return newline + 1 if newline >= 0 else position
+    start = newline + 1 if newline >= 0 else position
+    label = _LABEL_BEFORE_RE.search(text[floor:start])
+    return floor + label.start(1) if label else start
 
 
 def split_text_by_pages(text: str, page_texts: list[str]) -> list[str] | None:

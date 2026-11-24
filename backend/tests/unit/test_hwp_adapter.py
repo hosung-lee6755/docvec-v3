@@ -71,6 +71,18 @@ def test_hwpx_collect_text_with_and_without_table_skipping():
     assert hwp._hwpx_collect_text(para, skip_tables=True) == "앞뒤"
 
 
+def test_hwpx_collect_text_keeps_text_after_line_breaks_tabs_and_wide_spaces():
+    # <hp:t> 안에서 줄바꿈, 전각 공백, 탭 뒤의 글은 그 요소의 tail 이다. 예전에는 t.text 만 읽어 통째로 빠졌다
+    # ("중소벤처기업부<fwSpace/>장관"의 "장관", "② AAS (IEC 63278)", 스마트공장 공고, 2026-11-23)
+    root = ET.fromstring(_hp(
+        "<hp:p><hp:run><hp:t>중소벤처기업부<hp:fwSpace/>장관</hp:t></hp:run>"
+        "<hp:run><hp:t> ① OPC-UA<hp:lineBreak/>② AAS (IEC 63278)<hp:tab/>끝</hp:t></hp:run></hp:p>"
+    ))
+
+    for skip_tables in (False, True):
+        assert hwp._hwpx_collect_text(root[0], skip_tables=skip_tables) == "중소벤처기업부 장관 ① OPC-UA ② AAS (IEC 63278) 끝"
+
+
 def test_hwpx_collect_text_handles_empty_t_element():
     root = ET.fromstring(_hp("<hp:p><hp:t/></hp:p>"))
 
@@ -360,7 +372,7 @@ def test_extract_hwp_parses_body_tables_and_embedded_images():
     modules = _fake_hwp5(_hwp_doc_xml(_hwp_p("본문", inner=table)))
 
     with patch.dict("sys.modules", modules), \
-         patch.object(hwp, "_hwp_bindata_images", return_value=[PNG]):
+         patch.object(hwp, "_hwp_bindata_named", return_value=[("BIN0001", PNG)]):
         doc = HWPAdapter().extract(Path("a.hwp"), {})
 
     assert doc.format_id == "hwp" and doc.page_count == 1 and doc.warnings == []
@@ -375,7 +387,7 @@ def test_extract_hwp_without_bodytext_yields_empty_page():
     modules = _fake_hwp5(b"<HwpDoc/>")
 
     with patch.dict("sys.modules", modules), \
-         patch.object(hwp, "_hwp_bindata_images", return_value=[]):
+         patch.object(hwp, "_hwp_bindata_named", return_value=[]):
         doc = HWPAdapter().extract(Path("a.hwp"), {})
 
     assert doc.pages[0].text_blocks == []
@@ -385,7 +397,7 @@ def test_extract_hwp_image_failure_is_a_warning_not_an_error():
     modules = _fake_hwp5(_hwp_doc_xml(_hwp_p("본문")))
 
     with patch.dict("sys.modules", modules), \
-         patch.object(hwp, "_hwp_bindata_images", side_effect=RuntimeError("ole broken")):
+         patch.object(hwp, "_hwp_bindata_named", side_effect=RuntimeError("ole broken")):
         doc = HWPAdapter().extract(Path("a.hwp"), {})
 
     assert [b.text for b in doc.pages[0].text_blocks] == ["본문"]
@@ -588,3 +600,45 @@ def test_frame_dropped_for_its_inner_table_leaves_no_parent():
     hwp._walk_hwp_body(_hwp_xml(frame), [], [], [], ctx)
 
     assert ctx.parents == {}
+
+
+# ---- 그림 자리(2026-11-23): 그림을 본문에 박힌 문단 뒤에 둔다. 예전에는 모든 그림이 1쪽에 붙었다
+def test_extract_hwp_anchors_each_picture_after_its_host_paragraph():
+    docinfo = (
+        "<DocInfo><IdMappings>"
+        '<BinData><BinDataEmbedding storage-id="BIN0001" ext="png"/></BinData>'
+        '<BinData><BinDataEmbedding storage-id="BIN0002" ext="jpg"/></BinData>'
+        "</IdMappings></DocInfo>"
+    )
+    picture = '<GShapeObjectControl><ShapePicture><PictureInfo bindata-id="2"/></ShapePicture></GShapeObjectControl>'
+    body = _hwp_p("표지") + _hwp_p("시험 장비", inner=picture)
+    xml = f"<HwpDoc>{docinfo}<BodyText>{body}</BodyText></HwpDoc>".encode()
+
+    with patch.dict("sys.modules", _fake_hwp5(xml)), \
+         patch.object(hwp, "_hwp_bindata_named", return_value=[("BIN0001", PNG), ("BIN0002", JPG)]):
+        page = HWPAdapter().extract(Path("a.hwp"), {}).pages[0]
+
+    host = page.text_blocks[1]
+    assert host.text == "시험 장비"
+    assert [(r.image_bytes, r.anchor) for r in page.image_regions] == [(JPG, host), (PNG, None)]
+
+
+def test_extract_hwpx_anchors_pictures_with_manifest_ids(tmp_path):
+    path = tmp_path / "doc.hwpx"
+    hc = "http://www.hancom.co.kr/hwpml/2011/core"
+    pic = f'<hp:pic xmlns:hc="{hc}"><hc:img binaryItemIDRef="photo"/></hp:pic>'
+    section = _hp(_p("첫 문단") + f"<hp:p><hp:run><hp:t>그림 설명</hp:t>{pic}</hp:run></hp:p>")
+    manifest = (
+        '<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest>'
+        '<opf:item id="photo" href="BinData/image2.png" media-type="image/png"/></opf:manifest></opf:package>'
+    )
+    _write_hwpx(
+        path, {"Contents/section0.xml": section, "Contents/content.hpf": manifest},
+        extra={"BinData/image1.png": PNG, "BinData/image2.png": JPG},
+    )
+
+    page = HWPAdapter().extract(path, {}).pages[0]
+
+    host = page.text_blocks[1]
+    assert host.text == "그림 설명"
+    assert [(r.image_bytes, r.anchor) for r in page.image_regions] == [(JPG, host), (PNG, None)]

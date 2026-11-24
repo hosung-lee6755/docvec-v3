@@ -46,3 +46,25 @@ def test_returns_none_when_most_pages_cannot_be_found_or_there_is_one_page():
     assert split_text_by_pages(BODY, unrelated) is None
     assert split_text_by_pages(BODY, ["한 쪽뿐"]) is None
     assert split_text_by_pages("", ["가", "나"]) is None
+
+
+def test_table_label_that_heads_a_page_moves_with_its_table():
+    # 파싱 본문은 표 앞에 "[표 N]" 머리표를 붙이지만 미리보기 쪽은 표 칸 글로 시작한다. 머리표가 앞 쪽 끝에 남지
+    # 않고 표와 같은 쪽으로 가야 한다(NS-AM 3쪽 끝에 "[표 4]"가 붙었다, 2026-11-23)
+    body = (
+        "[표 3]\n절차서 2 | 검사번호 | KR-I-NSAM-02.01 | 공급확인서 및 성적서로 판정한다.\n\n"
+        "[표 4]\n절차서 3 | 검사번호 | KR-I-NSAM-03.01 | 형태 검사 일반구조 외함\n\n"
+        "[그림 5]\n절차서 4 | 검사번호 | KR-I-NSAM-04.01 | 형태 검사 전환부\n"
+    )
+    pages = [
+        "절차서 2 검사번호 KR-I-NSAM-02.01 공급확인서 및 성적서로 판정한다.",
+        "절차서 3 검사번호 KR-I-NSAM-03.01 형태 검사 일반구조 외함",
+        "절차서 4 검사번호 KR-I-NSAM-04.01 형태 검사 전환부",
+    ]
+
+    pieces = split_text_by_pages(body, pages)
+
+    assert pieces is not None
+    assert "[표 4]" not in pieces[0] and pieces[1].startswith("[표 4]")
+    assert pieces[2].startswith("[그림 5]")
+    assert "".join(pieces) == body

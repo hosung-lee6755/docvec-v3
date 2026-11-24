@@ -286,7 +286,7 @@ def test_run_carries_upstream_output():
 def test_block_metadata():
     block = qb.QualityCheckBlock()
     assert block.block_type == "quality_check"
-    assert block.block_version == "1.10.0"
+    assert block.block_version == "1.11.0"
     assert block.category == "품질·제어"
     assert block.config_schema is qb.QualityCheckConfig
     with pytest.raises(Exception):
@@ -306,11 +306,26 @@ def test_normalization_is_not_scored_so_it_cannot_inflate_the_average():
     assert set(result.metrics) >= {"textExtraction", "ocr", "structure", "chunking"}
 
 
-def test_non_pdf_is_not_measured_and_reason_is_recorded():
-    result, _ = _run(_doc(mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def test_non_pdf_without_a_faithful_preview_is_not_measured_and_reason_is_recorded():
+    # 원본을 직접 그리지 못해 재구성 미리보기만 있으면 원본 대조가 되지 않는다
+    with patch.object(qb, "_load_preview_page_texts", return_value=None):
+        result, _ = _run(_doc(mime_type=_DOCX_MIME))
     assert result.metrics["source_recall_status"] == "unsupported_format"
     assert result.metrics["source_recall"] is None
     assert "sourceRecall" not in result.metrics
+
+
+def test_non_pdf_is_measured_against_its_faithful_preview_pdf():
+    # 2026-11-23: DOCX, HWP 같은 형식도 원본을 그대로 그린 미리보기 PDF의 글과 대조한다
+    with patch.object(qb, "_load_preview_page_texts", return_value=[PDF_PAGE]) as load, \
+         patch.object(qb, "_load_pdf_page_texts", side_effect=AssertionError("PDF 원본 경로를 타면 안 된다")):
+        result, _ = _run(_doc(mime_type=_DOCX_MIME, parsed_text=PDF_PAGE * 3), config={"review_policy": "auto_pass"})
+    load.assert_called_once()
+    assert result.metrics["source_recall_status"] == "measured"
+    assert result.metrics["sourceRecall"] == 100.0
 
 
 def test_pdf_with_full_recall_scores_100_and_records_measurement():

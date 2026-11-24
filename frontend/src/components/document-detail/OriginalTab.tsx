@@ -1,6 +1,7 @@
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { MarkdownLink } from './MarkdownLink'
 import { usePdfBlobUrl } from '../../hooks/usePdfBlobUrl'
 import { ViewModeToggle } from './documentDetailParts'
 import { toRagRecordsJson, type RagRecordSource } from './documentDetailHelpers'
@@ -179,7 +180,7 @@ export default function OriginalTab({
             )}
             {!isContentLoading && !showJson && !isCurrentPageEmpty && (
               <div className="markdown-body" style={{ fontSize: 13, lineHeight: 1.7 }}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
                   {currentPageText ?? content?.full_text ?? ''}
                 </ReactMarkdown>
               </div>

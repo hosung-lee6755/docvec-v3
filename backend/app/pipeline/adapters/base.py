@@ -86,6 +86,9 @@ class RawImageRegion:
     native_text: str | None = None
     # Docling 경로의 그림 요소 id. 그림 글 블록이 이 id를 이어받아 구조 노드가 그 글의 위치를 갖게 된다(2026-11-20).
     element_id: str | None = None
+    # 좌표가 없는 형식(HWP·HWPX)에서 그림이 놓인 자리. 이 글 블록 뒤에 둔다. "start"는 첫 블록 앞,
+    # None 이면 좌표(bbox)로 자리를 찾거나 쪽 끝에 둔다(hwp_pictures.py, 2026-11-23)
+    anchor: "RawTextBlock | str | None" = None
 
 
 @dataclass

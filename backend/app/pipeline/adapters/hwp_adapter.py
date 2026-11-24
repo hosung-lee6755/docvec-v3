@@ -23,9 +23,17 @@ from app.pipeline.adapters.hwpx_structure import (
     paragraph_layout,
     table_grid,
 )
+from app.pipeline.adapters.hwp_pictures import (
+    anchored_image_regions,
+    hwp_bin_stems,
+    hwp_picture_refs,
+    hwpx_manifest_stems,
+    hwpx_picture_refs,
+)
 from app.pipeline.adapters.nested_tables import InnerTables, is_frame_only, is_separable_table
 
 HWPX_HEADER = "Contents/header.xml"
+HWPX_MANIFEST = "Contents/content.hpf"
 
 _IMAGE_MAGIC_PREFIXES = (b"\x89PNG", b"\xff\xd8", b"BM", b"GIF8", b"II*\x00", b"MM\x00*")
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".tif")
@@ -36,7 +44,12 @@ def _looks_like_image(data: bytes) -> bool:
 
 
 def _hwp_bindata_images(file_path) -> list[bytes]:
-    """Reads embedded images from a binary .hwp's BinData/* OLE streams.
+    return [data for _stem, data in _hwp_bindata_named(file_path)]
+
+
+def _hwp_bindata_named(file_path) -> list[tuple[str, bytes]]:
+    """Reads embedded images from a binary .hwp's BinData/* OLE streams, with
+    each stream's name stem (BIN0001) so body picture controls can point at it.
     Individual streams may be raw or raw-deflate compressed depending on each
     BinData record's compression flag (not re-parsed here) — detect by image
     magic bytes first, then fall back to zlib raw-window decompression."""
@@ -44,7 +57,7 @@ def _hwp_bindata_images(file_path) -> list[bytes]:
 
     import olefile
 
-    images: list[bytes] = []
+    images: list[tuple[str, bytes]] = []
     ole = olefile.OleFileIO(str(file_path))
     try:
         for entry in ole.listdir():
@@ -60,18 +73,26 @@ def _hwp_bindata_images(file_path) -> list[bytes]:
                     continue
                 if not _looks_like_image(data):
                     continue
-            images.append(data)
+            images.append((entry[1].rsplit(".", 1)[0], data))
     finally:
         ole.close()
     return images
 
 
 def _hwpx_bindata_images(zf) -> list[bytes]:
-    return [
-        zf.read(name)
-        for name in sorted(zf.namelist())
-        if "BinData/" in name and name.lower().endswith(_IMAGE_SUFFIXES)
-    ]
+    return [data for _stem, data in _hwpx_bindata_named(zf)]
+
+
+def _hwpx_bindata_named(zf, manifest_stems: dict[str, str] | None = None) -> list[tuple[str, bytes]]:
+    """BinData 그림을 (참조 이름, 내용)으로. 참조 이름은 본문 hc:img 의 binaryItemIDRef 와 같은 매니페스트 id 이고,
+    매니페스트에 없으면 파일 이름 앞부분(image1)이다."""
+    id_by_stem = {stem: item_id for item_id, stem in (manifest_stems or {}).items()}
+    named = []
+    for name in sorted(zf.namelist()):
+        if "BinData/" in name and name.lower().endswith(_IMAGE_SUFFIXES):
+            stem = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            named.append((id_by_stem.get(stem, stem), zf.read(name)))
+    return named
 
 
 def _hwpx_local_tag(elem) -> str:
@@ -79,16 +100,31 @@ def _hwpx_local_tag(elem) -> str:
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
+# <hp:t> 안에 끼는 글자 요소. 요소 자리에 이 글자를 두고, 요소 뒤의 글(tail)도 이어 읽는다
+_HWPX_INLINE_CHARS = {"lineBreak": " ", "tab": " ", "fwSpace": " ", "nbSpace": " ", "hyphen": "-"}
+
+
+def _hwpx_t_text(t) -> str:
+    """<hp:t> 한 개의 글. 줄바꿈, 탭, 전각 공백 같은 요소 뒤의 글은 XML에서 그 요소의 tail 이라 t.text 에 없다.
+    예전에는 t.text 만 읽어 "중소벤처기업부<fwSpace/>장관"의 "장관"처럼 요소 뒤 글이 통째로 빠졌다(2026-11-23)."""
+    parts = [t.text or ""]
+    for child in t:
+        parts.append(_HWPX_INLINE_CHARS.get(_hwpx_local_tag(child), ""))
+        parts.append("".join(child.itertext()))
+        parts.append(child.tail or "")
+    return "".join(parts)
+
+
 def _hwpx_collect_text(elem, *, skip_tables: bool = False) -> str:
     if not skip_tables:
-        return "".join(t.text or "" for t in elem.iter() if _hwpx_local_tag(t) == "t")
+        return "".join(_hwpx_t_text(t) for t in elem.iter() if _hwpx_local_tag(t) == "t")
 
     parts: list[str] = []
 
     def _walk(e) -> None:
         tag = _hwpx_local_tag(e)
         if tag == "t":
-            parts.append(e.text or "")
+            parts.append(_hwpx_t_text(e))
             return
         if tag == "tbl":
             return
@@ -171,6 +207,19 @@ class _HwpxContext:
     titles: dict[int, str] = field(default_factory=dict)
     # 칸 안에서 떼어 낸 표 번호(0부터) → (바깥 표 번호, 들어 있던 칸). 표 후보의 parent_table_id·parent_cell 이 된다
     parents: dict[int, tuple[int, dict | None]] = field(default_factory=dict)
+    # 본문에서 만난 그림이 가리키는 BinData 이름 앞부분(문서 순서). order 의 ("img", 순번)이 이 목록을 가리킨다
+    image_refs: list[str] = field(default_factory=list)
+    # HWP: bindata-id → BinData 스트림 이름 앞부분(hwp_pictures.hwp_bin_stems)
+    bin_stems: dict[str, str] = field(default_factory=dict)
+
+
+def _record_pictures(refs: list[str], order: list | None, ctx: "_HwpxContext | None") -> None:
+    """본문에서 만난 그림을 문단·표와 같은 순서 목록에 남긴다. 그림 글은 이 자리 뒤에 놓인다(hwp_pictures.py)."""
+    if ctx is None:
+        return
+    for ref in refs:
+        ctx.image_refs.append(ref)
+        _record(order, "img", len(ctx.image_refs) - 1)
 
 
 def _hwpx_table_rows(tbl_elem) -> list[list[str]]:
@@ -324,8 +373,11 @@ def _walk_hwp_body(
             rows, spans = hwp_table_grid(table_body, partial(_hwp_cell_text, inner=inner))
             if rows:
                 _add_table(rows, spans, inner, None, tables, order, ctx)
+            # 칸 안 그림은 표 바로 뒤에 둔다
+            _record_pictures(hwp_picture_refs(table_body, ctx.bin_stems if ctx else {}), order, ctx)
         return
     if tag == "GShapeObjectControl":
+        _record_pictures(hwp_picture_refs(elem, ctx.bin_stems if ctx else {}), order, ctx)
         return
     if tag == "Paragraph":
         text = _hwp_collect_text(elem).strip()
@@ -354,6 +406,7 @@ def _walk_hwpx(
     tag = _hwpx_local_tag(elem)
     if tag == "tbl":
         _add_hwpx_table(elem, tables, order, ctx)
+        _record_pictures(hwpx_picture_refs(elem), order, ctx)
         return
     if tag == "p":
         text = _hwpx_collect_text(elem, skip_tables=True).strip()
@@ -363,6 +416,8 @@ def _walk_hwpx(
             if ctx is not None:
                 ctx.layout.append(paragraph_layout(elem, text, ctx.styles))
         _collect_nested_hwpx_tables(elem, tables, order, ctx)
+        # 문단(과 그 안의 표 칸)에 박힌 그림은 문단과 표 뒤에 둔다
+        _record_pictures(hwpx_picture_refs(elem), order, ctx)
         return
     for child in elem:
         _walk_hwpx(child, paragraphs, tables, order, ctx)
@@ -372,10 +427,12 @@ def _ordered_text_blocks(
     paragraphs: list[str], tables: list[list[list[str]]], order: list[tuple[str, int]],
     spans: dict[int, list[dict]] | None = None, titles: dict[int, str] | None = None,
     parents: dict[int, tuple[int, dict | None]] | None = None,
+    image_anchors: list | None = None,
 ) -> tuple[list[RawTextBlock], list[RawTableCandidate]]:
     """문단과 표를 문서에 나온 순서대로 블록으로 만든다. 예전에는 표를 모두 문서 끝에 붙여 표가 설명 문단과
     떨어지고, 청크에서 무슨 표인지 알 수 없었다(2026-11-13 검토). 표 번호 [표 N]도 문서 순서다.
-    칸 안에서 떼어 낸 표는 제목을 표 번호 다음 줄에 적는다. 구조 분석은 "[표 N]"만 있는 줄을 표의 시작으로 본다."""
+    칸 안에서 떼어 낸 표는 제목을 표 번호 다음 줄에 적는다. 구조 분석은 "[표 N]"만 있는 줄을 표의 시작으로 본다.
+    그림("img")은 블록을 만들지 않고, image_anchors 에 (그림 순번, 바로 앞 블록 또는 "start")를 남긴다."""
     titles = titles or {}
     parents = parents or {}
     ids = [str(uuid4()) for _ in tables]
@@ -389,6 +446,10 @@ def _ordered_text_blocks(
     ]
     text_blocks: list[RawTextBlock] = []
     for kind, index in order:
+        if kind == "img":
+            if image_anchors is not None:
+                image_anchors.append((index, text_blocks[-1] if text_blocks else "start"))
+            continue
         if kind == "p":
             text_blocks.append(RawTextBlock(text=paragraphs[index], page_number=1))
             continue
@@ -457,6 +518,7 @@ class HWPAdapter(BaseAdapter):
             body = root.find("BodyText")
             if body is not None:
                 ctx.styles = load_hwp_styles(root)
+                ctx.bin_stems = hwp_bin_stems(root)
                 _walk_hwp_body(body, paragraphs, raw_tables, order, ctx)
         except Exception as exc:
             return RawParsedDocument(
@@ -472,15 +534,16 @@ class HWPAdapter(BaseAdapter):
         # can match each paragraph against the rendered preview PDF's per-page
         # text and assign it a real page number — see hwp_adapter.py's
         # page_number=1 placeholders below, which that pass overwrites.
-        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order, ctx.spans, ctx.titles, ctx.parents)
+        image_anchors: list = []
+        text_blocks, table_candidates = _ordered_text_blocks(
+            paragraphs, raw_tables, order, ctx.spans, ctx.titles, ctx.parents, image_anchors,
+        )
 
         warnings: list[str] = []
         image_regions: list[RawImageRegion] = []
         try:
-            image_regions = [
-                RawImageRegion(page_number=1, bbox=(0, 0, 0, 0), image_bytes=data)
-                for data in _hwp_bindata_images(file_path)
-            ]
+            # 그림은 본문에 박힌 자리(그림이 들어 있던 문단 뒤)와 함께 낸다(hwp_pictures.py, 2026-11-23)
+            image_regions = anchored_image_regions(ctx.image_refs, image_anchors, _hwp_bindata_named(file_path))
         except Exception as img_exc:
             warnings.append(f"HWP image extraction failed: {img_exc}")
 
@@ -514,7 +577,8 @@ class HWPAdapter(BaseAdapter):
                     if name.startswith("Contents/") and name.endswith(".xml"):
                         with z.open(name) as f:
                             _walk_hwpx(parse_xml(f), paragraphs, raw_tables, order, ctx)
-                raw_images = _hwpx_bindata_images(z)
+                manifest = z.read(HWPX_MANIFEST) if HWPX_MANIFEST in z.namelist() else b""
+                named_images = _hwpx_bindata_named(z, hwpx_manifest_stems(manifest) if manifest else None)
         except Exception as exc:
             return RawParsedDocument(
                 format_id="hwpx",
@@ -527,7 +591,10 @@ class HWPAdapter(BaseAdapter):
         # See the matching comment in _extract_hwp: one block per paragraph so
         # the repagination pass can locate each paragraph independently in the
         # rendered preview PDF's per-page text.
-        text_blocks, table_candidates = _ordered_text_blocks(paragraphs, raw_tables, order, ctx.spans, ctx.titles, ctx.parents)
+        image_anchors: list = []
+        text_blocks, table_candidates = _ordered_text_blocks(
+            paragraphs, raw_tables, order, ctx.spans, ctx.titles, ctx.parents, image_anchors,
+        )
 
         page = RawPage(
             page_number=1,
@@ -535,10 +602,7 @@ class HWPAdapter(BaseAdapter):
             height=842,
             text_blocks=text_blocks,
             table_candidates=table_candidates,
-            image_regions=[
-                RawImageRegion(page_number=1, bbox=(0, 0, 0, 0), image_bytes=data)
-                for data in raw_images
-            ],
+            image_regions=anchored_image_regions(ctx.image_refs, image_anchors, named_images),
         )
         return RawParsedDocument(
             format_id="hwpx", page_count=1, pages=[page], metadata={"line_layout": ctx.layout}, warnings=[]

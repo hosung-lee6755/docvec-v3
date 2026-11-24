@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # 원문 재현율 측정 상태 — 리포트 metrics.source_recall_status 에 그대로 기록한다.
 RECALL_MEASURED = "measured"
-RECALL_UNSUPPORTED = "unsupported_format"  # PDF 가 아님(DOCX/HWP 등은 비교할 텍스트 레이어가 없다)
+RECALL_UNSUPPORTED = "unsupported_format"  # 원본을 그대로 그린 PDF 가 없음(CSV, TXT, 재구성 미리보기)
 RECALL_NO_TEXT_LAYER = "no_text_layer"  # 스캔본 — 정답이 없어 측정하지 않는다
 RECALL_ERROR = "error"  # 원본을 읽지 못함
 # 텍스트 레이어가 있는 페이지가 전체의 이 비율 미만이면 스캔본으로 보고 측정하지 않는다.
@@ -199,15 +199,36 @@ def _load_pdf_page_texts(doc) -> list[tuple[str, str]]:
         return [(page.get_text(), page.get_text(sort=True)) for page in pdf]
 
 
+def _load_preview_page_texts(doc) -> list[tuple[str, str]] | None:
+    """PDF 가 아닌 원본(HWP, HWPX, DOCX, PPTX, XLSX, HTML)을 그대로 그린 미리보기 PDF 의 쪽별 글. 원본을 직접 열지
+    못해 재구성한 미리보기면 None 이다(우리가 읽은 글로 다시 만든 것이라 원본 대조가 되지 않는다)."""
+    import fitz  # pymupdf
+
+    from app.services.preview_service import cached_preview_pdf, preview_is_faithful, preview_url_for
+
+    document_id = str(doc.id)
+    filename = doc.original_filename or doc.filename
+    preview_url_for(document_id, filename, doc.minio_key)
+    if not preview_is_faithful(document_id, filename):
+        return None
+    data = cached_preview_pdf(document_id)
+    if data is None:
+        return None
+    with fitz.open(stream=data, filetype="pdf") as pdf:
+        return [(page.get_text(), page.get_text(sort=True)) for page in pdf]
+
+
 def _measure_source_recall(doc) -> tuple[SourceRecall | None, str]:
-    """PDF 에 한해 원본 텍스트 레이어 대비 재현율을 잰다. 못 재면 (None, 사유) — 사유는 리포트에 남긴다."""
-    if "pdf" not in (getattr(doc, "mime_type", "") or "").lower():
-        return None, RECALL_UNSUPPORTED
+    """원본 텍스트 대비 재현율을 잰다. PDF 는 원본을, 다른 형식은 원본을 그대로 그린 미리보기 PDF 를 쓴다
+    (2026-11-23, 예전에는 PDF 만 재서 나머지 형식은 원본과 한 번도 대조되지 않았다). 못 재면 (None, 사유)."""
+    is_pdf = "pdf" in (getattr(doc, "mime_type", "") or "").lower()
     try:
-        page_texts = _load_pdf_page_texts(doc)
+        page_texts = _load_pdf_page_texts(doc) if is_pdf else _load_preview_page_texts(doc)
     except Exception:
         logger.warning("source recall: failed to read original PDF for document %s", doc.id, exc_info=True)
         return None, RECALL_ERROR
+    if page_texts is None:
+        return None, RECALL_UNSUPPORTED  # 원본을 그대로 그린 PDF 가 없다(CSV, TXT, 재구성 미리보기 등)
     result = compute_source_recall(page_texts, doc.parsed_text)
     if result.recall is None or result.measured_pages < result.total_pages * _MIN_TEXT_LAYER_PAGE_RATIO:
         return None, RECALL_NO_TEXT_LAYER
@@ -310,7 +331,9 @@ class QualityCheckBlock(BaseBlock):
         #        순서로 바로잡은 본문이 저장 순서 기준과만 견줘져 누락으로 잡히던 문제(세원화성, 2026-11-20 감사).
         # 1.10.0: 목차 대조가 로마 숫자 쪽 번호, 한 줄에 붙은 두 단 목차, 쪽 번호 열 머리글("Page")을 알아본다
         #         (Pub120 목차 일치율 30%가 57%로, 2026-11-23).
-        return "1.10.0"
+        # 1.11.0: PDF가 아닌 형식도 원본을 그대로 그린 미리보기 PDF의 글과 대조해 원문 재현율을 잰다
+        #         (예전에는 PDF만 재서 DOCX, HWP, PPTX, XLSX, HTML은 원본과 한 번도 대조되지 않았다, 2026-11-23).
+        return "1.11.0"
 
     @property
     def category(self) -> str:

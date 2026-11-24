@@ -119,3 +119,79 @@ def test_a_table_without_caption_takes_the_title_line_right_above_it():
     assert _preceding_caption(page("[별표 1] 이전 표", last_type="table")) is None
     assert _preceding_caption(page("표 1 " + "가" * 120)) is None
     assert _preceding_caption(page()) is None
+
+
+# ---- 원본 글자 층으로 칸 글 보강(2026-11-23): Docling 이 칸 안 한 줄을 어느 칸에도 넣지 않거나 띄어쓰기를 잃었다
+class _Box:
+    def __init__(self, left, top, right, bottom):
+        self._box = (left, top, right, bottom)
+
+    def to_top_left_origin(self, page_height):
+        left, top, right, bottom = self._box
+        return type("B", (), {"l": left, "t": top, "r": right, "b": bottom})()
+
+
+def _boxed(row, col, text, box):
+    cell = _Cell(row, col, text)
+    cell.bbox = _Box(*box)
+    return cell
+
+
+def test_dropped_source_line_is_put_back_into_the_nearest_cell_of_its_column():
+    from app.pipeline.adapters.docling_adapter import _refilled_cell_texts, _table_grid
+    from app.pipeline.adapters.table_text_coverage import TextLine
+
+    table = _GridTable([
+        _boxed(0, 0, "고도화 (40)", (78, 629, 111, 654)),
+        _boxed(0, 1, "∙ 자율형 공장 구축계획 및 적용 가능성", (142, 616, 366, 654)),
+        _boxed(1, 0, "지속", (65, 677, 87, 688)),
+        _boxed(1, 1, "∙ CEO·경영진의 고도화 실천의지", (142, 671, 444, 696)),
+    ])
+    lines = [
+        TextLine("∙ 자율형 공장 구축계획 및 적용 가능성", (142, 616, 366, 627)),
+        TextLine("∙ 자율형 공장기술에 대해 공장 전 부분으로의 확장성 및 효율성", (142, 657, 454, 668)),
+    ]
+
+    texts = _refilled_cell_texts(table, 842.0, lines)
+    rows, _ = _table_grid(table, texts)
+
+    assert rows[0][1].endswith("∙ 자율형 공장기술에 대해 공장 전 부분으로의 확장성 및 효율성")
+    assert rows[1][1] == "∙ CEO·경영진의 고도화 실천의지"
+
+
+def test_no_dropped_line_keeps_docling_text_untouched():
+    from app.pipeline.adapters.docling_adapter import _refilled_cell_texts
+    from app.pipeline.adapters.table_text_coverage import TextLine
+
+    table = _GridTable([_boxed(0, 0, "칸 글", (10, 10, 50, 20))])
+
+    assert _refilled_cell_texts(table, 842.0, [TextLine("칸 글", (10, 10, 50, 20))]) is None
+    assert _refilled_cell_texts(table, 842.0, []) is None
+
+
+def test_ruled_table_is_kept_when_docling_only_covers_its_lines_after_refill():
+    # 세원화성 진단보고서 53쪽: 되돌려 넣은 뒤 Docling 글로 견주면 늘 Docling 이 이겨 글 순서가 뒤섞인 표를 골랐다
+    from app.pipeline.adapters.docling_adapter import _docling_misses_less
+    from app.pipeline.adapters.ruled_tables import RuledTable
+    from app.pipeline.adapters.table_text_coverage import TextLine
+
+    lines = [TextLine("구분 내용", (10, 10, 90, 20)), TextLine("설계 원단위를 유지할 수 있도록 관리", (10, 30, 200, 40))]
+    ruled = RuledTable(bbox=(0, 0, 300, 50), rows=[["구분", "내용"], ["설계 원단위를 유지할 수 있도록 관리", ""]])
+    docling_drops_a_line = _GridTable([_Cell(0, 0, "구분"), _Cell(0, 1, "내용")])
+    ruled_drops_a_column = RuledTable(bbox=(0, 0, 300, 50), rows=[["구분", "내용"]])
+    docling_reads_all = _GridTable([_Cell(0, 0, "구분 내용"), _Cell(1, 0, "설계 원단위를 유지할 수 있도록 관리")])
+
+    assert _docling_misses_less(docling_drops_a_line, ruled, lines) is False
+    assert _docling_misses_less(docling_reads_all, ruled_drops_a_column, lines) is True
+    assert _docling_misses_less(docling_reads_all, ruled_drops_a_column, []) is False
+
+
+def test_cell_spacing_follows_the_source_when_only_spaces_differ():
+    from app.pipeline.adapters.docling_adapter import _respaced_cell_texts
+
+    table = _GridTable([_boxed(0, 0, "Display는화면에서가장 큰텍스트로주로마케팅 용도로사용한다.", (430, 150, 514, 185)), _Cell(0, 1, "66")])
+    native = {(430, 150, 514, 185): "Display는 화면에서 가장\n큰 텍스트로 주로 마케팅\n용도로 사용한다."}
+
+    texts = _respaced_cell_texts(table, 842.0, ["Display는화면에서가장 큰텍스트로주로마케팅 용도로사용한다.", "66"], lambda box: native.get(box, ""))
+
+    assert texts == ["Display는 화면에서 가장 큰 텍스트로 주로 마케팅 용도로 사용한다.", "66"]

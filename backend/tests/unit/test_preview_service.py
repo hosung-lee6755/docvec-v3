@@ -146,14 +146,14 @@ def test_hwp_to_html_removes_temp_file_when_transform_fails():
 def _soffice_runner(*, returncode=0, write_pdf=True, stderr=b""):
     captured = {}
 
-    def run(cmd, **kwargs):
-        captured["cmd"], captured["kwargs"] = cmd, kwargs
+    def run(cmd, timeout):
+        captured["cmd"], captured["timeout"] = cmd, timeout
         outdir = cmd[cmd.index("--outdir") + 1]
         captured["input_bytes"] = open(cmd[-1], "rb").read()
         if write_pdf:
             with open(f"{outdir}/input.pdf", "wb") as f:
                 f.write(b"%PDF-fake")
-        return SimpleNamespace(returncode=returncode, stderr=stderr)
+        return returncode, stderr
 
     return run, captured
 
@@ -161,7 +161,7 @@ def _soffice_runner(*, returncode=0, write_pdf=True, stderr=b""):
 def test_soffice_to_pdf_runs_isolated_headless_conversion_and_returns_pdf():
     run, captured = _soffice_runner()
 
-    with patch.object(ps.subprocess, "run", side_effect=run):
+    with patch.object(ps, "_run_soffice", side_effect=run):
         pdf = ps._soffice_to_pdf(b"<html/>", ".html")
 
     assert pdf == b"%PDF-fake"
@@ -170,13 +170,13 @@ def test_soffice_to_pdf_runs_isolated_headless_conversion_and_returns_pdf():
     assert any(a.startswith("-env:UserInstallation=file://") for a in cmd)
     assert cmd[-1].endswith("input.html")
     assert captured["input_bytes"] == b"<html/>"
-    assert captured["kwargs"]["timeout"] == ps._SOFFICE_TIMEOUT_SECONDS
+    assert captured["timeout"] == ps._SOFFICE_TIMEOUT_SECONDS
 
 
 def test_soffice_to_pdf_raises_with_stderr_on_nonzero_exit():
     run, _ = _soffice_runner(returncode=1, write_pdf=False, stderr=b"filter failed " + b"x" * 900)
 
-    with patch.object(ps.subprocess, "run", side_effect=run):
+    with patch.object(ps, "_run_soffice", side_effect=run):
         with pytest.raises(RuntimeError) as caught:
             ps._soffice_to_pdf(b"x", ".docx")
 
@@ -187,9 +187,115 @@ def test_soffice_to_pdf_raises_with_stderr_on_nonzero_exit():
 def test_soffice_to_pdf_raises_when_no_output_file_even_with_zero_exit():
     run, _ = _soffice_runner(returncode=0, write_pdf=False)
 
-    with patch.object(ps.subprocess, "run", side_effect=run):
+    with patch.object(ps, "_run_soffice", side_effect=run):
         with pytest.raises(RuntimeError):
             ps._soffice_to_pdf(b"x", ".docx")
+
+
+
+def _hwp_soffice_runner(*, odt_returncode=0):
+    """HWP 원본 변환 흉내. odt 요청이면 ODT(아무 내용)를, pdf 요청이면 입력 파일 이름을 적은 PDF를 쓴다."""
+    calls = []
+
+    def run(cmd, timeout):
+        target, outdir, source = cmd[cmd.index("--convert-to") + 1], cmd[cmd.index("--outdir") + 1], cmd[-1]
+        stem = source.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        calls.append((target, source.rsplit("/", 1)[-1]))
+        if target == "odt":
+            with open(f"{outdir}/{stem}.odt", "wb") as f:
+                f.write(b"odt-from-hwp")
+            return odt_returncode, b"crash" if odt_returncode else b""
+        with open(f"{outdir}/{stem}.pdf", "wb") as f:
+            f.write(f"%PDF-{stem}".encode() + open(source, "rb").read())
+        return 0, b""
+
+    return run, calls
+
+
+def test_hwp_original_is_opened_as_odt_fixed_and_then_drawn():
+    run, calls = _hwp_soffice_runner()
+    fix = MagicMock(return_value=(b"fixed-odt", SimpleNamespace(removed_headers_footers=2, shrunk_table_tails=19)))
+
+    with patch.object(ps, "_run_soffice", side_effect=run), \
+         patch("app.services.preview_odt_fix.fix_hwp_odt", fix):
+        pdf = ps._PDF_CONVERTERS[".hwp"](b"raw-hwp")
+
+    assert calls == [("odt", "input.hwp"), ("pdf", "fixed.odt")]
+    fix.assert_called_once_with(b"odt-from-hwp")
+    assert pdf == b"%PDF-fixedfixed-odt"
+
+
+def test_hwp_original_falls_back_to_direct_pdf_when_odt_step_fails():
+    # ODT 단계가 실패하면(비정상 종료하고 남은 ODT도 온전하지 않으면) 고치지 않고 원본을 바로 그린다
+    run, calls = _hwp_soffice_runner(odt_returncode=134)
+
+    with patch.object(ps, "_run_soffice", side_effect=run):
+        pdf = ps._PDF_CONVERTERS[".hwpx"](b"raw-hwpx")
+
+    assert calls == [("odt", "input.hwpx"), ("pdf", "input.hwpx")]
+    assert pdf == b"%PDF-inputraw-hwpx"
+
+
+def test_hwp_original_does_not_retry_directly_after_the_odt_step_times_out():
+    # 원본을 여는 데 시간을 다 썼으면 바로 PDF로 다시 그려도 같은 시간이 걸린다. 재구성 미리보기로 넘긴다
+    calls = []
+
+    def run(cmd, timeout):
+        calls.append(cmd[cmd.index("--convert-to") + 1])
+        raise ps.SofficeTimeoutError("LibreOffice conversion timed out after 300s")
+
+    with patch.object(ps, "_run_soffice", side_effect=run), pytest.raises(ps.SofficeTimeoutError):
+        ps._PDF_CONVERTERS[".hwp"](b"raw-hwp")
+
+    assert calls == ["odt"]
+
+
+def _complete_odt() -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as odt:
+        odt.writestr("mimetype", "application/vnd.oasis.opendocument.text")
+        odt.writestr("content.xml", "<c/>")
+        odt.writestr("styles.xml", "<s/>")
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("target", "written", "accepted"),
+    [
+        ("pdf", b"%PDF-1.7\n...\n%%EOF\n", True),
+        ("pdf", b"%PDF-1.7\n...truncated", False),
+        ("odt", None, True),  # _complete_odt()
+        ("odt", b"PK\x03\x04broken", False),
+    ],
+)
+def test_crashed_conversion_is_used_only_when_its_output_is_complete(tmp_path, target, written, accepted):
+    # H2Orestart를 쓴 변환은 결과를 다 쓴 뒤 끝내는 중에 rc=134로 죽을 때가 있다. 그 결과가 온전하면 쓴다
+    data = _complete_odt() if written is None else written
+    source = tmp_path / "input.hwp"
+    source.write_bytes(b"raw")
+
+    def run(cmd, timeout):
+        (tmp_path / f"input.{target}").write_bytes(data)
+        return 134, b"Unspecified Application Error"
+
+    with patch.object(ps, "_run_soffice", side_effect=run):
+        if accepted:
+            assert ps._soffice_convert(source, target).read_bytes() == data
+        else:
+            with pytest.raises(RuntimeError, match="LibreOffice conversion failed"):
+                ps._soffice_convert(source, target)
+
+
+def test_run_soffice_kills_the_whole_process_group_on_timeout():
+    # soffice는 셸 스크립트라 실제 변환은 손자 프로세스가 한다. 시간을 넘기면 그룹 전체를 끝내야 남지 않는다
+    process = MagicMock(pid=4321)
+    process.communicate.side_effect = [ps.subprocess.TimeoutExpired("soffice", 1), (b"", b"")]
+    with patch.object(ps.subprocess, "Popen", return_value=process) as popen,          patch.object(ps.os, "killpg") as killpg:
+        with pytest.raises(RuntimeError, match="timed out"):
+            ps._run_soffice(["soffice"], 1)
+
+    assert popen.call_args.kwargs["start_new_session"] is True
+    killpg.assert_called_once_with(4321, ps.signal.SIGKILL)
 
 
 def test_format_specific_pdf_converters_pick_the_right_input_suffix():
@@ -210,7 +316,7 @@ def test_format_specific_pdf_converters_pick_the_right_input_suffix():
 
 def test_generate_preview_prefers_pdf():
     with patch.dict(ps._PDF_CONVERTERS, {".docx": lambda raw: b"PDF:" + raw}):
-        assert ps._generate_preview(".docx", b"r") == (b"PDF:r", "pdf", "application/pdf")
+        assert ps._generate_preview(".docx", b"r") == (b"PDF:r", "pdf", "application/pdf", False)
 
 
 def test_generate_preview_falls_back_to_html_when_pdf_conversion_fails():
@@ -219,9 +325,27 @@ def test_generate_preview_falls_back_to_html_when_pdf_conversion_fails():
 
     with patch.dict(ps._PDF_CONVERTERS, {".docx": broken}), \
          patch.dict(ps._HTML_CONVERTERS, {".docx": lambda raw: "<p>html</p>"}):
-        content, kind, ctype = ps._generate_preview(".docx", b"r")
+        result = ps._generate_preview(".docx", b"r")
 
-    assert (content, kind, ctype) == (b"<p>html</p>", "html", "text/html; charset=utf-8")
+    assert result == (b"<p>html</p>", "html", "text/html; charset=utf-8", True)
+
+
+def test_hwp_original_is_converted_directly_through_libreoffice():
+    # 원본을 H2Orestart로 열어 쪽 나눔을 고친 뒤 그린다(_hwp_original_to_pdf). 결과는 원본 그대로인 미리보기다
+    with patch.object(ps, "_hwp_original_to_pdf", return_value=b"%PDF") as original:
+        assert ps._generate_preview(".hwpx", b"orig") == (b"%PDF", "pdf", "application/pdf", False)
+
+    original.assert_called_once_with(b"orig", ".hwpx")
+
+
+def test_hwp_falls_back_to_a_reconstructed_pdf_marked_approximate_when_the_original_cannot_be_opened():
+    # H2Orestart 확장이 없거나 원본을 못 읽으면 예전처럼 우리가 읽은 글로 다시 만든 PDF를 쓴다
+    def broken(_raw):
+        raise RuntimeError("source file could not be loaded")
+
+    with patch.dict(ps._PDF_CONVERTERS, {".hwp": broken}), \
+         patch.dict(ps._RECONSTRUCTED_PDF_CONVERTERS, {".hwp": lambda raw: b"REBUILT"}):
+        assert ps._generate_preview(".hwp", b"r") == (b"REBUILT", "pdf", "application/pdf", True)
 
 
 def test_generate_preview_unknown_suffix_raises():
@@ -242,8 +366,8 @@ def test_generate_preview_propagates_html_converter_failure():
 @pytest.mark.parametrize("suffix,kind,expected", [
     (".docx", "pdf", False),
     (".docx", "html", True),
-    (".hwp", "pdf", True),
-    (".hwpx", "pdf", True),
+    (".hwp", "pdf", False),
+    (".hwpx", "pdf", False),
     (".hwp", "html", True),
 ])
 def test_is_approximate(suffix, kind, expected):
@@ -273,7 +397,7 @@ def test_pdf_pages_text_for_extracts_text_per_page_from_cached_pdf():
         pages = ps.pdf_pages_text_for("doc-1")
 
     storage.download_file.assert_called_once_with(
-        settings.minio_bucket_artifacts, "preview/doc-1.pdf"
+        settings.minio_bucket_artifacts, "preview/v2/doc-1.pdf"
     )
     assert [p["page_number"] for p in pages] == [1, 2]
     assert "alpha page" in pages[0]["text"] and "beta page" in pages[1]["text"]
@@ -304,10 +428,16 @@ def test_preview_url_unsupported_format_returns_nones_without_storage_access(sto
 
 
 def test_preview_url_serves_cached_pdf_without_regenerating(storage):
+    def download(bucket, key):
+        if key.endswith(".approximate"):
+            raise RuntimeError("missing")
+        return b"%PDF"
+
+    storage.download_file.side_effect = download
     with patch.object(ps, "_generate_preview") as generate:
         out = ps.preview_url_for("d1", "a.DOCX", "orig/key")
 
-    assert out == ("https://signed/preview/d1.pdf", "pdf", False)
+    assert out == ("https://signed/preview/v2/d1.pdf", "pdf", False)
     generate.assert_not_called()
     storage.upload_file.assert_not_called()
 
@@ -322,7 +452,7 @@ def test_preview_url_falls_back_to_cached_html_when_pdf_missing(storage):
 
     out = ps.preview_url_for("d1", "a.docx", "orig/key")
 
-    assert out == ("https://signed/preview/d1.html", "html", True)
+    assert out == ("https://signed/preview/v2/d1.html", "html", True)
 
 
 def test_preview_url_generates_caches_and_signs_on_first_request(storage):
@@ -334,14 +464,34 @@ def test_preview_url_generates_caches_and_signs_on_first_request(storage):
     storage.download_file.side_effect = download
 
     with patch.object(ps, "_generate_preview",
-                      return_value=(b"PDF", "pdf", "application/pdf")) as generate:
+                      return_value=(b"PDF", "pdf", "application/pdf", True)) as generate:
         out = ps.preview_url_for("d1", "report.hwpx", "orig/key")
 
     generate.assert_called_once_with(".hwpx", b"ORIGINAL")
-    storage.upload_file.assert_called_once_with(
-        settings.minio_bucket_artifacts, "preview/d1.pdf", b"PDF", "application/pdf"
-    )
-    assert out == ("https://signed/preview/d1.pdf", "pdf", True)
+    # 재구성 PDF로 내려갔으므로 PDF와 함께 "원본과 다를 수 있음" 표시를 남긴다
+    uploaded = [c.args[1] for c in storage.upload_file.call_args_list]
+    assert uploaded == ["preview/v2/d1.pdf", "preview/v2/d1.approximate"]
+    assert out == ("https://signed/preview/v2/d1.pdf", "pdf", True)
+
+
+def test_faithful_hwp_preview_is_not_marked_and_reads_as_original(storage):
+    cached: dict = {}
+
+    def download(bucket, key):
+        if bucket == settings.minio_bucket_originals:
+            return b"ORIGINAL"
+        if key in cached:
+            return cached[key]
+        raise RuntimeError("no cache")
+
+    storage.download_file.side_effect = download
+    storage.upload_file.side_effect = lambda bucket, key, content, ctype: cached.__setitem__(key, content)
+    with patch.object(ps, "_generate_preview", return_value=(b"PDF", "pdf", "application/pdf", False)):
+        out = ps.preview_url_for("d1", "report.hwp", "orig/key")
+
+    assert out == ("https://signed/preview/v2/d1.pdf", "pdf", False)
+    assert list(cached) == ["preview/v2/d1.pdf"]
+    assert ps.preview_is_faithful("d1", "report.hwp") is True
 
 
 def test_preview_url_html_fallback_result_is_cached_as_html(storage):
@@ -350,8 +500,8 @@ def test_preview_url_html_fallback_result_is_cached_as_html(storage):
     )
 
     with patch.object(ps, "_generate_preview",
-                      return_value=(b"<p/>", "html", "text/html; charset=utf-8")):
+                      return_value=(b"<p/>", "html", "text/html; charset=utf-8", True)):
         out = ps.preview_url_for("d1", "a.docx", "k")
 
-    assert storage.upload_file.call_args.args[1] == "preview/d1.html"
-    assert out == ("https://signed/preview/d1.html", "html", True)
+    assert storage.upload_file.call_args.args[1] == "preview/v2/d1.html"
+    assert out == ("https://signed/preview/v2/d1.html", "html", True)

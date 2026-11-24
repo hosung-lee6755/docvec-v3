@@ -32,6 +32,7 @@ from app.pipeline.adapters.docling_toc import TOC_LABELS, choose_toc_lines, grid
 from app.pipeline.adapters.native_spacing import NativeRegionReader, choose_spacing
 from app.pipeline.adapters.hwpx_structure import grid_from_cells
 from app.pipeline.adapters.ruled_tables import RuledTable, find_ruled_tables, match_ruled_table
+from app.pipeline.adapters.table_text_coverage import TextLine, lines_from_words, missing_lines, refill_cells
 from app.pipeline.blocks.table_markdown import rows_to_markdown
 
 # Docling DocItemLabel 값 -> 우리 쪽 block_type/요소 type 매핑. 매핑에 없는
@@ -88,7 +89,7 @@ def _table_rows(table_item) -> list[list[str]]:
     return [header, *body]
 
 
-def _table_grid(table_item) -> tuple[list[list[str]], list[dict] | None]:
+def _table_grid(table_item, texts: list[str] | None = None) -> tuple[list[list[str]], list[dict] | None]:
     """표 칸 목록으로 격자를 만든다. 합친 칸의 글은 HWP·HTML 표와 같은 규칙으로 둔다.
 
     export_to_dataframe()은 여러 열에 걸친 칸의 글을 열마다 복사해, 실측한 문서에서 같은 글이 한 행에
@@ -97,16 +98,20 @@ def _table_grid(table_item) -> tuple[list[list[str]], list[dict] | None]:
 
     머리 행이 여러 줄이면("냉방" 아래 "건구온도", "습구온도") 열마다 한 줄로 합친다. 큰 표를 나눌 때는
     첫 행만 조각마다 되풀이하므로, 두 줄로 두면 둘째 줄 열 이름이 둘째 조각부터 사라진다.
+
+    texts 는 칸마다 쓸 글(table_cells 와 같은 순서)이다. 원본 글자 층에서 빠진 줄을 되돌려 넣은 글을 넘긴다.
     """
     cells = getattr(getattr(table_item, "data", None), "table_cells", None)
     if not cells:
         return _table_rows(table_item), None
+    texts = texts if texts is not None and len(texts) == len(cells) else [(c.text or "") for c in cells]
+    pairs = list(zip(cells, texts))
     header_count = _header_row_count(cells)
     if header_count < 2:
-        rows, spans = grid_from_cells([_cell_tuple(c) for c in cells])
+        rows, spans = grid_from_cells([_cell_tuple(c, text=t) for c, t in pairs])
         return rows, spans or None
-    body = [c for c in cells if c.start_row_offset_idx >= header_count]
-    body_rows, body_spans = grid_from_cells([_cell_tuple(c, row_shift=header_count) for c in body])
+    body = [(c, t) for c, t in pairs if c.start_row_offset_idx >= header_count]
+    body_rows, body_spans = grid_from_cells([_cell_tuple(c, row_shift=header_count, text=t) for c, t in body])
     header = _merged_header([c for c in cells if c.start_row_offset_idx < header_count])
     width = max(len(header), *(len(r) for r in body_rows)) if body_rows else len(header)
     rows = [header + [""] * (width - len(header)), *(r + [""] * (width - len(r)) for r in body_rows)]
@@ -118,11 +123,65 @@ def _table_grid(table_item) -> tuple[list[list[str]], list[dict] | None]:
 _MAX_HEADER_ROWS = 3
 
 
-def _cell_tuple(cell, row_shift: int = 0) -> tuple[int, int, int, int, str]:
+def _cell_tuple(cell, row_shift: int = 0, text: str | None = None) -> tuple[int, int, int, int, str]:
     return (
         cell.start_row_offset_idx - row_shift, cell.start_col_offset_idx,
-        max(cell.row_span, 1), max(cell.col_span, 1), (cell.text or "").strip(),
+        max(cell.row_span, 1), max(cell.col_span, 1), ((cell.text if text is None else text) or "").strip(),
     )
+
+
+def _cell_box(cell, page_height: float):
+    """Docling 칸 좌표를 위쪽 원점으로 바꾼다. 좌표가 없으면 None."""
+    bbox = getattr(cell, "bbox", None)
+    if bbox is None or not page_height:
+        return None
+    try:
+        box = bbox.to_top_left_origin(page_height=page_height)
+        return (float(box.l), float(box.t), float(box.r), float(box.b))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _refilled_cell_texts(table_item, page_height: float, lines: list[TextLine]) -> list[str] | None:
+    """Docling 칸 글에 원본 글자 층에서 빠진 줄을 칸 좌표로 되돌려 넣은 칸 글 목록(table_cells 순서).
+    칸 정보가 없거나 빠진 줄이 없으면 None(그대로 쓴다)."""
+    cells = getattr(getattr(table_item, "data", None), "table_cells", None)
+    if not cells or not lines:
+        return None
+    texts = [(c.text or "") for c in cells]
+    dropped = missing_lines(lines, texts)
+    if not dropped:
+        return None
+    return refill_cells([_cell_box(c, page_height) for c in cells], texts, dropped)
+
+
+def _respaced_cell_texts(table_item, page_height: float, texts: list[str], read_region) -> list[str]:
+    """칸마다 칸 영역의 원본 글자와 견줘 띄어쓰기가 덜 깨진 쪽을 쓴다(본문의 choose_spacing 과 같은 규칙).
+    Docling 칸 글은 "Display는화면에서가장"처럼 줄이 바뀌는 자리와 낱말 사이 공백을 잃는다(UIUX 가이드라인 80쪽)."""
+    cells = getattr(getattr(table_item, "data", None), "table_cells", None) or []
+    respaced = list(texts)
+    for index, cell in enumerate(cells):
+        box = _cell_box(cell, page_height)
+        if box is not None and respaced[index].strip():
+            respaced[index] = choose_spacing(respaced[index], read_region(box))
+    return respaced
+
+
+def _ruled_table_texts(table: RuledTable) -> list[str]:
+    nested = [cell for inner in table.nested for row in inner.rows for cell in row]
+    return [table.title or "", *(cell for row in table.rows for cell in row), *nested]
+
+
+def _docling_misses_less(table_item, ruled: RuledTable, lines: list[TextLine]) -> bool:
+    """선 표보다 Docling 표가 원본 줄을 덜 빠뜨렸는가. 칸 안 표가 있는 선 표는 그대로 쓴다.
+
+    빠진 줄을 되돌려 넣기 전 Docling 칸 글로 견준다. 넣은 뒤 글로 견주면 Docling 쪽 빠진 줄이 늘 0에 가까워,
+    칸 순서를 지킨 선 표 대신 글 순서가 뒤섞인 Docling 표를 골랐다(세원화성 진단보고서 53쪽, 2026-11-23)."""
+    if ruled.nested or not lines:
+        return False
+    cells = getattr(getattr(table_item, "data", None), "table_cells", None) or []
+    docling_texts = [(c.text or "") for c in cells]
+    return len(missing_lines(lines, docling_texts)) < len(missing_lines(lines, _ruled_table_texts(ruled)))
 
 
 def _header_row_count(cells) -> int:
@@ -379,6 +438,25 @@ class _NativeTextReader:
             self._warnings.append(f"목차 영역 원본 텍스트 읽기 실패: {exc}")
             return ""
 
+    def lines_in(self, page_no: int, bbox: tuple[float, float, float, float] | None) -> list[TextLine]:
+        """위쪽 원점 bbox 안의 원본 글자 줄. 글자 층이 없거나(스캔) 읽지 못하면 빈 목록이다."""
+        if bbox is None or self._failed:
+            return []
+        try:
+            if self._doc is None:
+                import fitz  # pymupdf
+
+                self._doc = fitz.open(str(self._path))
+            if page_no < 1 or page_no > len(self._doc):
+                return []
+            import fitz  # pymupdf
+
+            return lines_from_words(self._doc[page_no - 1].get_text("words", clip=fitz.Rect(*bbox)))
+        except Exception as exc:  # 보강일 뿐이다. 실패하면 표 결과를 그대로 쓴다
+            self._failed = True
+            self._warnings.append(f"표 영역 원본 텍스트 읽기 실패: {exc}")
+            return []
+
     def close(self) -> None:
         if self._doc is not None:
             self._doc.close()
@@ -582,9 +660,16 @@ class DoclingAdapter(BaseAdapter):
             page = page_for(page_no)
 
             if label in _TABLE_LABELS:
-                ruled, is_covered = ruled_source.lookup(page_no, _top_left_bbox(item, page.height))
+                table_box = _top_left_bbox(item, page.height)
+                ruled, is_covered = ruled_source.lookup(page_no, table_box)
                 if is_covered:
                     continue  # 앞의 Docling 표와 같은 선 표다. 이미 그 결과로 냈다
+                # 표 영역의 원본 글자 줄과 견줘 빠진 줄을 칸에 되돌려 넣고, 선 표가 Docling 표보다 많이 빠뜨렸으면
+                # Docling 표를 쓴다(UIUX 가이드라인 80쪽 "Usage" 열, 자율형공장 공고 17쪽 칸 안 넷째 줄, 2026-11-23)
+                source_lines = native_text.lines_in(page_no, table_box)
+                cell_texts = _refilled_cell_texts(item, page.height, source_lines)
+                if ruled is not None and _docling_misses_less(item, ruled, source_lines):
+                    ruled = None
                 if ruled is not None:
                     # 선으로 그린 표는 선 그대로 읽은 결과를 쓴다. 칸 안의 작은 표는 바로 뒤에 따로 낸다
                     caption = _table_caption(item, doc) or _preceding_caption(page)
@@ -599,7 +684,13 @@ class DoclingAdapter(BaseAdapter):
                         )
                     table_ordinal += 1 + len(ruled.nested)
                 else:
-                    rows, spans = _table_grid(item)
+                    docling_cells = getattr(getattr(item, "data", None), "table_cells", None) or []
+                    if docling_cells and source_lines:
+                        cell_texts = _respaced_cell_texts(
+                            item, page.height, cell_texts or [(c.text or "") for c in docling_cells],
+                            lambda box, page_no=page_no: native_region.read(page_no, box),
+                        )
+                    rows, spans = _table_grid(item, cell_texts)
                     table_ordinal += 1
                     _emit_table(
                         page, elements, section_path, rows, spans, bbox, "docling_table",

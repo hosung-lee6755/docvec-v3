@@ -332,7 +332,13 @@ def _has_position(bbox) -> bool:
 def _figure_anchor(page, region):
     """그림 바로 앞에 오는 글 조각을 찾는다(전체 점검 2-1). 예전에는 그림의 글을 쪽 끝에 붙여서
     설명 문단과 떨어졌다. 위치를 아는 조각 가운데 윗변이 그림 윗변보다 위에 있는 마지막 조각 뒤에 넣는다.
-    돌려주는 값: 조각(그 뒤에 넣는다), "start"(쪽 맨 앞), None(위치를 몰라 쪽 끝에 붙인다)."""
+    돌려주는 값: 조각(그 뒤에 넣는다), "start"(쪽 맨 앞), None(위치를 몰라 쪽 끝에 붙인다).
+    좌표가 없는 형식(HWP·HWPX)은 어댑터가 정해 둔 자리(region.anchor, 그림이 들어 있던 문단)를 쓴다(2026-11-23)."""
+    anchor = getattr(region, "anchor", None)
+    if anchor == "start":
+        return "start"
+    if anchor is not None and any(block is anchor for block in page.text_blocks):
+        return anchor
     if not _has_position(getattr(region, "bbox", None)):
         return None
     positioned = [block for block in page.text_blocks if _has_position(block.bbox)]
@@ -726,22 +732,24 @@ def _repaginate_hwp_like(document_id: str, doc, parsed) -> None:
         table.page_number = page_number
         pages_by_number[page_number].table_candidates.append(table)
 
-    # Embedded images aren't repaginated (out of scope here) — attach them to
-    # the first real page so they aren't silently dropped from the rebuilt
-    # page list.
-    if only_page.image_regions:
-        first_page_number = next(iter(pages_by_number)) if pages_by_number else 1
+    # 그림은 어댑터가 정해 둔 자리(그림이 들어 있던 문단, region.anchor)의 쪽으로 간다. 자리를 모르는 그림은
+    # 첫 쪽에 둔다(예전에는 모든 그림이 첫 쪽에 붙어 NS-AM 검사매뉴얼의 그림 글이 표지 뒤에 몰렸다, 2026-11-23)
+    first_page_number = next(iter(pages_by_number)) if pages_by_number else 1
+    page_of_block = {id(block): page_number for block, page_number in assigned}
+    for region in only_page.image_regions:
+        page_number = page_of_block.get(id(region.anchor), first_page_number)
+        region.page_number = page_number
         pages_by_number.setdefault(
-            first_page_number,
+            page_number,
             RawPage(
-                page_number=first_page_number,
+                page_number=page_number,
                 width=only_page.width,
                 height=only_page.height,
                 text_blocks=[],
                 table_candidates=[],
                 image_regions=[],
             ),
-        ).image_regions.extend(only_page.image_regions)
+        ).image_regions.append(region)
 
     parsed.pages = [pages_by_number[n] for n in sorted(pages_by_number)]
     # 쪽수는 렌더링된 PDF 의 전체 쪽수 — 텍스트 블록이 없는 쪽(빈 쪽·그림 쪽)도 쪽으로 센다.
