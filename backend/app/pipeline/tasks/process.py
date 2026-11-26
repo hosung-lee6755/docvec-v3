@@ -564,8 +564,20 @@ def _clean_rag_text(text: str) -> str:
     return cleaned.strip()
 
 
+# 미리보기 PDF와 글을 맞출 때 빼는 글자. 글자와 숫자만 남긴다(2026-11-25, scandif 항만수요예측 보고서).
+# - 사용자 정의 영역(U+E000~U+F8FF)의 HWP 글머리(Wingdings 의  등)는 미리보기에서 글로 뽑히지 않는다.
+# - 미리보기는 목차의 탭 채움을 "-----"로 그려 "연구동향3"과 "연구동향-----3"이 어긋났다.
+# - 따옴표는 글꼴이 갈리면 PDF 글 순서가 바뀐다("(‘국내조선업생산액’)" → "(‘’국내조선업생산액)").
+_MATCH_IGNORED_RE = re.compile(r"[\W_]+")
+
+
+# 공백을 뺀 문단 글 앞의 표·그림 제목 머리("표7", "<그림3>"). 한컴이 저장한 번호와 미리보기가 다시 매긴 번호가 달라
+# (항만수요예측 결과보고서 표 7 → 표 1) 제목 머리를 빼고 맞춘다(2026-11-25)
+_CAPTION_LABEL_RE = re.compile(r"^[<〈\[(]?(?:표|그림|table|figure|fig\.?)\d+[>〉\])]?[.:]?", re.IGNORECASE)
+
+
 def _normalize_ws(text: str) -> str:
-    return re.sub(r"\s+", "", text)
+    return _MATCH_IGNORED_RE.sub("", text)
 
 
 # How many leading characters of a paragraph/table to use as the match anchor
@@ -582,14 +594,48 @@ _REPAGINATE_MIN_CELL_CHARS = 8
 # 칸 글로는 현재 쪽부터 이만큼 뒤의 쪽까지만 정한다. 같은 표가 여러 쪽에 되풀이되면 우연히 한 쪽에만 나온 칸 하나로
 # 멀리 건너뛰고, 쪽은 앞으로만 가므로 뒤의 표가 모두 그 쪽에 묶인다(NS-AM 05.03 의 안쪽 표가 12쪽으로 갔다)
 _REPAGINATE_MAX_CELL_JUMP = 1
+# 이 길이(공백 제외)보다 짧은 문단 글은 현재 쪽부터 _REPAGINATE_SHORT_MAX_JUMP 쪽 뒤까지만 찾는다. 장마다 되풀이되는
+# 짧은 제목을 놓치면 먼 뒤쪽의 같은 제목과 맞아 뒤 블록이 모두 밀렸다(산업단지 분석결과보고서 HWP 3쪽 → 23쪽, 2026-11-25)
+_REPAGINATE_SHORT_NEEDLE_CHARS = 12
+_REPAGINATE_SHORT_MAX_JUMP = 2
 
 
-def _table_cell_keys(rows: list[list[str]]) -> list[str]:
-    """미리보기 PDF 글과 맞출 칸 글. 칸 안 문단 구분자(" / ")와 칸 안의 표 표시는 미리보기에 없는 글자라 뺀다."""
+def _page_starting_needle(needle: str, normalized_pages: list[str], start: int, end: int) -> int | None:
+    """needle 이 시작하는 쪽. 쪽 끝에서 다음 쪽으로 넘어간 글도 찾도록 다음 쪽 앞부분을 이어 붙여 본다.
+
+    한 쪽 안에서만 찾으면 쪽 경계에 걸친 문단은 어느 쪽에서도 찾지 못하고, 같은 문장이 되풀이된 먼 뒤쪽과 맞아
+    뒤 블록이 모두 그 쪽 뒤로 밀렸다(scandif 예측분석 설계보고서 9쪽 → 24쪽, 2026-11-25)."""
+    tail = len(needle) - 1
+    for i in range(start, end):
+        page = normalized_pages[i]
+        following = normalized_pages[i + 1][:tail] if i + 1 < len(normalized_pages) else ""
+        at = (page + following).find(needle)
+        if 0 <= at < len(page):
+            return i
+    return None
+
+
+def _table_cell_keys(rows: list[list[str]], spans: list[dict] | None = None) -> list[str]:
+    """미리보기 PDF 글과 맞출 칸 글. 칸 안 문단 구분자(" / ")와 칸 안의 표 표시는 미리보기에 없는 글자라 뺀다.
+
+    격자는 세로로 합친 칸의 글을 덮인 줄마다 되풀이해 담는다. 미리보기에는 그 글이 한 번만 나오므로 덮인 자리는
+    건너뛴다. 그러지 않으면 첫 칸이 합쳐진 표는 앞 글이 미리보기와 어긋났다(2026-11-25)."""
     from app.pipeline.adapters.hwp_adapter import CELL_PARAGRAPH_SEP
     from app.pipeline.adapters.nested_tables import strip_nested_markers
 
-    return [_normalize_ws(strip_nested_markers(cell).replace(CELL_PARAGRAPH_SEP, "")) for row in rows for cell in row]
+    covered = {
+        (span["row"] + dr, span["col"] + dc)
+        for span in spans or []
+        for dr in range(span["row_span"])
+        for dc in range(span["col_span"])
+        if dr or dc
+    }
+    return [
+        _normalize_ws(strip_nested_markers(cell).replace(CELL_PARAGRAPH_SEP, ""))
+        for r, row in enumerate(rows)
+        for c, cell in enumerate(row)
+        if (r, c) not in covered
+    ]
 
 
 def _page_by_distinct_cell(keys: list[str], normalized_pages: list[str], cursor: int) -> int | None:
@@ -672,7 +718,7 @@ def _repaginate_hwp_like(document_id: str, doc, parsed) -> None:
             from app.pipeline.adapters.nested_tables import is_inner_table_title
 
             table = next(table_iter)
-            cell_keys = _table_cell_keys(table.rows)
+            cell_keys = _table_cell_keys(table.rows, table.spans)
             needle = "".join(cell_keys)[:_REPAGINATE_ANCHOR_CHARS]
             # 칸 안에서 떼어 낸 표는 바깥 표 바로 뒤에 있다. 뒤쪽의 같은 표와 맞아 멀리 건너뛰지 않게 다음 쪽까지만 찾는다
             # (NS-AM 05.03 의 성능 표가 12쪽으로 갔다, 2026-11-20)
@@ -682,14 +728,13 @@ def _repaginate_hwp_like(document_id: str, doc, parsed) -> None:
             )
         else:
             cell_keys = []
-            needle = _normalize_ws(block.text)[:_REPAGINATE_ANCHOR_CHARS]
-            search_end = len(normalized_pages)
-        found_at = None
-        if needle:
-            for i in range(cursor, search_end):
-                if needle in normalized_pages[i]:
-                    found_at = i
-                    break
+            needle = _CAPTION_LABEL_RE.sub("", _normalize_ws(block.text), count=1)[:_REPAGINATE_ANCHOR_CHARS]
+            # 짧은 글(장마다 되풀이되는 "1. 분석 개요" 같은 제목)은 먼 뒤쪽의 같은 글과 맞기 쉬워 가까운 쪽에서만 찾는다
+            search_end = (
+                min(len(normalized_pages), cursor + 1 + _REPAGINATE_SHORT_MAX_JUMP)
+                if len(needle) < _REPAGINATE_SHORT_NEEDLE_CHARS else len(normalized_pages)
+            )
+        found_at = _page_starting_needle(needle, normalized_pages, cursor, search_end) if needle else None
         if found_at is None and cell_keys:
             found_at = _page_by_distinct_cell(cell_keys, normalized_pages, cursor)
         if found_at is None:

@@ -162,3 +162,19 @@ def test_slogan_box_after_numbered_title_boxes_stays_a_table():
 
     assert _headings(text) == [(1, "Ⅱ 사업 시행 주요내용"), (2, "5. 이행점검단계")]
     assert title_box_heading(["[표 2]", "시·도(시·군), 농협경제지주(일선조합), 축산단체"], MAX_CHARS, allow_slogan=False) is None
+
+
+# HWP 표 글도 PDF·DOCX 처럼 Markdown 표로 적는다(2026-11-25). 한 줄짜리 Markdown 표는 머리 줄과 구분선 두 줄이다
+@pytest.mark.parametrize("lines, expected", [
+    (["[표 7]", "| Ⅰ |  | 사업 개요 |", "|---|---|---|"], ("Ⅰ 사업 개요", 1)),
+    (["[표 7]", "| ① | 조사료 사일리지 제조·운송비 지원 |", "|---|---|"], ("① 조사료 사일리지 제조·운송비 지원", 2)),
+    (["[표 7]", "| 참고1 | 법령체계 개편(안) |", "|---|---|"], ("참고1 법령체계 개편(안)", 1)),
+])
+def test_single_row_markdown_table_is_read_like_a_pipe_row(lines, expected):
+    assert title_box_heading(lines, MAX_CHARS) == expected
+
+
+def test_markdown_table_with_two_rows_stays_a_table():
+    lines = ["[표 3]", "| ① | 첫째 줄 |", "|---|---|", "| ② | 둘째 줄 |"]
+
+    assert title_box_heading(lines, MAX_CHARS) is None

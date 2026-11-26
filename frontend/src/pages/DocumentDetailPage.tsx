@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { chunkWarningKinds } from '../lib/qualityTargets'
 import QualityWarningList from '../components/document-detail/QualityWarningList'
 import StructureWarningNotice from '../components/document-detail/StructureWarningNotice'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { Download, Loader2, Save, X } from 'lucide-react'
 import { useAcceptTagSuggestion, useBatchMoveDocuments, summarizeMoveResults, useDeleteChunk, useDismissTagSuggestion, useMergeChunk, useDocument, useDocumentChunks, useDocumentContent, useDocumentImages, useDocumentPagesText, useDocumentPreview, useDocumentRevisions, useDocumentTables, useDownloadDocument, useProceedDocument, useReprocessDocument, useRestoreRevision, useRetryDocument, useUpdateChunk, useUpdateDocumentTags } from '../hooks/useDocuments'
 import { useDocumentQuality, useDocumentRuns } from '../hooks/useDocumentRuns'
@@ -70,7 +70,12 @@ interface OriginalReturn {
 
 export default function DocumentDetailPage() {
   const { id = '', projectId } = useParams<{ id: string; projectId?: string }>()
-  const backTo = projectId ? `/projects/${projectId}/documents` : '/documents'
+  // 목록에서 열었으면 그 목록 주소(?collection= 같은 거르기 포함)로 돌아간다. 앱 밖 주소("//…")는 받지 않는다(2026-11-24)
+  const location = useLocation()
+  const openedFrom = (location.state as { backTo?: unknown } | null)?.backTo
+  const backTo = typeof openedFrom === 'string' && openedFrom.startsWith('/') && !openedFrom.startsWith('//')
+    ? openedFrom
+    : projectId ? `/projects/${projectId}/documents` : '/documents'
   const { data: doc, isLoading, isError, error: docError } = useDocument(id)
   // 검토 대기나 실패 화면에서 "?tab=quality"처럼 열 탭을 지정해 들어올 수 있다
   const [searchParams] = useSearchParams()
@@ -83,7 +88,7 @@ export default function DocumentDetailPage() {
   const [highlightChunkIds, setHighlightChunkIds] = useState<string[] | null>(null)
   const needsContent = activeTab === 'edit' || activeTab === 'original'
   const { data: content, isLoading: isContentLoading, isError: isContentError, error: contentError } = useDocumentContent(id, needsContent)
-  const { data: tablesResult, isLoading: isTablesLoading, isError: isTablesError, error: tablesError } = useDocumentTables(id, activeTab === 'tables')
+  const { data: tablesResult, isLoading: isTablesLoading, isError: isTablesError, error: tablesError } = useDocumentTables(id, activeTab === 'tables' || activeTab === 'original')
   const { data: imagesResult, isLoading: isImagesLoading, isError: isImagesError, error: imagesError } = useDocumentImages(id, activeTab === 'images')
   // 청크 탭을 열지 않아도 왼쪽 RAG 현황 패널이 청크 개수를 보여줘야 하므로
   // INDEXED 상태가 되면 곧바로 가져온다(탭 진입 시점까지 미루지 않음). WAITING_REVIEW도
@@ -537,6 +542,7 @@ export default function DocumentDetailPage() {
                       onShowJsonChange={setShowJson}
                       returnLabel={originalReturn?.label}
                       onReturn={originalReturn ? returnFromOriginal : undefined}
+                      tables={tablesResult?.tables}
                     />
                   )}
 

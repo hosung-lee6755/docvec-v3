@@ -557,20 +557,23 @@ class PDFAdapter(BaseAdapter):
                         warnings.append(f"page {page_num} table detection failed: {table_exc}")
                     for table in found_tables:
                         try:
-                            rows = table.extract()
+                            # 합친 칸은 선 표, HWP, DOCX 와 같은 규칙으로 두고 합친 칸 목록을 남긴다(2026-11-25).
+                            # 예전 extract() 는 합친 칸의 나머지 자리를 비우고 목록도 없었다
+                            from app.pipeline.adapters.ruled_table_grid import merged_cell_grid
+
+                            rows, spans = merged_cell_grid(table)
                         except Exception as table_exc:
                             warnings.append(f"page {page_num} table extract failed: {table_exc}")
                             continue
-                        cleaned_rows = [
-                            [(cell or "").strip() for cell in row]
-                            for row in rows
-                            if any((cell or "").strip() for cell in row)
-                        ]
-                        if cleaned_rows:
+                        cleaned_rows = [[(cell or "").strip() for cell in row] for row in rows]
+                        # 칸이 모두 빈 표는 낸 적이 없는 표다. 윤곽선 글자 쪽의 선만 표로 잡히면 빈 "[표 N]" 이 남는다
+                        # (만도 보고서, 2026-11-25). 그런 쪽의 표는 OCR 표 찾기(scan_layout)가 글과 함께 낸다
+                        if any(cell for row in cleaned_rows for cell in row):
                             table_candidates.append(
                                 RawTableCandidate(
                                     page_number=page_num,
                                     rows=cleaned_rows,
+                                    spans=spans or None,
                                     bbox=table.bbox,
                                     cell_bboxes=[tuple(cell) for cell in table.cells],
                                 )

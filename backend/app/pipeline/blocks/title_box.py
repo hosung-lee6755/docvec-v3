@@ -49,6 +49,24 @@ def starts_with_roman(line: str) -> bool:
     return bool(_ROMAN_START_RE.match(line.strip()))
 
 
+# Markdown 표의 머리 구분선("|---|---|")
+_MARKDOWN_RULE_RE = re.compile(r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?$")
+
+
+def _pipe_rows(table_lines: list[str]) -> list[str]:
+    """Markdown 표 줄("| a | b |", "|---|---|")을 예전 칸 줄("a | b")로 바꾼다. HWP 표 글도 PDF·DOCX 처럼
+    Markdown 표로 적게 되면서(2026-11-25) 한 줄짜리 제목 상자가 머리 줄과 구분선 두 줄이 되었다."""
+    rows: list[str] = []
+    for line in table_lines:
+        stripped = line.strip()
+        if _MARKDOWN_RULE_RE.match(stripped):
+            continue
+        if stripped.startswith("|") and stripped.endswith("|") and len(stripped) > 1:
+            stripped = stripped[1:-1].replace("\\|", "|")
+        rows.append(stripped if stripped != line.strip() else line)
+    return rows
+
+
 def title_box_heading(
     table_lines: list[str], max_chars: int, allow_slogan: bool = True
 ) -> tuple[str, int] | None:
@@ -56,6 +74,7 @@ def title_box_heading(
 
     allow_slogan 이 거짓이면 번호 없는 표어 상자는 제목으로 보지 않는다. 번호·붙임 제목 상자로 장을 나눈 문서에서
     한 칸 상자는 장 안의 주체 표시("시·도(시·군), 농협경제지주…")라 1단계 제목으로 올리면 장 밖으로 튀어나온다."""
+    table_lines = _pipe_rows(table_lines)
     if len(table_lines) != 2:
         return None
     cells = [cell.strip() for cell in table_lines[1].split(_CELL_SEPARATOR)]

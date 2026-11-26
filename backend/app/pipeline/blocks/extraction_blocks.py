@@ -168,7 +168,16 @@ def resolve_extract_engine(engine: str, path: Path, mime_type: str) -> tuple[str
     if engine == "legacy":
         return "legacy", None
     has_text_layer, is_encrypted, _ = _detect_pdf_signals(path)
-    if has_text_layer or is_encrypted:
+    if is_encrypted:
+        return "docling", None
+    if has_text_layer:
+        # 앞 몇 쪽에만 글자 층이 있고 본문 쪽 글자는 윤곽선으로 그린 PDF 는 Docling 이 본문을 못 읽는다(만도 보고서,
+        # 2026-11-25). 자동 모드에서 그런 쪽이 많으면 쪽마다 글자 층과 OCR 을 고르는 전면 OCR 엔진으로 보낸다
+        if engine == "auto" and _outline_text_share(path) >= _OUTLINE_TEXT_SHARE_FOR_OCR:
+            return "legacy", (
+                "글자를 윤곽선으로 그린 쪽이 많은 PDF 라 Docling 대신 전면 OCR 엔진으로 처리했습니다. "
+                "글자 층이 있는 쪽은 글자 층을 그대로 씁니다."
+            )
         return "docling", None
     if engine == "docling":
         return "docling", (
@@ -176,6 +185,35 @@ def resolve_extract_engine(engine: str, path: Path, mime_type: str) -> tuple[str
             "추출 엔진을 '자동'으로 바꾸면 전면 OCR 로 처리합니다."
         )
     return "legacy", "텍스트 레이어가 없는 스캔 PDF 라 Docling 대신 전면 OCR 엔진으로 처리했습니다."
+
+
+# 윤곽선 글자 쪽이 이 비율 이상이면 자동 모드가 전면 OCR 엔진을 쓴다. 실측에서 본문을 잃은 문서는 45~82%,
+# 글자 층 문서는 1% 미만이었다(UIUX 가이드라인 988쪽 가운데 8쪽)
+_OUTLINE_TEXT_SHARE_FOR_OCR = 0.3
+
+
+def _outline_text_share(path: Path) -> float:
+    from app.pipeline.adapters.pdf_outline_text import outline_text_share
+
+    return outline_text_share(path)
+
+
+# 글자 층 글이 이보다 적으면(스캔 문서) 문서 어휘로 OCR 낱말을 바로잡지 않는다
+_MIN_VOCABULARY_CHARS = 200
+
+
+def _pdf_native_text(path: Path) -> str:
+    """PDF 글자 층의 글 전체. PDF 가 아니거나 열지 못하면 빈 문자열."""
+    if path.suffix.lower() != ".pdf":
+        return ""
+    try:
+        import fitz
+
+        with fitz.open(str(path)) as pdf:
+            return "\n".join(page.get_text() for page in pdf)
+    except Exception:  # noqa: BLE001 - 어휘 교정은 보조 단계다. 못 읽으면 건너뛴다
+        logger.debug("PDF 글자 층을 읽지 못해 OCR 어휘 교정을 건너뛴다", exc_info=True)
+        return ""
 
 
 def _is_scanned_pdf_run(path: Path, engine: str, routing_note: str | None) -> bool:
@@ -635,7 +673,20 @@ class TextExtractBlock(BaseBlock):
         #         NS-AM 검사매뉴얼이 34쪽(빈 쪽 포함)에서 원본과 같은 19쪽이 된다(2026-11-23).
         # 1.44.0: DOCX 표의 합친 칸을 한 번만 적고 합친 칸 목록(spans)을 남긴다. 예전에는 가로로 합친 칸이 열 수만큼
         #         되풀이됐다(d5 제안서 "직접인건비 소계", docx_adapter._table_grid, 2026-11-24).
-        return "1.44.0"
+        # 1.45.0: HWP·HWPX 쪽 맞춤이 쪽 경계에 걸친 문단, 세로로 합친 칸, 사용자 정의 영역 글머리를 견딘다. 원본을 열지
+        #         못한 HWP의 재구성 미리보기를 10~17분 걸리던 hwp5html XSLT 대신 추출과 같은 XML로 그린다. 쪽 결과가
+        #         달라지므로 실행 캐시를 다시 쓰지 않게 올린다(scandif 항만수요예측 보고서, 2026-11-25).
+        # 1.46.0: 제목 자리 없이 글상자로만 꾸민 PPTX 슬라이드도 위쪽의 큰 짧은 글을 제목으로 잡는다. 예전에는 이런
+        #         발표 자료의 제목이 하나도 없었다(scandif DYST 프로세스 정의서, 완료보고, slide_adapter, 2026-11-25).
+        #         PDF 선 표가 같은 폭으로 위아래에 놓인 두 표를 한 표로 합치지 않는다(법령심사 2쪽, ruled_tables).
+        #         합친 칸을 모든 형식이 같은 규칙(table_merge.fill_columns)으로 두고, 그림 표와 pdfplumber 표도
+        #         합친 칸 목록(spans)을 남긴다(사용자 지적, 2026-11-25).
+        # 1.47.0: 글자 층이 있는 PDF 에서 OCR 로 읽은 낱말의 한 글자 오인식을 같은 문서 글자 층의 낱말로 바로잡고
+        #         ("넥데이터" → "빅데이터"), 기호가 대부분인 그림 OCR 글은 본문에 넣지 않는다(심야버스 분석 요약본, 2026-11-25).
+        # 1.48.0: 본문 쪽 글자를 윤곽선으로 그린 PDF 는 자동 모드에서 전면 OCR 엔진으로 보내고(만도·열차·법령심사 보고서),
+        #         칸이 모두 빈 표는 내지 않는다. PPTX 레이아웃에 놓인 고정 글(표지 사업명 등)을 처음 쓰는 슬라이드에서
+        #         한 번 읽는다(2026-11-25 전체 대조).
+        return "1.48.0"
 
     @property
     def category(self) -> str:
@@ -710,6 +761,7 @@ class TextExtractBlock(BaseBlock):
                     from app.pipeline.adapters.scan_layout import enrich_scanned_pdf
 
                     enrich_scanned_pdf(parsed, tmp_path)
+                native_layer_text = _pdf_native_text(tmp_path)
             finally:
                 tmp_path.unlink(missing_ok=True)
 
@@ -756,6 +808,15 @@ class TextExtractBlock(BaseBlock):
             percent_fixes = fix_percent_in_pages(parsed.pages)
             if percent_fixes:
                 parsed.warnings.append(f"OCR이 %를 숫자로 읽은 값 {percent_fixes}개를 고쳤습니다.")
+
+            # 글자 층이 있는 PDF 에서 그림 글자로 된 제목 등을 OCR 이 한 글자씩 틀리게 읽은 낱말을 같은 문서 글자 층의
+            # 낱말로 바로잡는다("넥데이터" → "빅데이터", 2026-11-25). 글자 층 낱말은 건드리지 않는다
+            if len(native_layer_text) >= _MIN_VOCABULARY_CHARS:
+                from app.pipeline.ocr_cleanup import correct_pages_with_vocabulary
+
+                vocabulary_fixes = correct_pages_with_vocabulary(parsed.pages, native_layer_text)
+                if vocabulary_fixes:
+                    parsed.warnings.append(f"OCR로 읽은 낱말 {vocabulary_fixes}곳을 문서 글자 층의 낱말로 바로잡았습니다.")
 
             excluded_lines = (
                 _detect_header_footer_footnote_lines(parsed)

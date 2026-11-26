@@ -18,6 +18,8 @@ interface UploadModalProps {
   onUploaded?: (message: string) => void
   // 프로젝트 문서 화면에서 열면 그 프로젝트의 컬렉션만 고른다. 없으면(전체 문서 화면) 모든 컬렉션이다(2026-11-24)
   projectId?: string | null
+  // 컬렉션에서 들어온 문서 화면(?collection=)이면 그 컬렉션을 미리 골라 둔다. 바꿀 수는 있다(2026-11-24)
+  defaultCollectionId?: string
 }
 
 type UploadMode = 'files' | 'zip'
@@ -49,11 +51,12 @@ export function UploadModal({
   onClose,
   onUploaded,
   projectId,
+  defaultCollectionId = '',
 }: UploadModalProps) {
   const fileRef = useRef<HTMLInputElement>(null)
   const zipFileRef = useRef<HTMLInputElement>(null)
 
-  const [uploadCollectionId, setUploadCollectionId] = useState('')
+  const [uploadCollectionId, setUploadCollectionId] = useState(defaultCollectionId)
   const [uploadWorkflowId, setUploadWorkflowId] = useState('')
   const [analysisWorkflowId, setAnalysisWorkflowId] = useState('')
   const [skipReview, setSkipReview] = useState(false)
@@ -89,7 +92,7 @@ export function UploadModal({
 
   const closeUploadModal = () => {
     onClose()
-    setUploadCollectionId('')
+    setUploadCollectionId(defaultCollectionId)
     setUploadWorkflowId('')
     setAnalysisWorkflowId('')
     setSkipReview(false)

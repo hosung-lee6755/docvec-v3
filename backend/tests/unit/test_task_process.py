@@ -356,6 +356,25 @@ def test_normalize_ws_removes_all_whitespace():
     assert proc._normalize_ws(" a\tb \n c ") == "abc"
 
 
+def test_normalize_ws_drops_private_use_bullets():
+    # HWP 글머리(Wingdings 등)는 사용자 정의 영역 글자라 미리보기 PDF에서 글로 뽑히지 않을 때가 많다(2026-11-25)
+    assert proc._normalize_ws(" 품목의 수출입별") == "품목의수출입별"
+
+
+def test_normalize_ws_ignores_punctuation_such_as_toc_leaders_and_quotes():
+    # 미리보기는 목차의 탭 채움을 "-----"로 그리고, 따옴표는 글꼴이 갈리면 자리가 바뀐다(2026-11-25)
+    assert proc._normalize_ws("(2) 연구 동향 ------- 3") == proc._normalize_ws("(2) 연구 동향\t3") == "2연구동향3"
+    assert proc._normalize_ws("(‘국내조선업생산액’)") == proc._normalize_ws("(‘’국내조선업생산액)")
+
+
+def test_table_cell_keys_take_a_merged_cell_once():
+    rows = [["항만", "2024"], ["항만", "2025"]]
+    spans = [{"row": 0, "col": 0, "row_span": 2, "col_span": 1}]
+
+    assert proc._table_cell_keys(rows, spans) == ["항만", "2024", "2025"]
+    assert proc._table_cell_keys(rows) == ["항만", "2024", "항만", "2025"]
+
+
 # ------------------------------------------------------- HWP repagination
 
 
@@ -410,6 +429,57 @@ def test_repaginate_noop_when_no_preview_pdf_text():
     _repaginate(parsed, None)
 
     assert parsed.page_count == 1
+
+
+def test_repaginate_finds_a_paragraph_that_runs_over_a_page_break():
+    # 앞 글이 9쪽 끝에서 10쪽으로 넘어간 문단을 같은 문장이 되풀이된 24쪽과 맞춰 뒤 블록이 모두 밀렸다(2026-11-25)
+    intro = RawTextBlock("머리 문단", 1)
+    spanning = RawTextBlock("예측 모델 결과 시각화 항만별 물동량 배분", 1)
+    after = RawTextBlock("표 다음 글", 1)
+    parsed = _hwp_parsed([intro, spanning, after])
+    pages_text = [
+        {"page_number": 1, "text": "머리 문단\n예측 모델 결과"},
+        {"page_number": 2, "text": "시각화 항만별 물동량 배분\n표 다음 글"},
+        {"page_number": 3, "text": "예측 모델 결과 시각화 항만별 물동량 배분"},
+    ]
+
+    _repaginate(parsed, pages_text)
+
+    assert (intro.page_number, spanning.page_number, after.page_number) == (1, 1, 2)
+
+
+def test_repaginate_does_not_jump_far_on_a_short_repeated_heading():
+    # 장마다 되풀이되는 짧은 제목("1. 분석 개요")을 놓치면 20쪽 뒤 다음 장의 같은 제목과 맞아 뒤 블록이 모두
+    # 밀렸다(산업단지 분석결과보고서 HWP, 2026-11-25). 짧은 글은 가까운 쪽에서만 찾는다
+    heading = RawTextBlock("1. 분석 개요", 1)
+    body = RawTextBlock("에너지 사용량 패턴을 분석한 결과를 정리한다", 1)
+    parsed = _hwp_parsed([heading, body])
+    pages_text = [
+        {"page_number": 1, "text": "표지"},
+        {"page_number": 2, "text": "에너지 사용량 패턴을 분석한 결과를 정리한다"},
+        {"page_number": 3, "text": "본문"},
+        {"page_number": 4, "text": "본문"},
+        {"page_number": 5, "text": "1. 분석 개요 (다음 장)"},
+    ]
+
+    _repaginate(parsed, pages_text)
+
+    assert (heading.page_number, body.page_number) == (1, 2)
+
+
+def test_repaginate_matches_captions_whatever_number_the_preview_gives():
+    # 한컴이 저장한 표 번호(7)와 H2Orestart 가 다시 매긴 번호(1)가 달라 표 제목이 모두 어긋났다(2026-11-25)
+    first = RawTextBlock("머리 문단", 1)
+    caption = RawTextBlock("표 7 컨테이너 환적 물동량 예측 모델 검증 결과", 1)
+    parsed = _hwp_parsed([first, caption])
+    pages_text = [
+        {"page_number": 1, "text": "머리 문단"},
+        {"page_number": 2, "text": "표 1 컨테이너 환적 물동량 예측 모델 검증 결과"},
+    ]
+
+    _repaginate(parsed, pages_text)
+
+    assert caption.page_number == 2
 
 
 def test_repaginate_assigns_pages_tables_and_images():

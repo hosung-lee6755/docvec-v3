@@ -47,7 +47,7 @@ const createQueryClient = () => new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 })
 
-const renderPage = (initialRoute = '/documents/test-doc') => {
+const renderPage = (initialRoute: string | { pathname: string; state?: unknown } = '/documents/test-doc') => {
   const queryClient = createQueryClient()
   return render(
     <QueryClientProvider client={queryClient}>
@@ -215,6 +215,23 @@ describe('DocumentDetailPage', () => {
     renderPage()
     expect(screen.getByText('test.pdf')).toBeInTheDocument()
     expect(screen.getByText('문서 목록')).toBeInTheDocument()
+  })
+
+  it('goes back to the filtered list it was opened from', () => {
+    // 컬렉션에서 들어온 문서 목록(?collection=)에서 문서를 열고 돌아가면 같은 컬렉션 목록이어야 한다(2026-11-24)
+    mockHook(useDocumentsModule.useDocument, { data: createMockDocument(), isLoading: false, isError: false })
+
+    renderPage({ pathname: '/documents/test-doc', state: { backTo: '/documents?collection=c3' } })
+
+    expect(screen.getByRole('link', { name: '문서 목록' }).getAttribute('href')).toBe('/documents?collection=c3')
+  })
+
+  it('ignores a back address that leaves the app', () => {
+    mockHook(useDocumentsModule.useDocument, { data: createMockDocument(), isLoading: false, isError: false })
+
+    renderPage({ pathname: '/documents/test-doc', state: { backTo: '//evil.example/x' } })
+
+    expect(screen.getByRole('link', { name: '문서 목록' }).getAttribute('href')).toBe('/documents')
   })
 
   it('displays metadata fields for UPLOADED status document', () => {

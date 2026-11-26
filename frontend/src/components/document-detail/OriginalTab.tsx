@@ -1,11 +1,15 @@
+import { useState } from 'react'
 import { ArrowLeft, Loader2 } from 'lucide-react'
+import { PdfPageViewer } from './PdfPageViewer'
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { markdownPlugins } from '../../lib/markdownPlugins'
 import { MarkdownLink } from './MarkdownLink'
 import { usePdfBlobUrl } from '../../hooks/usePdfBlobUrl'
 import { ViewModeToggle } from './documentDetailParts'
-import { toRagRecordsJson, type RagRecordSource } from './documentDetailHelpers'
-import type { DocumentChunksResult } from '../../hooks/useDocuments'
+import { legacyTablesToMarkdown, toRagRecordsJson, type RagRecordSource } from './documentDetailHelpers'
+import type { DocumentChunksResult, DocumentTable } from '../../hooks/useDocuments'
+import { splitByTables } from '../../lib/tableSpans'
+import { SpanTable } from './SpanTable'
 import { ErrorText } from '../ui'
 
 interface Page {
@@ -33,6 +37,8 @@ interface OriginalTabProps {
   showJson: boolean
   onOriginalPageChange: (page: number) => void
   onShowJsonChange: (v: boolean) => void
+  // 저장된 표(합친 칸 목록 포함). 본문의 같은 표를 칸을 합친 모양으로 그린다
+  tables?: DocumentTable[]
   // 다른 탭에서 넘어왔을 때 그 탭 이름과 돌아가기 동작
   returnLabel?: string
   onReturn?: () => void
@@ -54,11 +60,15 @@ export default function OriginalTab({
   onShowJsonChange,
   returnLabel,
   onReturn,
+  tables,
 }: OriginalTabProps) {
   const pages = pagesTextResult?.pages ?? []
   const isPdfPreview = previewResult?.kind === 'pdf'
   // 페이지를 넘길 때마다 iframe 이 새로 만들어지므로, PDF 는 한 번만 받아 blob URL 로 띄운다.
   const pdfBlob = usePdfBlobUrl(isPdfPreview ? previewResult?.url : undefined)
+  // PDF.js 로 열지 못한 PDF 의 blob URL. 그 문서만 예전처럼 브라우저 PDF 뷰어로 보여 준다
+  const [viewerFailedUrl, setViewerFailedUrl] = useState<string | undefined>(undefined)
+  const viewerUrl = isPdfPreview && pdfBlob.blobUrl && viewerFailedUrl !== pdfBlob.blobUrl ? pdfBlob.blobUrl : undefined
   const isNativePdf = isPdfDoc
   // 원본 PDF 는 page_map 으로, HWP·DOCX 는 미리보기 PDF 쪽에 맞춰 자른 파싱 본문이 온다(synced).
   // 예전에는 원본 PDF 만 함께 넘겼고, 글이 없는 마지막 쪽(그림·빈 쪽)으로는 넘어가지 못했다
@@ -125,7 +135,7 @@ export default function OriginalTab({
           이 형식은 원본을 직접 렌더링할 수 없어 재구성한 근사치입니다 — 레이아웃·글꼴·이미지 배치가 실제 원본과 다를 수 있습니다. 정확한 원본은 "원본 다운로드"를 이용하세요.
         </p>
       )}
-      <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--space-4)' }}>
         <div style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)', flexShrink: 0 }}>
             {isPdfPreview ? '원본 PDF' : '원본 (변환 미리보기)'}
@@ -133,7 +143,9 @@ export default function OriginalTab({
           {isPreviewError && (
             <p><ErrorText error={previewError} message="원문 미리보기를 만들지 못했습니다." /></p>
           )}
-          {!isPreviewError && iframeSrc ? (
+          {!isPreviewError && viewerUrl ? (
+            <PdfPageViewer url={viewerUrl} page={clampedPage} onLoadError={() => setViewerFailedUrl(viewerUrl)} />
+          ) : !isPreviewError && iframeSrc ? (
             <iframe
               key={isPdfPreview ? clampedPage : 'html'}
               src={iframeSrc}
@@ -157,7 +169,7 @@ export default function OriginalTab({
             </p>
             <ViewModeToggle showJson={showJson} onChange={onShowJsonChange} />
           </div>
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-3)', background: showJson ? 'var(--color-surface-subtle)' : 'var(--color-surface)' }}>
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'auto', overflowWrap: 'anywhere', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-3)', background: showJson ? 'var(--color-surface-subtle)' : 'var(--color-surface)' }}>
             {isContentLoading && (
               <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6)' }}>
                 <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--color-text-muted)' }} />
@@ -180,9 +192,15 @@ export default function OriginalTab({
             )}
             {!isContentLoading && !showJson && !isCurrentPageEmpty && (
               <div className="markdown-body" style={{ fontSize: 13, lineHeight: 1.7 }}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
-                  {currentPageText ?? content?.full_text ?? ''}
-                </ReactMarkdown>
+                {splitByTables(currentPageText ?? content?.full_text ?? '', tables).map((part, index) => (
+                  part.kind === 'table'
+                    ? <SpanTable key={index} table={part.table} label={part.table.title ?? undefined} />
+                    : (
+                      <ReactMarkdown key={index} remarkPlugins={markdownPlugins} components={{ a: MarkdownLink }}>
+                        {legacyTablesToMarkdown(part.text)}
+                      </ReactMarkdown>
+                    )
+                ))}
               </div>
             )}
           </div>

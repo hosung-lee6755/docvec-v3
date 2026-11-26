@@ -441,7 +441,7 @@ def test_block_metadata(block, btype, schema):
 
 
 def test_text_extract_block_version():
-    assert eb.TextExtractBlock().block_version == "1.44.0"
+    assert eb.TextExtractBlock().block_version == "1.48.0"
 
 
 def test_config_defaults_and_validation():
@@ -543,3 +543,18 @@ def test_text_extract_passes_the_original_filename_to_the_adapter():
     _result, _db, _job, adapter, _ = _extract(doc)
 
     assert adapter.extract.call_args.args[1]["original_filename"] == "매출.csv"
+
+
+def test_pdf_native_text_reads_the_text_layer_and_skips_other_files(tmp_path):
+    import fitz
+
+    pdf = fitz.open()
+    pdf.new_page().insert_text((72, 72), "Night bus routes")
+    path = tmp_path / "a.pdf"
+    pdf.save(path)
+    other = tmp_path / "a.docx"
+    other.write_bytes(b"x")
+
+    assert "Night bus routes" in eb._pdf_native_text(path)
+    assert eb._pdf_native_text(other) == ""
+    assert eb._pdf_native_text(tmp_path / "missing.pdf") == ""

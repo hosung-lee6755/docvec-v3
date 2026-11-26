@@ -210,6 +210,28 @@ def test_hwp_collect_text_excludes_nested_controls_but_keeps_other_children():
     assert hwp._hwp_collect_text(para) == "AB"
 
 
+def test_hwp_collect_text_keeps_caption_auto_numbers():
+    # 표·그림 제목의 자동 번호는 AutoNumbering 컨트롤이라 예전에는 "표  컨테이너 …"처럼 번호가 빠졌다
+    # (항만수요예측 결과보고서, 2026-11-25). 쪽 번호 같은 다른 자동 번호는 본문 글이 아니므로 넣지 않는다
+    para = ET.fromstring(
+        '<Paragraph><Text>표 </Text><AutoNumbering kind="table" number="7"/><Text> 컨테이너 검증</Text>'
+        '<Text> 그림 </Text><AutoNumbering kind="picture" number="3"/>'
+        '<AutoNumbering kind="page" number="12"/></Paragraph>'
+    )
+
+    assert hwp._hwp_collect_text(para) == "표 7 컨테이너 검증 그림 3"
+
+
+def test_hwpx_collect_text_keeps_caption_auto_numbers():
+    root = ET.fromstring(_hp(
+        '<hp:p><hp:run><hp:t>표 </hp:t><hp:ctrl><hp:autoNum num="4" numType="TABLE"/></hp:ctrl>'
+        '<hp:t> 사업 일정</hp:t></hp:run><hp:run><hp:ctrl><hp:autoNum num="9" numType="PAGE"/></hp:ctrl></hp:run></hp:p>'
+    ))
+
+    for skip_tables in (False, True):
+        assert hwp._hwpx_collect_text(root[0], skip_tables=skip_tables) == "표 4 사업 일정"
+
+
 # ---------------------------------------------------------- image helpers
 
 
@@ -317,7 +339,7 @@ def test_extract_hwpx_builds_single_page_with_paragraph_table_and_image_blocks(t
     # sections are read in name order; a table stays where it appears in the document
     # (예전에는 표를 모두 문서 끝에 모아 설명 문단과 떨어졌다, 2026-11-13)
     assert [b.text for b in page.text_blocks] == [
-        "첫 섹션", "[표 1]\nA | B\nC | D", "둘째 섹션",
+        "첫 섹션", "[표 1]\n| A | B |\n|---|---|\n| C | D |", "둘째 섹션",
     ]
     assert page.text_blocks[1].block_type == "table"
     assert page.table_candidates[0].rows == [["A", "B"], ["C", "D"]]
@@ -377,7 +399,7 @@ def test_extract_hwp_parses_body_tables_and_embedded_images():
 
     assert doc.format_id == "hwp" and doc.page_count == 1 and doc.warnings == []
     page = doc.pages[0]
-    assert [b.text for b in page.text_blocks] == ["본문", "[표 1]\nx | y"]
+    assert [b.text for b in page.text_blocks] == ["본문", "[표 1]\n| x | y |\n|---|---|"]
     assert page.text_blocks[1].block_type == "table"
     assert page.table_candidates[0].rows == [["x", "y"]]
     assert page.image_regions[0].image_bytes == PNG
@@ -563,7 +585,7 @@ def test_ordered_text_blocks_put_the_inner_title_on_the_line_after_the_table_num
         [], [[["a", "b"], ["c", "d"]]], [("t", 0)], None, {0: "[칸 안의 표 1] 제목"},
     )
 
-    assert blocks[0].text == "[표 1]\n[칸 안의 표 1] 제목\na | b\nc | d"
+    assert blocks[0].text == "[표 1]\n[칸 안의 표 1] 제목\n| a | b |\n|---|---|\n| c | d |"
     assert _classify(blocks[0].text.splitlines()[0], None, None) == ("TABLE", None)
     assert candidates[0].title == "[칸 안의 표 1] 제목"
 

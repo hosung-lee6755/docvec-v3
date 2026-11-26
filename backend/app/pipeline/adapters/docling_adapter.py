@@ -111,7 +111,8 @@ def _table_grid(table_item, texts: list[str] | None = None) -> tuple[list[list[s
         rows, spans = grid_from_cells([_cell_tuple(c, text=t) for c, t in pairs])
         return rows, spans or None
     body = [(c, t) for c, t in pairs if c.start_row_offset_idx >= header_count]
-    body_rows, body_spans = grid_from_cells([_cell_tuple(c, row_shift=header_count, text=t) for c, t in body])
+    context = [_cell_tuple(c, row_shift=header_count, text=t) for c, t in pairs]  # 머리글 줄은 음수 번호
+    body_rows, body_spans = grid_from_cells([_cell_tuple(c, row_shift=header_count, text=t) for c, t in body], context)
     header = _merged_header([c for c in cells if c.start_row_offset_idx < header_count])
     width = max(len(header), *(len(r) for r in body_rows)) if body_rows else len(header)
     rows = [header + [""] * (width - len(header)), *(r + [""] * (width - len(r)) for r in body_rows)]
@@ -691,6 +692,9 @@ class DoclingAdapter(BaseAdapter):
                             lambda box, page_no=page_no: native_region.read(page_no, box),
                         )
                     rows, spans = _table_grid(item, cell_texts)
+                    if not any((cell or "").strip() for row in rows for cell in row):
+                        # 칸을 하나도 읽지 못한 표는 빈 "[표 N]" 만 남긴다(윤곽선 글자 쪽, 만도 보고서 2026-11-25)
+                        continue
                     table_ordinal += 1
                     _emit_table(
                         page, elements, section_path, rows, spans, bbox, "docling_table",

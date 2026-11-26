@@ -168,3 +168,17 @@ def test_long_square_bullet_sentence_is_a_paragraph():
     assert len(sentence) > 50
     assert _classify(sentence, None, None) == ("PARAGRAPH", None)
     assert _classify("□ 기계설비의 착공 전 확인과 사용 전 검사 대상 건축물(시행령 제11조, 별표 5)", None, None) == ("HEADING", 1)
+
+
+def test_hyphen_numbered_section_heading_is_a_heading_at_its_depth():
+    # AIDE 구축제안서 DOCX(2026-11-25): "1-1. 개발 범위"가 "0.1 배경 및 목적"과 같은 굵은 11pt 절 제목인데
+    # 점 번호만 알아봐 문단이 되었다
+    assert _classify("1-1. 개발 범위", None, None) == ("HEADING", 2)
+    assert _classify("2-3-1. 세부 일정", None, None) == ("HEADING", 3)
+
+
+def test_phone_numbers_dates_and_ranges_are_not_hyphen_headings():
+    assert _classify("010-1234-5678 담당자 연락처", None, None)[0] != "HEADING"
+    assert _classify("2026-11-25 회의 결과", None, None)[0] != "HEADING"
+    assert _classify("1-2개월 안에 마친다", None, None)[0] != "HEADING"
+    assert _classify("3-4 명이 참석했다", None, None)[0] != "HEADING"

@@ -107,3 +107,18 @@ describe('UploadModal project scope and analysis workflow', () => {
     expect(mocks.workflowsFor).toHaveBeenCalledWith('p1', 'ANALYSIS')
   })
 })
+
+describe('UploadModal opened from a collection', () => {
+  it('starts with the collection the documents page is showing', () => {
+    mocks.collectionsFor.mockReturnValue([
+      { id: 'c2', name: '공정 문서', project_id: 'p1' },
+      { id: 'c3', name: '회의록', project_id: 'p1' },
+    ])
+    mocks.workflowsFor.mockReturnValue([])
+
+    render(<UploadModal isOpen onClose={() => {}} projectId="p1" defaultCollectionId="c3" />)
+
+    expect((screen.getByLabelText(/컬렉션/) as HTMLSelectElement).value).toBe('c3')
+    expect(screen.getByLabelText('분석 워크플로우')).toBeTruthy()
+  })
+})

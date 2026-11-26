@@ -46,3 +46,25 @@ describe('toRagRecordsJson', () => {
     expect(json.chunks.map((c: { id: string }) => c.id)).toEqual(['c2'])
   })
 })
+
+describe('legacyTablesToMarkdown', () => {
+  it('turns an older HWP table written as "a | b" rows into a markdown table', async () => {
+    const { legacyTablesToMarkdown } = await import('./documentDetailHelpers')
+    const text = '앞 문단\n\n[표 3]\n구분 | 품목 | \n개발 / 대상 | 컨테이너(환적) | 철광석\n\n뒤 문단'
+
+    expect(legacyTablesToMarkdown(text)).toBe(
+      '앞 문단\n\n[표 3]\n| 구분 | 품목 |  |\n|---|---|---|\n| 개발 / 대상 | 컨테이너(환적) | 철광석 |\n\n뒤 문단',
+    )
+  })
+
+  it('keeps the inner table title line and leaves markdown tables and plain text alone', async () => {
+    const { legacyTablesToMarkdown } = await import('./documentDetailHelpers')
+    const markdown = '[표 1]\n| a | b |\n|---|---|\n| c | d |'
+    const titled = '[표 2]\n[칸 안의 표 1] 제목\na | b'
+    const prose = '본문에 | 기호가 들어간 줄'
+
+    expect(legacyTablesToMarkdown(markdown)).toBe(markdown)
+    expect(legacyTablesToMarkdown(titled)).toBe('[표 2]\n[칸 안의 표 1] 제목\n| a | b |\n|---|---|')
+    expect(legacyTablesToMarkdown(prose)).toBe(prose)
+  })
+})

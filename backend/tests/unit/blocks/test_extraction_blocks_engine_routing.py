@@ -57,3 +57,23 @@ def test_non_pdf_always_uses_legacy_adapter_without_probe():
         for engine in ("auto", "docling", "legacy"):
             assert eb.resolve_extract_engine(engine, Path("a.docx"), "") == ("legacy", None)
     probe.assert_not_called()
+
+
+def test_auto_sends_pdf_with_many_outline_text_pages_to_full_page_ocr():
+    """표지에만 글자 층이 있고 본문 쪽 글자는 윤곽선으로 그린 PDF(만도 보고서, 2026-11-25)는 Docling 이 본문을 못 읽는다."""
+    with _signals(True), patch.object(eb, "_outline_text_share", return_value=0.8):
+        engine, note = eb.resolve_extract_engine("auto", Path("a.pdf"), PDF)
+
+    assert engine == "legacy"
+    assert "윤곽선" in note
+
+
+def test_auto_keeps_docling_when_few_pages_are_outline_text():
+    with _signals(True), patch.object(eb, "_outline_text_share", return_value=0.01):
+        assert eb.resolve_extract_engine("auto", Path("a.pdf"), PDF) == ("docling", None)
+
+
+def test_explicit_docling_does_not_measure_outline_text():
+    with _signals(True), patch.object(eb, "_outline_text_share") as share:
+        assert eb.resolve_extract_engine("docling", Path("a.pdf"), PDF) == ("docling", None)
+    share.assert_not_called()

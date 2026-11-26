@@ -140,3 +140,44 @@ export function toRagRecordsJson(doc: RagRecordSource, chunks: DocumentChunk2[],
     })),
   }, null, 2)
 }
+
+// 표 머리표 줄("[표 3]")과 칸 안에서 떼어 낸 표의 제목 줄("[칸 안의 표 1] …")
+const TABLE_LABEL_LINE = /^\[표 \d+\]$/
+const INNER_TABLE_TITLE_LINE = /^\[칸 안의 표/
+const LEGACY_CELL_SEPARATOR = ' | '
+
+function legacyRowsToMarkdown(rows: string[]): string[] {
+  const cells = rows.map((row) => row.split(LEGACY_CELL_SEPARATOR).map((cell) => cell.trim()))
+  const width = Math.max(...cells.map((row) => row.length))
+  const line = (row: string[]) =>
+    `| ${[...row, ...Array(width - row.length).fill('')].map((cell) => cell.replace(/\|/g, '\|')).join(' | ')} |`
+  return [line(cells[0]), `|${Array(width).fill('---').join('|')}|`, ...cells.slice(1).map(line)]
+}
+
+/**
+ * 예전에 처리된 HWP·HWPX 문서의 표 글("a | b" 줄)을 Markdown 표로 바꿔 보여 준다.
+ * 2026-11-25 부터는 처리할 때 PDF·DOCX 처럼 Markdown 표로 적지만, 그 전에 처리한 문서는 원문 대조 화면에서
+ * 표가 한 줄로 뭉개지고 PDF 표만 표 모양으로 나왔다. 재처리 전까지 화면에서만 맞춘다.
+ */
+export function legacyTablesToMarkdown(text: string): string {
+  const lines = text.split('\n')
+  const out: string[] = []
+  let index = 0
+  while (index < lines.length) {
+    const line = lines[index]
+    out.push(line)
+    index += 1
+    if (!TABLE_LABEL_LINE.test(line.trim())) continue
+    if (index < lines.length && INNER_TABLE_TITLE_LINE.test(lines[index].trim())) {
+      out.push(lines[index])
+      index += 1
+    }
+    const rows: string[] = []
+    while (index < lines.length && lines[index].includes(LEGACY_CELL_SEPARATOR) && !lines[index].trimStart().startsWith('|')) {
+      rows.push(lines[index])
+      index += 1
+    }
+    if (rows.length) out.push(...legacyRowsToMarkdown(rows))
+  }
+  return out.join('\n')
+}

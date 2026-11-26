@@ -13,6 +13,8 @@
 import re
 from dataclasses import dataclass, field
 
+from app.pipeline.adapters.table_merge import fill_columns
+
 BODY_FONT_FALLBACK = 10.0
 # charPr의 height는 1/100pt 단위다
 _HEIGHT_UNIT = 100.0
@@ -147,8 +149,13 @@ def table_grid(table, cell_text) -> tuple[list[list[str]], list[dict]]:
     return grid_from_cells(cells)
 
 
-def grid_from_cells(cells: list[tuple[int, int, int, int, str]]) -> tuple[list[list[str]], list[dict]]:
-    """(줄, 열, 줄 수, 열 수, 글) 목록으로 격자와 합친 칸 목록을 만든다. HWPX, 구형 HWP, DOCX 가 함께 쓴다."""
+def grid_from_cells(
+    cells: list[tuple[int, int, int, int, str]], context: list[tuple[int, int, int, int, str]] | None = None,
+) -> tuple[list[list[str]], list[dict]]:
+    """(줄, 열, 줄 수, 열 수, 글) 목록으로 격자와 합친 칸 목록을 만든다. HWPX, 구형 HWP, DOCX, Docling 이 함께 쓴다.
+
+    context 는 머리글을 떼고 본문만 넘길 때 머리글까지 담은 칸 목록이다(머리글 줄 번호는 음수). 가로로 합친 칸을
+    열마다 채울지 머리글을 보고 정한다."""
     if not cells:
         return [], []
     height = max(row + row_span for row, _, row_span, _, _ in cells)
@@ -158,9 +165,13 @@ def grid_from_cells(cells: list[tuple[int, int, int, int, str]]) -> tuple[list[l
 
     grid = [["" for _ in range(width)] for _ in range(height)]
     spans: list[dict] = []
-    for row, col, row_span, col_span, text in cells:
+    for cell in cells:
+        row, col, row_span, col_span, text = cell
+        # 합친 칸을 어느 열에 적을지는 모든 형식이 같은 규칙을 쓴다(table_merge.fill_columns, 2026-11-25)
+        targets = fill_columns(cell, context or cells, width)
         for offset in range(row_span):
-            grid[row + offset][col] = text
+            for target in targets:
+                grid[row + offset][target] = text
         if row_span > 1 or col_span > 1:
             spans.append({"row": row, "col": col, "row_span": row_span, "col_span": col_span})
 

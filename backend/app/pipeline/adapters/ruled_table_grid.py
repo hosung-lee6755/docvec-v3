@@ -4,9 +4,9 @@ pdfplumber 의 extract() 는 합친 칸의 글을 첫 자리에만 두고 나머
 ("구 분"이 두 줄에 걸친 경우)의 아랫줄이 비고, 두 줄짜리 머리글의 윗줄("NS형")이 아랫줄 세 칸
 ("마찰클러치형", "클러치일체형", "전자클러치형")과 이어지지 않았다(KR S-03010 표 2, 2026-11-20).
 - 세로로 합친 칸은 걸친 줄마다 글을 둔다.
-- 가로로 합친 칸도 걸친 열마다 글을 둔다. 원본에서 "1Φ220V AC"는 NS형 세 종류 모두의 사용전원인데, 첫 열에만
-  두면 나머지 두 종류의 값이 빈칸으로 읽혔다(사용자 지적, 2026-11-20). 선으로 그린 표는 열이 실제 선이라
-  Docling 표처럼 열이 잘못 늘어나 같은 글이 일곱 번 복사되는 일이 없다. 표 폭의 절반보다 넓은 칸(설명, 중간 제목)은 첫 열에만 둔다.
+- 가로로 합친 칸은 다른 형식과 같은 table_merge.fill_columns 규칙을 따른다. 원본에서 "1Φ220V AC"는 NS형 세 종류
+  모두의 사용전원이라 열마다 두고(사용자 지적, 2026-11-20), 머리글과 같은 폭으로 합친 칸이나 행 이름 칸, 표 폭의
+  절반보다 넓은 칸(설명, 중간 제목)은 첫 열에만 둔다(2026-11-25).
 - 글이 시작되는 칸이 하나도 없는 열(장식 선이 만든 열)은 채우기 전에 뺀다. 그래야 가로 채우기가 빈 열로 번지지 않는다.
 - 맨 윗줄 칸이 여러 줄에 걸치고 그 아래 열이 나뉘면 머리글이 여러 줄이다. 열마다 위에서 아래로 이어 붙여 한 줄로 만든다.
 합친 칸 위치는 spans 로 남겨 표 탭이 원본처럼 칸을 합쳐 보여 준다.
@@ -15,11 +15,10 @@ from __future__ import annotations
 
 from pdfplumber.table import Table
 
+from app.pipeline.adapters.table_merge import fill_columns
+
 # 칸 경계 좌표를 같은 값으로 볼 때 반올림하는 자리(pt 소수 첫째 자리)
 _COORD_DIGITS = 1
-# 가로로 합친 칸은 표 폭의 이 비율 이하에 걸칠 때만 열마다 채운다. 더 넓은 칸은 설명·중간 제목이라 첫 열에만 둔다
-# (디에스아이 진단요약서의 "시설 투자 및 운용방법 개선을 통해 절감"이 열 개 넘는 열에 되풀이됐다)
-MAX_FILL_SHARE = 0.5
 # 이보다 많은 줄을 머리글로 보지 않는다(docling_adapter 와 같다)
 MAX_HEADER_ROWS = 3
 
@@ -77,7 +76,7 @@ def _without_ghost_columns(cells: list[Cell]) -> list[Cell]:
     return trimmed
 
 
-def _fill_grid(cells: list[Cell]) -> tuple[list[list[str]], list[dict]]:
+def _fill_grid(cells: list[Cell], context: list[Cell] | None = None) -> tuple[list[list[str]], list[dict]]:
     """합친 칸은 걸친 줄과 열마다 글을 둔다(표 폭의 절반보다 넓은 칸은 첫 열에만). 글이 시작되는 칸이 하나도 없는 줄은 뺀다.
 
     다른 열의 가는 선 때문에 생긴 격자 줄은 합친 칸 글만 되풀이하게 된다(자율형공장 공고 15쪽 "정부일반형
@@ -87,10 +86,13 @@ def _fill_grid(cells: list[Cell]) -> tuple[list[list[str]], list[dict]]:
     grid = [["" for _ in range(width)] for _ in range(height)]
     origins: set[int] = set()
     spans: list[dict] = []
-    for row, col, row_span, col_span, text in cells:
+    for cell in cells:
+        row, col, row_span, col_span, text = cell
         if text:
             origins.add(row)
-        filled_cols = range(col, col + col_span) if col_span <= width * MAX_FILL_SHARE else [col]
+        # 가로로 합친 칸은 모든 형식이 같은 규칙을 쓴다(table_merge.fill_columns). context 는 머리글을 뗀 본문일 때
+        # 머리글까지 담은 칸 목록(머리글 줄 번호는 음수)이다
+        filled_cols = fill_columns(cell, context or cells, width)
         for offset in range(row_span):
             for target in filled_cols:
                 grid[row + offset][target] = text
@@ -140,7 +142,8 @@ def merged_cell_grid(table: Table, extra: dict[tuple, str] | None = None) -> tup
     if depth < 2 or not any(text for *_, text in body):
         return _fill_grid(cells)
     header = _merged_header([c for c in cells if c[0] < depth])
-    body_rows, body_spans = _fill_grid(body)
+    context = [(row - depth, col, row_span, col_span, text) for row, col, row_span, col_span, text in cells]
+    body_rows, body_spans = _fill_grid(body, context)
     width = max(len(header), *(len(r) for r in body_rows)) if body_rows else len(header)
     rows = [header + [""] * (width - len(header)), *(r + [""] * (width - len(r)) for r in body_rows)]
     return rows, [{**span, "row": span["row"] + 1} for span in body_spans]

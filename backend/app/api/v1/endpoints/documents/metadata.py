@@ -279,11 +279,12 @@ async def get_document_pages_text(
     """원문 대조 탭이 원본과 함께 쪽을 넘길 때 쓰는 쪽별 파싱 본문.
 
     PDF 는 page_map(원본의 실제 쪽 경계)으로 자른다. DOCX·HWP·HWPX 는 미리보기 PDF 의 쪽 나눔이 유일한 쪽
-    구조라서, 미리보기 쪽마다 첫머리 글을 파싱 본문에서 찾아 같은 쪽으로 자른다(page_text_align).
+    구조라서, 미리보기 쪽에 맞춰 자른다. 처리 때 저장한 page_map 과 미리보기 쪽 첫머리 찾기 가운데 미리보기 글과
+    더 잘 맞는 쪽을 쓴다(page_text_align.split_text_for_preview, 2026-11-25).
     예전에는 미리보기 PDF 에서 뽑은 글을 돌려주고 화면은 파싱 본문 전체를 보여 줘 두 쪽이 함께 움직이지 않았다."""
     import asyncio
 
-    from app.services.page_text_align import split_text_by_pages
+    from app.services.page_text_align import split_text_for_preview
     from app.services.preview_service import pdf_pages_text_for
 
     doc = await db.scalar(select(Document).where(Document.id == document_id))
@@ -295,8 +296,12 @@ async def get_document_pages_text(
     if not doc.original_filename.lower().endswith(".pdf"):
         preview_pages = await asyncio.to_thread(pdf_pages_text_for, str(doc.id))
         if preview_pages:
-            # 미리보기 PDF 쪽에 맞춰 파싱 본문을 자른다. 맞추지 못하면 미리보기 글을 그대로 주고 synced=False 로 알린다
-            pieces = split_text_by_pages(text, [p["text"] for p in preview_pages])
+            # 미리보기 PDF 쪽에 맞춰 파싱 본문을 자른다. 처리 때 저장한 page_map 과 쪽 첫머리 찾기 가운데 미리보기와
+            # 더 잘 맞는 쪽을 쓴다. 둘 다 못 하면 미리보기 글을 그대로 주고 synced=False 로 알린다
+            # 맞춤 나누기는 큰 문서(224쪽 HTML)에서 2초쯤 걸려 이벤트 루프를 막지 않게 스레드에서 돈다
+            pieces = await asyncio.to_thread(
+                split_text_for_preview, text, doc.page_map, [p["text"] for p in preview_pages],
+            )
             if pieces is not None:
                 pages = [{"page_number": i + 1, "text": piece} for i, piece in enumerate(pieces)]
                 return _pages_response(doc, pages, len(preview_pages), synced=True)

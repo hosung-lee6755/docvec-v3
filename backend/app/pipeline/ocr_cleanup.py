@@ -11,6 +11,7 @@
 """
 import dataclasses
 import re
+from collections import Counter
 
 _MIN_BODY_CHARS = 10
 _MIN_LINE_RATIO = 0.5
@@ -76,7 +77,8 @@ def drop_low_confidence_lines(text: str, line_confidences: list[float]) -> str:
 def figure_text_for_body(text: str) -> str:
     """그림 인식 결과 가운데 본문에 넣을 만한 줄만 남긴다. 남는 게 너무 적으면 빈 문자열."""
     kept = [line for line in (text or "").splitlines() if _is_meaningful_line(line)]
-    if sum(len("".join(line.split())) for line in kept) < _MIN_BODY_CHARS:
+    # 남은 줄의 글자 수가 아니라 뜻 있는 글자 수로 센다. 기호가 반인 ">|:    >| aevus"가 본문에 들어갔다(2026-11-25)
+    if sum(_meaningful_chars(token) for line in kept for token in line.split()) < _MIN_BODY_CHARS:
         return ""
     return "\n".join(kept)
 
@@ -138,3 +140,109 @@ def fix_percent_in_pages(pages: list) -> int:
 def _table_with_fixed_rows(table):
     rows = fix_percent_in_rows(table.rows)
     return table if rows == table.rows else dataclasses.replace(table, rows=rows)
+
+
+# ---------------------------------------------------------------- 문서 어휘로 OCR 낱말 바로잡기
+#
+# 글자 층이 있는 PDF 에서도 쪽 제목을 그림 글자로 넣은 부분은 OCR 로 읽는다. EasyOCR 은 이런 제목을 "넥데이터 기반
+# 심아버스 노선 수립올 위한 분석"처럼 한두 글자씩 틀리게 읽었다(심야버스 분석 요약본, 2026-11-25). 같은 문서의 글자 층에는
+# 바른 낱말("빅데이터", "심야버스")이 여러 번 나오므로, 글자 층에 없는 낱말이 글자 층의 낱말과 한 글자만 다르면 그 낱말로
+# 바꾼다. 잘못 바꾸지 않도록 세 글자 이상인 낱말만, 글자 층(띄어쓰기를 뺀 글)에 그대로 들어 있지 않은 낱말만, 한 글자만
+# 다른 후보가 하나뿐이고 그 후보가 글자 층에 두 번 이상 나올 때만 바꾼다.
+# 그림 OCR 의 "가속도", "지원내역"처럼 바른 낱말이 문서의 "휠속도", "지원내용"과 한 글자 차이인 경우도 있어서, 형태소 분석
+# 점수(kiwi)가 후보보다 크게 나쁜 낱말만 바꾼다. 모든 PDF 에 시험 적용해 보니 바른 낱말은 점수 차이가 5.4 이하, 오인식은
+# 대부분 9 이상이었다(2026-11-25).
+
+_VOCAB_WORD_RE = re.compile(r"[가-힣]{3,}")
+_MIN_SCORE_GAIN = 6.0
+_kiwi = None
+
+
+def _morph_score(word: str) -> float:
+    """kiwi 형태소 분석의 가장 나은 점수. 높을수록 자연스러운 한국어다."""
+    global _kiwi
+    if _kiwi is None:
+        from kiwipiepy import Kiwi
+
+        _kiwi = Kiwi()
+    return float(_kiwi.analyze(word)[0][1])
+_MIN_VOCAB_OCCURRENCES = 2
+# 낱말 끝에 붙는 조사와 흔한 끝 글자. 이 글자끼리 다른 것은 오인식이 아니라 다른 말이다
+_PARTICLES = frozenset("을를이가은는의에도로와과만서고며")
+# 목적격 조사 "을"을 "올", "울"로 읽은 경우. 뒤에 오는 말이 목적어를 받는 말일 때만 고친다
+_OBJECT_PARTICLE_RE = re.compile(
+    r"([가-힣]{2,})[올울](?=\s+(?:위한|위해|통한|통해|활용한|활용하여|대상으로|기반으로|중심으로|바탕으로"
+    r"|주는|미치는|미칠|미친|받는|가진|갖는|수행|분석))"
+)
+
+
+class DocumentVocabulary:
+    """한 문서 글자 층의 낱말. OCR 로 읽은 글의 한 글자 오인식을 이 낱말로 바로잡는다."""
+
+    def __init__(self, native_text: str) -> None:
+        self._joined = "".join((native_text or "").split())
+        runs = _VOCAB_WORD_RE.findall(native_text or "")
+        self._tokens = set(runs)
+        # 낱말이 글자 층에 나온 횟수. 조사가 붙은 꼴("빅데이터를")도 세려고 낱말 앞부분마다 센다.
+        # 큰 문서(수십만 자)에서 낱말마다 전체 글을 훑지 않도록 한 번에 센다
+        occurrences: Counter = Counter()
+        for run in runs:
+            for end in range(3, len(run) + 1):
+                occurrences[run[:end]] += 1
+        self._by_shape: dict[tuple[int, int, str], set[str]] = {}
+        for word in self._tokens:
+            if occurrences[word] < _MIN_VOCAB_OCCURRENCES:
+                continue
+            # 끝 글자가 조사인 낱말은 끝 글자 자리로 짝짓지 않는다. "노선을"이 "노선도"를 바꿔 버린다
+            last = len(word) - 1 if word[-1] in _PARTICLES else len(word)
+            for index in range(last):
+                key = (len(word), index, word[:index] + word[index + 1:])
+                self._by_shape.setdefault(key, set()).add(word)
+
+    def __bool__(self) -> bool:
+        return bool(self._by_shape)
+
+    def _fix_word(self, match: re.Match) -> str:
+        word = match.group(0)
+        if word in self._tokens:
+            return word
+        candidates: set[str] = set()
+        last = len(word) - 1 if word[-1] in _PARTICLES else len(word)
+        for index in range(last):
+            candidates |= self._by_shape.get((len(word), index, word[:index] + word[index + 1:]), set())
+        candidates.discard(word)
+        # 띄어쓰기만 다른 글자 층 글("연료사용현황")에 그대로 있으면 오인식이 아니다. 비싼 확인이라 후보가 있을 때만 한다
+        if len(candidates) != 1 or word in self._joined:
+            return word
+        candidate = candidates.pop()
+        if _morph_score(candidate) - _morph_score(word) < _MIN_SCORE_GAIN:
+            return word  # 바른 낱말일 수 있다("가속도" 와 "휠속도")
+        return candidate
+
+    def correct(self, text: str) -> str:
+        if not text:
+            return text
+        fixed = _VOCAB_WORD_RE.sub(self._fix_word, text) if self._by_shape else text
+        return _OBJECT_PARTICLE_RE.sub(r"\1을", fixed)
+
+
+def correct_pages_with_vocabulary(pages: list, native_text: str) -> int:
+    """쪽마다 글 조각과 표 칸을 문서 어휘로 바로잡는다. 바뀐 조각과 칸 수를 돌려준다."""
+    vocabulary = DocumentVocabulary(native_text)
+    changed = 0
+    for page in pages:
+        blocks = []
+        for block in page.text_blocks:
+            fixed = vocabulary.correct(block.text)
+            if fixed != block.text:
+                changed += 1
+                block = dataclasses.replace(block, text=fixed)
+            blocks.append(block)
+        page.text_blocks = blocks
+        tables = []
+        for table in page.table_candidates:
+            rows = [[vocabulary.correct(cell) for cell in row] for row in table.rows]
+            changed += sum(a != b for old, new in zip(table.rows, rows) for a, b in zip(old, new))
+            tables.append(table if rows == table.rows else dataclasses.replace(table, rows=rows))
+        page.table_candidates = tables
+    return changed

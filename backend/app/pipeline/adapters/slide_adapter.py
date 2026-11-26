@@ -51,6 +51,85 @@ def _shape_text(shape) -> str:
     )
 
 
+# 제목 자리(placeholder)가 없는 슬라이드의 제목 고르기(2026-11-25). 글상자로만 꾸민 발표 자료는 제목 자리가 없어
+# 슬라이드 제목이 하나도 잡히지 않았다. 슬라이드 위쪽 띠 안의 짧은 글 가운데 글자가 가장 큰 것을 제목으로 삼고,
+# 글자 크기가 적힌 큰 글이 없으면 맨 위 띠의 짧은 글을 제목으로 삼는다.
+_TITLE_BAND = 0.3            # 슬라이드 높이에서 제목을 찾는 위쪽 비율
+_UNSIZED_TITLE_BAND = 0.15   # 글자 크기를 알 수 없는 글은 더 위쪽에 있어야 제목으로 본다
+_TITLE_MIN_POINTS = 14.0     # 본문·도형 글(9~12pt)과 가르는 제목 글자 크기
+_TITLE_MAX_CHARS = 40
+
+
+def _font_points(shape) -> float | None:
+    sizes = [
+        run.font.size.pt
+        for paragraph in shape.text_frame.paragraphs for run in paragraph.runs if run.font.size is not None
+    ]
+    return max(sizes) if sizes else None
+
+
+def _is_title_like(text: str) -> bool:
+    lines = text.split("\n")
+    return 0 < len(text) <= _TITLE_MAX_CHARS and len(lines) <= 2 and sum(ch.isalpha() for ch in text) >= 2
+
+
+def _fallback_title_shape(shapes, slide_height: float):
+    """제목 자리가 없을 때 제목으로 쓸 글상자. 없으면 None."""
+    sized, unsized = [], []
+    for shape in shapes:
+        if not getattr(shape, "has_text_frame", False) or not shape.has_text_frame:
+            continue
+        ratio = _points(shape.top) / slide_height if slide_height else 1.0
+        if ratio > _TITLE_BAND or not _is_title_like(_shape_text(shape)):
+            continue
+        points = _font_points(shape)
+        if points is not None and points >= _TITLE_MIN_POINTS:
+            sized.append((-points, ratio, shape))
+        elif points is None and ratio <= _UNSIZED_TITLE_BAND:
+            unsized.append((ratio, shape))
+    if sized:
+        return min(sized, key=lambda item: item[:2])[2]
+    if unsized:
+        return min(unsized, key=lambda item: item[0])[1]
+    return None
+
+
+# 레이아웃 고정 글로 받아들일 최소 글자(문자) 수
+_MIN_FIXED_TEXT_LETTERS = 2
+
+
+def _fixed_texts(shapes) -> list[str]:
+    """레이아웃·마스터에 놓인 고정 도형의 글(자리 표시자는 뺀다). 표는 칸 글을 줄마다 " / " 로 잇는다."""
+    texts: list[str] = []
+    for shape in _flatten(shapes):
+        if shape.is_placeholder:
+            continue
+        if getattr(shape, "has_table", False) and shape.has_table:
+            for row in shape.table.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if cells:
+                    texts.append(" / ".join(cells))
+        elif shape.has_text_frame and _shape_text(shape):
+            texts.append(_shape_text(shape))
+    # 구간 번호("Ⅰ", "Ⅱ"), 쪽 번호 자리("#"), 장식("-  -")은 글이 아니다(산업단지 완료보고 발표자료)
+    return [text for text in texts if sum(char.isalpha() for char in text) >= _MIN_FIXED_TEXT_LETTERS]
+
+
+def _new_background_texts(slide, seen: set[str]) -> list[str]:
+    """이 슬라이드가 처음 쓰는 레이아웃과 마스터의 고정 글. 표지 레이아웃의 사업명, 보안 등급처럼 화면에는 보이지만
+    슬라이드 도형이 아니라 빠지던 글이다(KMI 화면설계서, 2026-11-25). 같은 배경을 쓰는 슬라이드마다 되풀이하면
+    머리말처럼 검색을 흐리므로 처음 쓰는 슬라이드에서 한 번만 낸다. seen 에 읽은 배경을 더한다."""
+    layout = slide.slide_layout
+    texts: list[str] = []
+    for part in (layout.slide_master, layout):
+        name = str(part.part.partname)
+        if name in seen:
+            continue
+        seen.add(name)
+        texts.extend(_fixed_texts(part.shapes))
+    return texts
+
+
 class SlideAdapter(BaseAdapter):
     @property
     def format_id(self) -> str:
@@ -78,8 +157,9 @@ class SlideAdapter(BaseAdapter):
         warnings: list[str] = []
         width = _points(presentation.slide_width) or PAGE_WIDTH
         height = _points(presentation.slide_height) or PAGE_HEIGHT
+        seen_backgrounds: set[str] = set()
         pages = [
-            self._page(collector, warnings, page_number, slide, width, height)
+            self._page(collector, warnings, page_number, slide, width, height, _new_background_texts(slide, seen_backgrounds))
             for page_number, slide in enumerate(presentation.slides, start=1)
         ]
         properties = presentation.core_properties
@@ -94,15 +174,19 @@ class SlideAdapter(BaseAdapter):
         )
 
     @staticmethod
-    def _page(collector: BlockCollector, warnings: list[str], page_number: int, slide, width: float, height: float) -> RawPage:
+    def _page(collector: BlockCollector, warnings: list[str], page_number: int, slide, width: float, height: float,
+              background_texts: list[str]) -> RawPage:
         from pptx.enum.shapes import MSO_SHAPE_TYPE
 
         blocks, tables, images = [], [], []
+        shapes = _flatten(slide.shapes)
         title_shape = slide.shapes.title
-        if title_shape is not None and title_shape.has_text_frame:
+        if title_shape is None or not title_shape.has_text_frame or not _shape_text(title_shape):
+            title_shape = _fallback_title_shape(shapes, height)
+        if title_shape is not None:
             collector.text(blocks, _shape_text(title_shape), page_number, heading_level=1)
 
-        for shape in _flatten(slide.shapes):
+        for shape in shapes:
             if title_shape is not None and shape.shape_id == title_shape.shape_id:
                 continue
             if getattr(shape, "has_table", False) and shape.has_table:
@@ -115,6 +199,9 @@ class SlideAdapter(BaseAdapter):
                     warnings.append(f"슬라이드 {page_number}의 그림을 읽지 못했습니다: {exc}")
             elif shape.has_text_frame:
                 collector.text(blocks, _shape_text(shape), page_number)
+
+        for text in background_texts:
+            collector.text(blocks, text, page_number)
 
         if slide.has_notes_slide:
             notes = (slide.notes_slide.notes_text_frame.text or "").strip()

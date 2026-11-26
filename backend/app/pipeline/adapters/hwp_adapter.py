@@ -12,6 +12,7 @@ from app.pipeline.adapters.base import (
     RawTableCandidate,
     RawTextBlock,
 )
+from app.pipeline.blocks.table_markdown import rows_to_markdown
 from app.pipeline.adapters.hwp5_structure import (
     hwp_paragraph_layout,
     hwp_table_grid,
@@ -115,10 +116,17 @@ def _hwpx_t_text(t) -> str:
     return "".join(parts)
 
 
-def _hwpx_collect_text(elem, *, skip_tables: bool = False) -> str:
-    if not skip_tables:
-        return "".join(_hwpx_t_text(t) for t in elem.iter() if _hwpx_local_tag(t) == "t")
+# 글에 넣는 자동 번호 종류. 표·그림·수식 제목의 번호("표 7")는 본문 글이지만 쪽 번호·각주 번호 같은 다른 자동 번호는
+# 머리말이나 각주 표시라 넣지 않는다. 예전에는 자동 번호를 모두 건너뛰어 "표  컨테이너 …"처럼 번호가 빠졌다(2026-11-25)
+_CAPTION_NUMBER_KINDS = frozenset({"table", "picture", "equation"})
 
+
+def _hwpx_auto_number(elem) -> str:
+    """HWPX <hp:autoNum num="4" numType="TABLE"/> 의 번호. 제목 번호가 아니면 빈 글이다."""
+    return elem.get("num", "") if (elem.get("numType") or "").lower() in _CAPTION_NUMBER_KINDS else ""
+
+
+def _hwpx_collect_text(elem, *, skip_tables: bool = False) -> str:
     parts: list[str] = []
 
     def _walk(e) -> None:
@@ -126,7 +134,10 @@ def _hwpx_collect_text(elem, *, skip_tables: bool = False) -> str:
         if tag == "t":
             parts.append(_hwpx_t_text(e))
             return
-        if tag == "tbl":
+        if tag == "autoNum":
+            parts.append(_hwpx_auto_number(e))
+            return
+        if tag == "tbl" and skip_tables:
             return
         for child in e:
             _walk(child)
@@ -283,6 +294,8 @@ def _hwp_collect_text(elem) -> str:
         tag = child.tag
         if tag == "Text":
             texts.append(child.text or "")
+        elif tag == "AutoNumbering":
+            texts.append(child.get("number", "") if child.get("kind") in _CAPTION_NUMBER_KINDS else "")
         elif tag in ("TableControl", "GShapeObjectControl"):
             continue
         else:
@@ -453,7 +466,9 @@ def _ordered_text_blocks(
         if kind == "p":
             text_blocks.append(RawTextBlock(text=paragraphs[index], page_number=1))
             continue
-        table_text = "\n".join(" | ".join(row) for row in tables[index])
+        # PDF·DOCX 처럼 Markdown 표로 적는다. 예전에는 "a | b" 줄이라 원문 대조 화면에서 표가 한 줄로 뭉개졌고,
+        # 같은 화면에서 PDF 표만 표 모양으로 나왔다(scandif 점검, 2026-11-25)
+        table_text = rows_to_markdown(tables[index])
         head = f"[표 {index + 1}]\n{titles[index]}" if index in titles else f"[표 {index + 1}]"
         text_blocks.append(RawTextBlock(text=f"{head}\n{table_text}", page_number=1, block_type="table"))
     return text_blocks, table_candidates

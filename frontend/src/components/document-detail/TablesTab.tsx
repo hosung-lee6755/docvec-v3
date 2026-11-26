@@ -1,7 +1,7 @@
 import { Loader2 } from 'lucide-react'
 import type { DocumentTablesResult } from '../../hooks/useDocuments'
 import { ErrorText } from '../ui'
-import { layoutCells } from '../../lib/tableSpans'
+import { SpanTable } from './SpanTable'
 
 interface TablesTabProps {
   isLoading: boolean
@@ -48,32 +48,7 @@ export default function TablesTab({
             표 {i + 1}{isPdfDoc ? ` · ${table.page_number}쪽` : ''}
             {table.title && <strong style={{ marginLeft: 8, color: 'var(--color-text)' }}>{table.title}</strong>}
           </div>
-          <div style={{ overflowX: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
-            <table style={{ borderCollapse: 'collapse', fontSize: 13, whiteSpace: 'nowrap' }}>
-              <tbody>
-                {layoutCells(table.rows, table.spans).map((row, ri) => (
-                  <tr key={ri}>
-                    {row.map((cell) => (
-                      <td
-                        key={cell.column}
-                        rowSpan={cell.rowSpan}
-                        colSpan={cell.colSpan}
-                        style={{
-                          verticalAlign: 'top',
-                          padding: '6px 10px',
-                          border: '1px solid var(--color-border)',
-                          background: ri === 0 ? 'var(--color-surface-subtle)' : undefined,
-                          fontWeight: ri === 0 ? 600 : 400,
-                        }}
-                      >
-                        {cell.text}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SpanTable table={table} label={`표 ${i + 1}`} />
         </div>
       ))}
     </div>

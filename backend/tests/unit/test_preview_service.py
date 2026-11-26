@@ -79,24 +79,68 @@ def test_hwpx_to_html_top_level_table():
     assert "<table><tr><td>X</td></tr></table>" in html
 
 
-def _fake_hwp5(xhtml: str, css: str = "p{color:red}"):
-    transform = MagicMock()
+def _fake_hwp5(xml: str, *, fail: Exception | None = None):
+    """pyhwp의 Hwp5File(path).xmlevents(embedbin=False).dump(buf) 를 흉내 낸다. hwp5html 은 None 으로 막아
+    재구성 HTML이 그 XSLT를 다시 부르면 ImportError 로 드러나게 한다."""
+    def make(_path):
+        def dump(buf, **_kw):
+            if fail is not None:
+                raise fail
+            buf.write(xml.encode("utf-8"))
+        return SimpleNamespace(xmlevents=lambda **_kw: SimpleNamespace(dump=dump))
 
-    def to_xhtml(_hwp, buf):
-        buf.write(xhtml.encode("utf-8"))
-
-    def to_css(_hwp, buf):
-        buf.write(css.encode("utf-8"))
-
-    transform.transform_hwp5_to_xhtml.side_effect = to_xhtml
-    transform.transform_hwp5_to_css.side_effect = to_css
-    html_mod = MagicMock()
-    html_mod.HTMLTransform.return_value = transform
-    return {"hwp5": MagicMock(), "hwp5.hwp5html": html_mod, "hwp5.xmlmodel": MagicMock()}, transform
+    xmlmodel = SimpleNamespace(Hwp5File=make)
+    return {"hwp5": MagicMock(), "hwp5.hwp5html": None, "hwp5.xmlmodel": xmlmodel}
 
 
-def test_hwp_to_html_injects_css_into_existing_head_and_cleans_temp_file():
-    modules, _t = _fake_hwp5("<html><head></head><body>본문</body></html>")
+def _para(text: str, inner: str = "") -> str:
+    return f"<Paragraph><LineSeg><Text>{text}</Text>{inner}</LineSeg></Paragraph>"
+
+
+def _cell(row: int, col: int, text: str, rowspan: int = 1, colspan: int = 1) -> str:
+    return (f'<TableCell row="{row}" col="{col}" rowspan="{rowspan}" colspan="{colspan}">'
+            f"{_para(text)}</TableCell>")
+
+
+def test_hwp_to_html_draws_paragraphs_and_tables_in_document_order_without_xslt():
+    table = (
+        "<TableControl><TableCaption>" + _para("표 1. 물동량") + "</TableCaption><TableBody>"
+        "<TableRow>" + _cell(0, 0, "항만", rowspan=2) + _cell(0, 1, "2024") + "</TableRow>"
+        "<TableRow>" + _cell(1, 1, "2025") + "</TableRow>"
+        "</TableBody></TableControl>"
+    )
+    xml = ("<HwpDoc><BodyText><Section>"
+           + _para("&lt;script&gt;머리&lt;/script&gt;") + _para("표 앞", table) + _para("  ") + _para("끝")
+           + "</Section></BodyText></HwpDoc>")
+
+    with patch.dict("sys.modules", _fake_hwp5(xml)):
+        html = ps._hwp_to_html(b"raw-hwp")
+
+    assert html.startswith("<!doctype html>")
+    assert "<p>&lt;script&gt;머리&lt;/script&gt;</p>" in html
+    assert "<script>" not in html
+    assert '<table><tr><td rowspan="2">항만</td><td>2024</td></tr><tr><td>2025</td></tr></table>' in html
+    assert html.count("항만") == 1  # 합친 칸 글을 줄마다 되풀이하지 않는다
+    order = [html.index(s) for s in ("머리", "표 앞", "표 1. 물동량", "항만", "끝")]
+    assert order == sorted(order)
+    assert html.count("<p>") == 4  # 빈 문단은 뺀다
+    # 한글 글꼴을 먼저 둔다. sans-serif 만 두면 따옴표와 영문이 DejaVu 로 갈라져 PDF 글 순서가 바뀌었다
+    assert "font-family:'NanumGothic'" in html
+
+
+def test_hwp_to_html_breaks_lines_between_paragraphs_of_one_cell():
+    cell = '<TableCell row="0" col="0">' + _para("내부") + _para("데이터") + "</TableCell>"
+    xml = ("<HwpDoc><BodyText>" + _para("", "<TableControl><TableBody><TableRow>" + cell
+           + "</TableRow></TableBody></TableControl>") + "</BodyText></HwpDoc>")
+
+    with patch.dict("sys.modules", _fake_hwp5(xml)):
+        html = ps._hwp_to_html(b"raw-hwp")
+
+    # 칸 안 문단 구분자(" / ")는 추출 글에만 쓰는 표시라 미리보기에는 줄바꿈으로 그린다
+    assert "<td>내부<br>데이터</td>" in html
+
+
+def test_hwp_to_html_cleans_temp_file():
     created = []
     real_named = ps.tempfile.NamedTemporaryFile
 
@@ -105,26 +149,15 @@ def test_hwp_to_html_injects_css_into_existing_head_and_cleans_temp_file():
         created.append(f.name)
         return f
 
-    with patch.dict("sys.modules", modules), patch.object(ps.tempfile, "NamedTemporaryFile", tracking):
-        html = ps._hwp_to_html(b"raw-hwp")
+    xml = "<HwpDoc><BodyText>" + _para("본문") + "</BodyText></HwpDoc>"
+    with patch.dict("sys.modules", _fake_hwp5(xml)), patch.object(ps.tempfile, "NamedTemporaryFile", tracking):
+        ps._hwp_to_html(b"raw-hwp")
 
-    assert '<head><meta charset="utf-8"><style>p{color:red}</style></head>' in html
     assert created and not __import__("os").path.exists(created[0])
 
 
-def test_hwp_to_html_wraps_fragment_without_head():
-    modules, _t = _fake_hwp5("<div>조각</div>")
-
-    with patch.dict("sys.modules", modules):
-        html = ps._hwp_to_html(b"raw")
-
-    assert html.startswith("<!doctype html>")
-    assert "<style>p{color:red}</style><div>조각</div>" in html
-
-
 def test_hwp_to_html_removes_temp_file_when_transform_fails():
-    modules, transform = _fake_hwp5("x")
-    transform.transform_hwp5_to_xhtml.side_effect = RuntimeError("bad hwp")
+    modules = _fake_hwp5("x", fail=RuntimeError("bad hwp"))
     created = []
     real_named = ps.tempfile.NamedTemporaryFile
 

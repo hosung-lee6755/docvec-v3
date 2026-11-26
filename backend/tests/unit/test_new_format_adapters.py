@@ -249,6 +249,51 @@ def test_pptx_slides_become_pages_with_title_table_picture_and_notes(tmp_path):
     assert (heading["text"], heading["style_name"]) == ("분기 실적", "Heading 1")
 
 
+def _blank_slide_deck(tmp_path, boxes):
+    """제목 자리 없는 빈 슬라이드에 (위치 인치, 글, 글자 크기) 상자를 얹은 발표 자료."""
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for top, text, size in boxes:
+        box = slide.shapes.add_textbox(Inches(0.5), Inches(top), Inches(6), Inches(0.4))
+        box.text_frame.text = text
+        if size is not None:
+            box.text_frame.paragraphs[0].runs[0].font.size = Pt(size)
+    path = tmp_path / "deck.pptx"
+    presentation.save(path)
+    return get_adapter(path, "").extract(path, {})
+
+
+def _headings(parsed):
+    return [(item["text"], item["style_name"]) for item in parsed.metadata["line_layout"] if (item.get("style_name") or "").startswith("Heading")]
+
+
+def test_pptx_without_title_placeholder_takes_the_largest_short_text_at_the_top_as_title(tmp_path):
+    # 구간 이름(작은 글씨) 아래 큰 글씨의 화면 경로가 그 슬라이드의 제목이다
+    parsed = _blank_slide_deck(tmp_path, [
+        (0.2, "프로세스 정의서", 12), (0.5, "홈> 관광데이터", 15),
+        (1.2, "모든 이용자는 두 가지 방법으로 관광 데이터를 확인할 수 있다.", None), (5.0, "큰 글씨 아래 도형", 28),
+    ])
+
+    assert _headings(parsed) == [("홈> 관광데이터", "Heading 1")]
+    assert parsed.pages[0].text_blocks[0].text == "홈> 관광데이터"
+    assert "프로세스 정의서" in [block.text for block in parsed.pages[0].text_blocks]
+
+
+def test_pptx_without_sizes_takes_the_top_short_text_unless_a_large_one_exists(tmp_path):
+    parsed = _blank_slide_deck(tmp_path, [(0.5, "2. 추진 일정", None), (1.4, "완료보고서 제출", 12), (1.5, "사업범위 협의", 12)])
+
+    assert _headings(parsed) == [("2. 추진 일정", "Heading 1")]
+
+
+def test_pptx_body_text_or_numbers_alone_are_not_taken_as_a_title(tmp_path):
+    parsed = _blank_slide_deck(tmp_path, [(0.4, "1", 18), (3.5, "본문 설명", 20)])
+
+    assert _headings(parsed) == []
+
+
 def test_image_is_converted_to_pdf_and_sent_through_the_pdf_adapter(tmp_path, monkeypatch):
     from PIL import Image
 
@@ -329,3 +374,31 @@ def test_html_summary_children_are_separated_like_the_rendered_columns():
     assert [b.text for b in blocks] == [
         "E.6 위험 추세(D4) 6건 날마다 따로 예측합니다.", "본문", "1 하루 거리", "문장 안의 굵은글과 code는 그대로 붙는다.",
     ]
+
+
+def test_pptx_fixed_text_on_a_slide_layout_is_read_once_on_its_first_slide(tmp_path):
+    # KMI 화면설계서(2026-11-25): 표지 레이아웃에 놓인 표의 사업명("빅데이터기반항만수요모니터링시스템개발연구")이
+    # 화면에는 보이는데 슬라이드 도형이 아니라서 빠졌다. 같은 레이아웃을 쓰는 슬라이드마다 되풀이하지는 않는다
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from app.pipeline.adapters.slide_adapter import SlideAdapter
+
+    presentation = Presentation()
+    layout = presentation.slide_layouts[6]
+    scratch = presentation.slides.add_slide(layout)
+    fixed = scratch.shapes.add_textbox(Inches(0.5), Inches(6.5), Inches(6), Inches(0.4))
+    fixed.text_frame.text = "빅데이터기반 항만수요 모니터링 연구"
+    layout.shapes._spTree.append(fixed._element)  # 슬라이드에서 떼어 레이아웃 고정 도형으로 옮긴다
+    for text in ("첫 슬라이드 본문", "둘째 슬라이드 본문"):
+        slide = presentation.slides.add_slide(layout)
+        slide.shapes.add_textbox(Inches(0.5), Inches(2), Inches(6), Inches(0.4)).text_frame.text = text
+    path = tmp_path / "layout.pptx"
+    presentation.save(path)
+
+    parsed = SlideAdapter().extract(path, {})
+    texts = [[block.text for block in page.text_blocks] for page in parsed.pages]
+
+    assert texts[0] == ["빅데이터기반 항만수요 모니터링 연구"]
+    assert "빅데이터기반 항만수요 모니터링 연구" not in texts[1] + texts[2]
+    assert "첫 슬라이드 본문" in texts[1]

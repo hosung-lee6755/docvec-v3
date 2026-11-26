@@ -208,3 +208,36 @@ def test_vertically_merged_cells_repeat_on_each_row(tmp_path):
 
     assert [row[0] for row in table.rows] == ["Bed", "Gravel", "Gravel"]
     assert {"row": 1, "col": 0, "row_span": 2, "col_span": 1} in table.spans
+
+
+def test_two_tables_without_side_borders_one_above_the_other_stay_two_tables(tmp_path):
+    # 법령심사 분석결과보고서 2쪽(2026-11-25): 좌우 테두리 없는 "문서 승인" 표와 "개정 이력" 표가 같은 폭으로
+    # 위아래에 있다. 같은 x 에서 끝나는 가로선을 쪽 전체에 걸쳐 이어 테두리를 보충하자 두 표 사이 빈 곳까지
+    # 칸이 되어 한 표로 합쳐졌고, 사이의 제목 "개정 이력"이 표의 한 행이 되었다
+    doc = fitz.open()
+    page = doc.new_page(width=600, height=800)
+    for y in (100, 130, 160):
+        _line(page, 60, y, 540, y)
+    _line(page, 200, 100, 200, 160)
+    for y in (240, 270, 300):
+        _line(page, 60, y, 540, y)
+    for x in (150, 400):
+        _line(page, x, 240, x, 300)
+    texts = [
+        (80, 120, "Role"), (220, 120, "Company"), (80, 150, "Write"), (220, 150, "SOC"),
+        (250, 210, "Revision history"),
+        (80, 260, "Ver"), (170, 260, "Change"), (420, 260, "Author"),
+        (80, 290, "0.5"), (170, 290, "First draft"), (420, 290, "Lee"),
+    ]
+    for x, y, text in texts:
+        page.insert_text(fitz.Point(x, y), text, fontsize=9)
+    path = tmp_path / "stacked.pdf"
+    doc.save(path)
+
+    with pdfplumber.open(path) as pdf:
+        tables = find_ruled_tables(pdf.pages[0])
+
+    assert [table.rows for table in tables] == [
+        [["Role", "Company"], ["Write", "SOC"]],
+        [["Ver", "Change", "Author"], ["0.5", "First draft", "Lee"]],
+    ]

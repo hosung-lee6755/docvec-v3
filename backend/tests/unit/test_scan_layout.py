@@ -78,3 +78,46 @@ def test_only_auto_routed_scanned_pdfs_are_enriched():
     assert eb._is_scanned_pdf_run(Path("a.pdf"), "docling", note) is False
     assert eb._is_scanned_pdf_run(Path("a.hwp"), "legacy", note) is False
     assert eb.TextExtractConfig().scan_layout is True
+
+
+def test_tables_read_from_images_follow_the_same_merge_rule_and_keep_spans():
+    # 그림에서 읽은 표도 글자 층 PDF, HWP 표와 같은 합친 칸 규칙을 따르고 합친 칸 목록을 남긴다(2026-11-25).
+    # 예전에는 DataFrame 으로 만들어 머리글과 같은 폭으로 합친 칸 "에쓰오씨소프트"가 두 번 나왔다
+    from types import SimpleNamespace
+
+    def cell(row, col, text, col_span=1):
+        return SimpleNamespace(start_row_offset_idx=row, start_col_offset_idx=col, row_span=1, col_span=col_span,
+                               text=text, column_header=row == 0)
+
+    table = SimpleNamespace(data=SimpleNamespace(table_cells=[
+        cell(0, 0, "구분"), cell(0, 1, "소속", 2), cell(0, 3, "이름"),
+        cell(1, 0, "작성"), cell(1, 1, "에쓰오씨소프트", 2), cell(1, 3, "이호성"),
+    ]))
+
+    rows, spans = sl._table_grid(table, document=None)
+
+    assert rows == [["구분", "소속", "", "이름"], ["작성", "에쓰오씨소프트", "", "이호성"]]
+    assert {"row": 1, "col": 1, "row_span": 1, "col_span": 2} in spans
+
+
+def test_merged_spans_reach_the_table_candidate():
+    parsed = _parsed()
+    spans = [{"row": 0, "col": 0, "row_span": 1, "col_span": 2}]
+
+    sl.merge_layout(parsed, [{**_table(1), "spans": spans}], [])
+
+    assert parsed.pages[0].table_candidates[0].spans == spans
+
+
+def test_merge_leaves_pages_read_from_the_text_layer_alone():
+    """글자 층과 윤곽선 쪽이 섞인 PDF 도 전면 OCR 로 돈다. 글자 층 쪽의 표는 선 표 찾기가 이미 냈으므로 덧붙이지 않는다."""
+    parsed = _parsed()
+    native = parsed.pages[0]
+    native.text_blocks = [RawTextBlock(text="글자 층 본문", page_number=1, block_type="paragraph")]
+    pictures = [{"page": 1, "bbox": (1.0, 2.0, 3.0, 4.0), "image_bytes": b"a"}, {"page": 2, "bbox": (1.0, 2.0, 3.0, 4.0), "image_bytes": b"b"}]
+
+    added = sl.merge_layout(parsed, [_table(1), _table(2)], pictures)
+
+    assert added == {"tables": 1, "figures": 1}
+    assert native.table_candidates == [] and native.image_regions == []
+    assert parsed.pages[1].text_blocks[-1].text.startswith("[표 1]\n")

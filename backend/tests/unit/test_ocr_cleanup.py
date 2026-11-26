@@ -133,3 +133,54 @@ def test_figure_text_is_kept_whole_when_lines_cannot_be_aligned():
     text = "첫 줄\n둘째 줄"
 
     assert oc.drop_low_confidence_lines(text, [10.0]) == text
+
+
+def test_figure_text_that_is_mostly_symbols_is_dropped():
+    # 심야버스 분석 요약본 그림 1(2026-11-25): ">|:    >| aevus"가 본문과 청크에 들어갔다
+    assert oc.figure_text_for_body(">|:    >| aevus") == ""
+
+
+_NATIVE = (
+    "빅데이터 기반 심야버스 노선을 분석하였다. 심야버스 2개 노선을 시범 운행하였다. 빅데이터를 분석하였다. "
+    "유동인구 분포 패턴과 택시 분포 패턴을 비교하였다."
+)
+
+
+def test_ocr_words_one_letter_off_a_word_of_the_same_document_are_corrected():
+    # 쪽 제목이 그림 글자라 OCR로 읽은 부분만 "넥데이터", "심아버스"로 틀렸다. 같은 문서 글자 층에는 바른 낱말이 있다
+    vocabulary = oc.DocumentVocabulary(_NATIVE)
+
+    assert vocabulary.correct("넥데이터 기반 심아버스 노선 수립올 위한 분석") == "빅데이터 기반 심야버스 노선 수립을 위한 분석"
+    assert vocabulary.correct("수요에 영향올 미칠 수 있는") == "수요에 영향을 미칠 수 있는"
+
+
+def test_words_found_in_the_text_layer_or_without_a_unique_match_are_left_alone():
+    vocabulary = oc.DocumentVocabulary(_NATIVE + " 분석가 분석자")
+
+    # 글자 층에 그대로 있는 낱말, 짧은 낱말, 후보가 둘인 낱말(분석가/분석자), 한 번만 나온 후보는 바꾸지 않는다
+    assert vocabulary.correct("심야버스 패련 분석사 노선도") == "심야버스 패련 분석사 노선도"
+    assert vocabulary.correct("서울 위한 겨울 동안") == "서울 위한 겨울 동안"
+
+
+def test_vocabulary_correction_reaches_text_blocks_and_table_cells():
+    page = RawPage(
+        page_number=1, width=1, height=1,
+        text_blocks=[RawTextBlock(text="넥데이터 분석", page_number=1)],
+        table_candidates=[RawTableCandidate(page_number=1, rows=[["심아버스", "1"]])],
+        image_regions=[],
+    )
+
+    fixed = oc.correct_pages_with_vocabulary([page], _NATIVE)
+
+    assert fixed == 2
+    assert page.text_blocks[0].text == "빅데이터 분석"
+    assert page.table_candidates[0].rows == [["심야버스", "1"]]
+
+
+def test_real_words_one_letter_off_a_document_word_are_not_rewritten():
+    # 전체 PDF 시험 적용(2026-11-25): 그림 OCR 의 "가속도", "지원내역", "적용기술"은 바른 낱말인데 문서에 있는
+    # "휠속도", "지원내용", "적용기준"으로 바뀌었다. 형태소 분석 점수가 후보보다 크게 나쁠 때만 바꾼다
+    native = "휠속도 휠속도 지원내용 지원내용 적용기준 적용기준 모니터링 모니터링"
+    vocabulary = oc.DocumentVocabulary(native)
+
+    assert vocabulary.correct("가속도 지원내역 적용기술 모니터림") == "가속도 지원내역 적용기술 모니터링"

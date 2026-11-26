@@ -31,7 +31,15 @@ from app.pipeline.blocks.title_resolver import LeadLine, _is_chapter_heading, re
 
 logger = logging.getLogger(__name__)
 
-_HEADING_NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*)[.\)]?\s+\S")
+# 점 번호("1.2 개요")와 붙임표 번호("1-1. 개발 범위")를 함께 받는다. 붙임표 번호는 마디마다 두 자리 이하이고 뒤에 마침표가
+# 있을 때만 받는다. 그래야 전화번호(010-1234-5678), 날짜(2026-11-25), 범위("3-4 명")가 제목이 되지 않는다(AIDE 제안서, 2026-11-25)
+_HEADING_NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*|\d{1,2}(?:-\d{1,2})+(?=\.))[.\)]?\s+\S")
+_NUMBER_PARTS_RE = re.compile(r"[.-]")
+
+
+def _number_depth(number: str) -> int:
+    """번호의 마디 수. "1.2"와 "1-2"는 2다."""
+    return len(_NUMBER_PARTS_RE.split(number))
 _HEADING_KOREAN_RE = re.compile(r"^제\s*\d+\s*[장절조편]")
 # 공고문·계획서 hwpx 는 글자 크기 없이 "□ 사업개요" 로 절을 나눈다(한국 공문서 관례).
 _HEADING_SQUARE_BULLET_RE = re.compile(r"^□\s*\S")
@@ -217,7 +225,7 @@ def _plausible_numbered_heading(line: str, number: str) -> bool:
     has_wide_gap = bool(_WIDE_GAP_RE.search(stripped)) and not _is_letter_spaced(stripped)
     if len(stripped) > _HEADING_MAX_CHARS or has_wide_gap or _CITATION_YEAR_RE.search(stripped):
         return False
-    if int(number.split(".")[0]) > _HEADING_MAX_LEADING_NUMBER:
+    if int(_NUMBER_PARTS_RE.split(number)[0]) > _HEADING_MAX_LEADING_NUMBER:
         return False
     rest = stripped[stripped.find(number) + len(number):]
     if _NUMBER_THEN_NUMBER_RE.match(rest):
@@ -305,7 +313,7 @@ def _classify(
     if m and _plausible_numbered_heading(line, m.group(1)):
         if line[len(m.group(1)):].startswith(")"):
             return "HEADING", _PAREN_NUMBER_LEVEL
-        level = m.group(1).count(".") + 1
+        level = _number_depth(m.group(1))
         return "HEADING", level
     if _HEADING_KOREAN_RE.match(line):
         return "HEADING", 1
@@ -406,7 +414,7 @@ def _numbered_heading_sizes(text: str, layout_entries: list[dict] | None) -> dic
             continue
         if stripped[len(numbered.group(1)):].startswith(")"):
             continue
-        levels_by_size.setdefault(layout["font_size"], set()).add(numbered.group(1).count(".") + 1)
+        levels_by_size.setdefault(layout["font_size"], set()).add(_number_depth(numbered.group(1)))
     if not levels_by_size:
         return {}
     # 장 번호("1 사업 개요")가 쓰는 가장 큰 크기만 기준으로 쓴다. 더 작은 크기의 "1. …"은 절 안의 목록형 번호일 수 있다
@@ -788,7 +796,8 @@ class StructureAnalyzeBlock(BaseBlock):
         #         개편(안)")와 번호 없는 표어 상자(" | 제명을 바꾼다! (…)")도 제목 상자로 읽는다(title_box.py, 2026-11-24).
         # 1.23.1: 번호·붙임 제목 상자를 이미 쓴 문서에서는 표어 상자를 제목으로 올리지 않는다. 조사료 지침의 주체 표시
         #         상자("시·도(시·군), 농협경제지주…")가 1단계 제목이 되어 장 밖으로 튀어나왔다(2026-11-24).
-        return "1.23.1"
+        # 1.24.0: 붙임표 번호 절 제목("1-1. 개발 범위")을 점 번호처럼 제목으로 받는다(AIDE 제안서 DOCX, 2026-11-25).
+        return "1.24.0"
 
     @property
     def category(self) -> str:

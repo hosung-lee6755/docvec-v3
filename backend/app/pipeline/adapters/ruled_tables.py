@@ -75,17 +75,46 @@ def _ruled_edges(page) -> tuple[list[dict], list[dict]]:
     horizontals, verticals = _with_cell_dividers(page, horizontals, verticals)
     # 테두리는 표의 세로선과 닿는 가로선 끝에만 보충한다. 쪽 머리와 바닥 구분선은 세로선과 닿지 않으므로
     # 이 선들로 쪽 전체를 감싸는 가짜 표가 생기지 않는다(리뷰 지적)
-    ends: dict[int, list[float]] = {}
+    ends: dict[int, list[dict]] = {}
     for edge in (h for h in horizontals if _touches_vertical(h, verticals)):
         for x in (round(edge["x0"]), round(edge["x1"])):
-            ends.setdefault(x, []).append(edge["top"])
+            ends.setdefault(x, []).append(edge)
     borders = [
-        {"x0": x, "x1": x, "top": min(tops), "bottom": max(tops), "orientation": "v",
-         "width": 0, "height": max(tops) - min(tops), "object_type": "line"}
-        for x, tops in ends.items()
-        if len(tops) >= MIN_ENDS_FOR_BORDER and max(tops) > min(tops)
+        {"x0": x, "x1": x, "top": top, "bottom": bottom, "orientation": "v",
+         "width": 0, "height": bottom - top, "object_type": "line"}
+        for x, edges in ends.items()
+        if len(edges) >= MIN_ENDS_FOR_BORDER
+        for top, bottom in _border_runs(edges, verticals)
     ]
     return horizontals, verticals + borders
+
+
+def _border_runs(edges: list[dict], verticals: list[dict]) -> list[tuple[float, float]]:
+    """같은 x 에서 끝나는 가로선들 사이에 테두리를 그을 구간들(위, 아래).
+
+    이웃한 두 가로선 사이를 실제 세로선(열 구분선)이 지날 때만 같은 표 안으로 보고 잇는다. 예전에는 맨 위에서 맨 아래
+    가로선까지 한 줄로 이어, 같은 폭으로 위아래에 놓인 두 표(법령심사 분석결과보고서 2쪽 "문서 승인"과 "개정 이력",
+    2026-11-25) 사이 빈 곳까지 칸이 되어 두 표가 한 표로 합쳐졌다."""
+    ordered = sorted(edges, key=lambda e: e["top"])
+    runs: list[tuple[float, float]] = []
+    for upper, lower in zip(ordered, ordered[1:]):
+        if lower["top"] - upper["top"] <= TOUCH_TOLERANCE or not _column_line_between(upper, lower, verticals):
+            continue
+        if runs and abs(runs[-1][1] - upper["top"]) <= TOUCH_TOLERANCE:
+            runs[-1] = (runs[-1][0], lower["top"])
+        else:
+            runs.append((upper["top"], lower["top"]))
+    return runs
+
+
+def _column_line_between(upper: dict, lower: dict, verticals: list[dict]) -> bool:
+    left = max(upper["x0"], lower["x0"]) - TOUCH_TOLERANCE
+    right = min(upper["x1"], lower["x1"]) + TOUCH_TOLERANCE
+    return any(
+        left <= v["x0"] <= right
+        and v["top"] <= upper["top"] + TOUCH_TOLERANCE and v["bottom"] >= lower["top"] - TOUCH_TOLERANCE
+        for v in verticals
+    )
 
 
 def _on_horizontal(x: float, y: float, horizontals: list[dict]) -> bool:

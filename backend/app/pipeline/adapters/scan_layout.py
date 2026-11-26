@@ -53,6 +53,17 @@ def _provenance(item) -> tuple[int | None, tuple[float, float, float, float] | N
     return getattr(prov, "page_no", None), bbox
 
 
+def _table_grid(table, document) -> tuple[list[list[str]], list[dict] | None]:
+    """그림에서 읽은 표도 글자 층 PDF 의 Docling 표와 같은 격자 규칙(칸 목록, 합친 칸 목록)으로 만든다(2026-11-25).
+    예전에는 DataFrame 으로 만들어 가로로 합친 칸이 열마다 되풀이되고 합친 칸 목록이 없었다."""
+    from app.pipeline.adapters.docling_adapter import _table_grid as docling_table_grid
+
+    if getattr(getattr(table, "data", None), "table_cells", None):
+        rows, spans = docling_table_grid(table)
+        return [[(cell or "").strip() for cell in row] for row in rows], spans
+    return _table_rows(table, document), None
+
+
 def _table_rows(table, document) -> list[list[str]]:
     frame = table.export_to_dataframe(document)
     header = [str(column).strip() for column in frame.columns]
@@ -77,9 +88,9 @@ def detect_layout(pdf_path: Path) -> tuple[list[dict], list[dict]]:
     tables, pictures = [], []
     for table in document.tables:
         page, bbox = _provenance(table)
-        rows = _table_rows(table, document)
+        rows, spans = _table_grid(table, document)
         if page and sum(1 for row in rows for cell in row if cell) >= _MIN_TABLE_CELLS:
-            tables.append({"page": page, "bbox": bbox, "rows": rows})
+            tables.append({"page": page, "bbox": bbox, "rows": rows, "spans": spans})
     for picture in document.pictures:
         page, bbox = _provenance(picture)
         image_bytes = _picture_bytes(picture, document)
@@ -88,9 +99,17 @@ def detect_layout(pdf_path: Path) -> tuple[list[dict], list[dict]]:
     return tables, pictures
 
 
+def _read_by_ocr(page) -> bool:
+    """본문을 OCR 로 읽은 쪽(또는 글이 없는 쪽)인가. 글자 층으로 읽은 쪽은 표와 그림을 어댑터가 이미 냈다."""
+    return all(block.block_type in ("ocr", "table") for block in page.text_blocks)
+
+
 def merge_layout(parsed: RawParsedDocument, tables: list[dict], pictures: list[dict]) -> dict:
-    """찾은 표와 그림을 쪽에 덧붙인다. 표 번호는 문서에 이미 있는 표 다음부터 잇는다."""
-    pages = {page.page_number: page for page in parsed.pages}
+    """찾은 표와 그림을 OCR 로 읽은 쪽에 덧붙인다. 표 번호는 문서에 이미 있는 표 다음부터 잇는다.
+
+    글자 층 쪽과 윤곽선 글자 쪽이 섞인 PDF 도 전면 OCR 엔진으로 돈다(pdf_outline_text, 2026-11-25). 글자 층 쪽에는
+    선 표 찾기가 낸 표가 있으므로 같은 표를 두 번 넣지 않게 그 쪽은 건너뛴다."""
+    pages = {page.page_number: page for page in parsed.pages if _read_by_ocr(page)}
     ordinal = sum(1 for page in parsed.pages for block in page.text_blocks if block.block_type == "table")
     added_tables = added_pictures = 0
     for table in sorted(tables, key=lambda t: (t["page"], -(t["bbox"][1] if t["bbox"] else 0))):
@@ -100,7 +119,7 @@ def merge_layout(parsed: RawParsedDocument, tables: list[dict], pictures: list[d
         ordinal += 1
         added_tables += 1
         page.table_candidates.append(RawTableCandidate(
-            page_number=page.page_number, rows=table["rows"], bbox=table["bbox"],
+            page_number=page.page_number, rows=table["rows"], bbox=table["bbox"], spans=table.get("spans"),
             confidence=TABLE_CONFIDENCE, detected_as=DETECTED_AS,
         ))
         page.text_blocks.append(RawTextBlock(

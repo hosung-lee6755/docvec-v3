@@ -395,7 +395,11 @@ export default function DocumentsPage() {
             onConfirmDelete={(id) => { deleteDoc.mutate(id); setConfirmDeleteId(null) }}
             onCancelDelete={() => setConfirmDeleteId(null)}
             onDeleteClick={setConfirmDeleteId}
-            onDocumentClick={(id) => navigate(projectId ? `/projects/${projectId}/documents/${id}` : `/documents/${id}`)}
+            onDocumentClick={(id) => navigate(
+              projectId ? `/projects/${projectId}/documents/${id}` : `/documents/${id}`,
+              // 상세의 "문서 목록"이 지금 거른 목록(?collection= 등)으로 돌아오게 한다
+              { state: { backTo: `${location.pathname}${location.search}` } },
+            )}
             isDeleting={deleteDoc.isPending}
           />
           <div className="documents-pager">
@@ -416,6 +420,7 @@ export default function DocumentsPage() {
           onClose={() => setShowUploadModal(false)}
           onUploaded={(message) => setUploadNotice(message)}
           projectId={projectId}
+          defaultCollectionId={filterCollectionId}
         />
       )}
     </Page>

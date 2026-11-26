@@ -30,9 +30,11 @@ logger = logging.getLogger(__name__)
 # 한글 원본을 H2Orestart로 열면 그림이 많은 문서는 오래 걸린다(NS-AM 검사 매뉴얼 19쪽에 119초, 2026-11-23)
 _SOFFICE_TIMEOUT_SECONDS = 300
 
+# 한글 글꼴을 먼저 둔다. sans-serif 만 두면 LibreOffice가 따옴표와 영문을 DejaVu Sans 로, 한글을 나눔고딕으로 나눠
+# 그려 PDF 글 순서가 바뀌었다("(‘국내조선업생산액’)"이 "(‘’국내조선업생산액)"으로 뽑혀 쪽 맞춤이 어긋났다, 2026-11-25)
 _HTML_WRAP = (
     '<!doctype html><html><head><meta charset="utf-8">'
-    "<style>body{{font-family:sans-serif;line-height:1.6;padding:16px;max-width:900px;margin:0 auto}}"
+    "<style>body{{font-family:'NanumGothic','Malgun Gothic',sans-serif;line-height:1.6;padding:16px;max-width:900px;margin:0 auto}}"
     "table{{border-collapse:collapse;margin:8px 0}}td,th{{border:1px solid #cbd5e1;padding:4px 8px;font-size:13px}}"
     "img{{max-width:100%}}</style></head><body>{body}</body></html>"
 )
@@ -45,28 +47,90 @@ def _docx_to_html(raw: bytes) -> str:
     return _HTML_WRAP.format(body=result.value)
 
 
+def _grid_to_html(rows: list[list[str]], spans: list[dict]) -> str:
+    """격자를 표로 그린다. 합친 칸은 rowspan/colspan 으로 한 번만 쓰고, 그 칸이 덮는 자리는 건너뛴다."""
+    import html as html_mod
+
+    from app.pipeline.adapters.hwp_adapter import CELL_PARAGRAPH_SEP
+
+    origin = {(s["row"], s["col"]): s for s in spans}
+    covered = {
+        (s["row"] + dr, s["col"] + dc)
+        for s in spans
+        for dr in range(s["row_span"])
+        for dc in range(s["col_span"])
+        if dr or dc
+    }
+    rows_html = []
+    for r, row in enumerate(rows):
+        cells = []
+        for c, text in enumerate(row):
+            if (r, c) in covered:
+                continue
+            span = origin.get((r, c))
+            attrs = ""
+            if span is not None:
+                attrs += f' rowspan="{span["row_span"]}"' if span["row_span"] > 1 else ""
+                attrs += f' colspan="{span["col_span"]}"' if span["col_span"] > 1 else ""
+            # 칸 안 문단 구분자(" / ")는 추출 글에만 쓰는 표시라 줄바꿈으로 그린다
+            body = "<br>".join(html_mod.escape(part) for part in text.split(CELL_PARAGRAPH_SEP))
+            cells.append(f"<td{attrs}>{body}</td>")
+        rows_html.append(f"<tr>{''.join(cells)}</tr>")
+    return f"<table>{''.join(rows_html)}</table>"
+
+
 def _hwp_to_html(raw: bytes) -> str:
-    from hwp5.hwp5html import HTMLTransform
+    """구형 HWP를 문단과 표 순서대로 다시 그린다. 본문 추출(hwp_adapter)과 같은 pyhwp XML 모델을 읽는다.
+
+    예전에는 pyhwp의 hwp5html XSLT를 썼다. H2Orestart가 열지 못한 HWP(scandif 항만수요예측 보고서들)에서
+    이 변환이 10~17분 걸렸고, 추출 일꾼이 하나라 뒤 문서들이 그동안 '검증중'에 머물렀다(2026-11-25).
+    같은 파일을 XML로 읽는 데는 몇 초면 된다. 배치와 글꼴은 단순해지지만 원본과 다를 수 있다는 안내가 붙는
+    재구성 미리보기이고, 쪽 맞춤은 추출 블록과 글이 같아 오히려 잘 맞는다."""
+    import html as html_mod
+
     from hwp5.xmlmodel import Hwp5File
+
+    from app.core.safe_xml import parse_xml_bytes
+    from app.pipeline.adapters.hwp5_structure import hwp_table_grid
+    from app.pipeline.adapters.hwp_adapter import _hwp_cell_text, _hwp_collect_text
 
     with tempfile.NamedTemporaryFile(suffix=".hwp", delete=False) as tmp:
         tmp.write(raw)
         tmp_path = Path(tmp.name)
     try:
-        transform = HTMLTransform()
-        xhtml_buf, css_buf = io.BytesIO(), io.BytesIO()
-        # Hwp5File is single-pass per transform — open once per output.
-        transform.transform_hwp5_to_xhtml(Hwp5File(str(tmp_path)), xhtml_buf)
-        transform.transform_hwp5_to_css(Hwp5File(str(tmp_path)), css_buf)
+        buf = io.BytesIO()
+        Hwp5File(str(tmp_path)).xmlevents(embedbin=False).dump(buf, xml_declaration=True)
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    xhtml = xhtml_buf.getvalue().decode("utf-8", errors="replace")
-    css = css_buf.getvalue().decode("utf-8", errors="replace")
-    style = f"<style>{css}</style>"
-    if "<head>" in xhtml:
-        return xhtml.replace("<head>", f"<head><meta charset=\"utf-8\">{style}", 1)
-    return _HTML_WRAP.format(body=style + xhtml)
+    parts: list[str] = []
+
+    def walk(elem) -> None:
+        tag = elem.tag
+        if tag == "TableControl":
+            for child in elem:
+                if child.tag == "TableCaption":
+                    walk(child)
+            for child in elem:
+                if child.tag == "TableBody":
+                    rows, spans = hwp_table_grid(child, _hwp_cell_text)
+                    if rows:
+                        parts.append(_grid_to_html(rows, spans))
+            return
+        if tag == "GShapeObjectControl":
+            return
+        if tag == "Paragraph":
+            text = _hwp_collect_text(elem).strip()
+            if text:
+                parts.append(f"<p>{html_mod.escape(text)}</p>")
+        for child in elem:
+            walk(child)
+
+    root = parse_xml_bytes(buf.getvalue())
+    body = root.find("BodyText")
+    if body is not None:
+        walk(body)
+    return _HTML_WRAP.format(body="".join(parts))
 
 
 def _hwpx_to_html(raw: bytes) -> str:

@@ -1,6 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { markdownPlugins } from '../../lib/markdownPlugins'
 import { MarkdownLink } from './MarkdownLink'
 import type { Document, DocumentChunksResult, useReprocessDocument, useRestoreRevision } from '../../hooks/useDocuments'
 import { ViewModeToggle } from './documentDetailParts'
@@ -78,7 +78,7 @@ export default function EditTab({
           문서 메타정보
         </summary>
         <div className="markdown-body" style={{ marginTop: 8, fontSize: 12 }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: MarkdownLink }}>
+          <ReactMarkdown remarkPlugins={markdownPlugins} components={{ a: MarkdownLink }}>
             {[
               `**제목**: ${doc.title || doc.original_filename}`,
               `**언어**: ${doc.language ?? '미판별'}`,
