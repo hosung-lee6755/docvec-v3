@@ -14,12 +14,14 @@ from app.pipeline.adapters.base import (
 )
 from app.pipeline.blocks.table_markdown import rows_to_markdown
 from app.pipeline.adapters.hwp5_structure import (
+    add_hwp_paragraph_marks,
     hwp_paragraph_layout,
     hwp_table_grid,
     load_hwp_styles,
 )
 from app.pipeline.adapters.hwpx_structure import (
     HwpxStyles,
+    add_paragraph_marks,
     load_styles,
     paragraph_layout,
     table_grid,
@@ -533,6 +535,7 @@ class HWPAdapter(BaseAdapter):
             body = root.find("BodyText")
             if body is not None:
                 ctx.styles = load_hwp_styles(root)
+                add_hwp_paragraph_marks(root)  # 글머리표 문단 모양의 기호를 문단 글 앞에 넣는다
                 ctx.bin_stems = hwp_bin_stems(root)
                 _walk_hwp_body(body, paragraphs, raw_tables, order, ctx)
         except Exception as exc:
@@ -591,7 +594,10 @@ class HWPAdapter(BaseAdapter):
                 for name in sorted(z.namelist()):
                     if name.startswith("Contents/") and name.endswith(".xml"):
                         with z.open(name) as f:
-                            _walk_hwpx(parse_xml(f), paragraphs, raw_tables, order, ctx)
+                            section = parse_xml(f)
+                        # 글머리표 문단(문단 모양에만 기호가 있다)의 기호를 글로 넣는다(2026-11-26)
+                        add_paragraph_marks(section, ctx.styles)
+                        _walk_hwpx(section, paragraphs, raw_tables, order, ctx)
                 manifest = z.read(HWPX_MANIFEST) if HWPX_MANIFEST in z.namelist() else b""
                 named_images = _hwpx_bindata_named(z, hwpx_manifest_stems(manifest) if manifest else None)
         except Exception as exc:

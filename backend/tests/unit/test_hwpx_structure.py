@@ -170,3 +170,41 @@ def test_bold_large_date_on_a_cover_is_not_a_heading():
     assert _classify("2025년 12월", layout, 11.0) == ("PARAGRAPH", None)
     assert _classify("2025.12.21", layout, 11.0) == ("PARAGRAPH", None)
     assert _classify("추진 전략", layout, 11.0)[0] == "HEADING"
+
+
+BULLET_HEADER = """<head xmlns:hh="h"><hh:bullets>
+  <hh:bullet id="1" char="-" useImage="0"/>
+  <hh:bullet id="2" char="" useImage="0"/>
+</hh:bullets><hh:paraProperties>
+  <hh:paraPr id="0"><hh:heading type="NONE" idRef="0" level="0"/></hh:paraPr>
+  <hh:paraPr id="7"><hh:heading type="BULLET" idRef="1" level="0"/></hh:paraPr>
+  <hh:paraPr id="8"><hh:heading type="BULLET" idRef="2" level="0"/></hh:paraPr>
+</hh:paraProperties></head>"""
+
+
+def test_bulleted_paragraphs_keep_their_bullet_in_body_and_cells(tmp_path):
+    """HWPX 글머리표는 글이 아니라 문단 모양(paraPr heading BULLET)에 들어 있어, "- 대상 R&D과제 요약문" 의 "-" 와
+    "• 헤드리스 브라우저" 의 "•" 가 본문과 표 칸에서 빠졌다(R&D 공고, UIUX 보고서, 2026-11-26). 기호 글자는
+    원문 글꼴의 사설 영역 글자(Wingdings)면 "•" 로 적는다."""
+    section = (
+        '<sec><p paraPrIDRef="8"><run><t>헤드리스 브라우저</t></run></p>'
+        '<p paraPrIDRef="0"><run><t>표 앞 문단</t>'
+        + "<tbl><tr><tc><subList>"
+        '<p paraPrIDRef="7"><run><t>대상 R&amp;D과제 요약문</t></run></p>'
+        '<p paraPrIDRef="7"><run><t>사업계획서</t></run></p>'
+        '</subList><cellAddr colAddr="0" rowAddr="0"/><cellSpan colSpan="1" rowSpan="1"/></tc>'
+        '<tc><subList><p paraPrIDRef="0"><run><t>제출</t></run></p></subList>'
+        '<cellAddr colAddr="1" rowAddr="0"/><cellSpan colSpan="1" rowSpan="1"/></tc></tr></tbl>'
+        "</run></p></sec>"
+    )
+    path = tmp_path / "bullets.hwpx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("Contents/header.xml", BULLET_HEADER)
+        archive.writestr("Contents/section0.xml", section)
+
+    parsed = HWPAdapter().extract(path, {})
+
+    texts = [block.text for block in parsed.pages[0].text_blocks]
+    assert texts[0] == "• 헤드리스 브라우저"
+    assert texts[1] == "표 앞 문단"
+    assert parsed.pages[0].table_candidates[0].rows == [["- 대상 R&D과제 요약문 / - 사업계획서", "제출"]]

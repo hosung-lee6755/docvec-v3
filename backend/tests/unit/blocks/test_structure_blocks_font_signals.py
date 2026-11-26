@@ -182,3 +182,13 @@ def test_phone_numbers_dates_and_ranges_are_not_hyphen_headings():
     assert _classify("2026-11-25 회의 결과", None, None)[0] != "HEADING"
     assert _classify("1-2개월 안에 마친다", None, None)[0] != "HEADING"
     assert _classify("3-4 명이 참석했다", None, None)[0] != "HEADING"
+
+
+def test_line_the_parser_marked_as_a_list_item_is_not_a_numbered_heading():
+    """Docling 이 목록 항목으로 읽은 "1. 데이터 파이프라인" 은 번호가 붙어도 제목이 아니다. 목록 기호를 되살리자
+    (2026-11-26) 짧은 번호 항목이 제목 규칙에 걸려 장 제목처럼 묶일 수 있어, 파서의 판정을 먼저 따른다."""
+    item = {"style_name": "list_item", "font_size": None, "is_bold": False}
+
+    assert _classify("1. 데이터 파이프라인", item, None) == ("LIST_ITEM", None)
+    assert _classify("◦ (신청 기간) 2026. 4. 27.", item, None) == ("LIST_ITEM", None)
+    assert _classify("1. 서론", None, None)[0] == "HEADING"

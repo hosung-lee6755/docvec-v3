@@ -73,7 +73,9 @@ def anchored_image_regions(
     """본문에 놓인 그림을 그 자리와 함께 문서 순서대로, 본문에 놓이지 않은 그림은 자리 없이 뒤에 낸다.
 
     refs 는 본문에서 만난 그림 참조, anchors 는 (refs 순번, 자리). 같은 그림을 여러 번 쓰면 처음 자리만 쓴다
-    (그림 인식은 같은 그림을 한 번만 한다)."""
+    (그림 인식은 같은 그림을 한 번만 한다). 본문에 놓인 그림과 내용이 같은 자리 없는 사본은 버린다. 같은 그림을
+    BinData 에 두 번 담은 HWP 에서 자리 없는 사본이 첫 쪽에 붙고, 그림 인식의 중복 제거가 그 사본을 남겨 5쪽 그림이
+    1쪽에 나왔다(예측분석 설계보고서, 2026-11-26)."""
     data_by_stem: dict[str, bytes] = {}
     for stem, data in named_images:
         data_by_stem.setdefault(stem, data)
@@ -85,9 +87,11 @@ def anchored_image_regions(
             continue
         placed.add(stem)
         regions.append(_region(data_by_stem[stem], anchor))
+    placed_data = {region.image_bytes for region in regions}
     for stem, data in named_images:
-        if stem not in placed:
+        if stem not in placed and data not in placed_data:
             placed.add(stem)
+            placed_data.add(data)
             regions.append(_region(data, None))
     return regions
 

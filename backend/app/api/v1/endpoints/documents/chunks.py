@@ -296,6 +296,10 @@ async def list_document_chunks(
             "source_file": c.source_file,
             "version": c.version,
             "table": table_by_chunk.get(chunk_id),
+            # 원문 대조의 JSON 보기가 지금 쪽 글과 같은 구간의 청크를 고른다(2026-11-26). 여러 쪽에 걸친 청크는 끝 쪽까지 보인다
+            "page_end": c.page_end,
+            "span_start": c.span_start,
+            "span_end": c.span_end,
         }
 
     hits = qdrant_service.scroll_by_document(str(document_id))

@@ -58,10 +58,60 @@ class HwpxStyles:
     # 문단 스타일 id → 개요 수준(1부터)
     outline_levels: dict[str, int] = field(default_factory=dict)
     style_names: dict[str, str] = field(default_factory=dict)
+    # 문단 모양 id → 그 문단 앞에 붙는 글머리표 글("-", "•")
+    para_marks: dict[str, str] = field(default_factory=dict)
+
+
+# 글머리표 글자가 기호 글꼴(Wingdings 등)의 사설 영역 글자면 화면처럼 "•" 로 적는다
+_PRIVATE_USE = range(0xE000, 0xF900)
+_DEFAULT_BULLET = "•"
+
+
+def _bullet_text(char: str) -> str:
+    char = (char or "").strip()
+    if not char or any(ord(c) in _PRIVATE_USE for c in char):
+        return _DEFAULT_BULLET
+    return char
+
+
+def _paragraph_marks(header_root) -> dict[str, str]:
+    """글머리표 문단 모양(paraPr > heading type="BULLET")마다 붙일 기호. HWPX 글머리표는 글이 아니라 문단 모양에
+    들어 있어 문단 글만 읽으면 "- 대상 R&D과제 요약문" 의 "-" 가 빠졌다(R&D 공고, 2026-11-26). 번호 문단(NUMBER)은
+    올린 문서에 없어 다루지 않는다."""
+    bullets = {
+        elem.get("id"): _bullet_text(elem.get("char", ""))
+        for elem in header_root.iter() if local_tag(elem) == "bullet" and elem.get("id") is not None
+    }
+    marks: dict[str, str] = {}
+    for elem in header_root.iter():
+        if local_tag(elem) != "paraPr" or elem.get("id") is None:
+            continue
+        heading = next((child for child in elem.iter() if local_tag(child) == "heading"), None)
+        if heading is not None and heading.get("type") == "BULLET" and heading.get("idRef") in bullets:
+            marks[elem.get("id")] = bullets[heading.get("idRef")]
+    return marks
+
+
+def add_paragraph_marks(section_root, styles: "HwpxStyles") -> None:
+    """글머리표 문단의 첫 글 조각 앞에 기호 글(<t>)을 넣는다. 본문 문단과 표 칸 문단을 읽는 코드가 모두 이 글을 읽는다.
+    section_root 는 이 문서를 읽으려고 방금 푼 XML 이라 고쳐도 원본에는 영향이 없다."""
+    if not styles.para_marks:
+        return
+    for paragraph in section_root.iter():
+        if local_tag(paragraph) != "p":
+            continue
+        mark = styles.para_marks.get(paragraph.get("paraPrIDRef"))
+        run = next((child for child in paragraph if local_tag(child) == "run"), None)
+        if mark is None or run is None:
+            continue
+        namespace = run.tag[: -len("run")]
+        text = run.makeelement(f"{namespace}t", {})
+        text.text = f"{mark} "
+        run.insert(0, text)
 
 
 def load_styles(header_root) -> HwpxStyles:
-    """Contents/header.xml에서 글자 모양과 스타일을 읽는다."""
+    """Contents/header.xml에서 글자 모양과 스타일, 글머리표 문단 모양을 읽는다."""
     char_shapes: dict[str, CharShape] = {}
     outline_levels: dict[str, int] = {}
     style_names: dict[str, str] = {}
@@ -80,7 +130,10 @@ def load_styles(header_root) -> HwpxStyles:
             level = outline_level(name, elem.get("engName") or "")
             if level:
                 outline_levels[elem.get("id")] = level
-    return HwpxStyles(char_shapes=char_shapes, outline_levels=outline_levels, style_names=style_names)
+    return HwpxStyles(
+        char_shapes=char_shapes, outline_levels=outline_levels, style_names=style_names,
+        para_marks=_paragraph_marks(header_root),
+    )
 
 
 def _dominant_char_shape(paragraph, styles: HwpxStyles) -> CharShape | None:

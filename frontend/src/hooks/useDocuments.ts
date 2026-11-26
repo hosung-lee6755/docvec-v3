@@ -278,6 +278,10 @@ export interface DocumentChunk2 {
   parent_chunk_text: string | null
   // 표 청크의 출처 표. 칸 안에서 떼어 낸 표는 바깥 표와 들어 있던 칸(0부터)을 함께 준다(2026-11-20)
   table?: ChunkTableRef | null
+  // 청크가 끝나는 쪽과 본문(parsed_text) 속 위치. 원문 대조의 JSON 보기가 지금 쪽에 걸친 청크를 고른다(2026-11-26)
+  page_end?: number | null
+  span_start?: number | null
+  span_end?: number | null
 }
 
 export interface ChunkTableRef {
@@ -521,6 +525,9 @@ export function useDocumentPreview(id: string, enabled: boolean) {
 export interface DocumentPageText {
   page_number: number
   text: string
+  // 이 쪽 글의 본문(parsed_text) 속 시작·끝 위치. 쪽 글을 이어 본문과 같을 때만 온다(2026-11-26)
+  start?: number
+  end?: number
 }
 
 export interface DocumentPagesTextResult {

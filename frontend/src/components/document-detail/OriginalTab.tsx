@@ -15,6 +15,8 @@ import { ErrorText } from '../ui'
 interface Page {
   page_number: number
   text: string
+  start?: number
+  end?: number
 }
 
 interface PreviewResult {
@@ -88,6 +90,12 @@ export default function OriginalTab({
     ? pages.filter((p) => p.page_number === clampedPage).map((p) => p.text).join('\n\n')
     : null
   const isCurrentPageEmpty = currentPageText !== null && !currentPageText.trim()
+  // JSON 보기도 텍스트 보기와 같은 쪽 구간의 청크를 보인다. 예전에는 원본 PDF 만, 그것도 청크의 시작 쪽으로만 걸러
+  // HWP·DOCX 는 쪽을 넘겨도 문서 전체 청크가 그대로였다(2026-11-26)
+  // 글이 없는 쪽(pages 에 없음)은 빈 구간으로 보아 청크를 보이지 않는다
+  const currentPage = pages.find((p) => p.page_number === clampedPage)
+  const pageSpan = currentPage ? { start: currentPage.start, end: currentPage.end } : { start: 0, end: 0 }
+  const jsonScope = isPageSynced && hasMultiplePages ? { page_number: clampedPage, ...pageSpan } : undefined
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 'var(--space-2)' }}>
@@ -181,7 +189,7 @@ export default function OriginalTab({
                 fontFamily: 'var(--font-mono)', margin: 0,
               }}>
                 {chunksResult
-                  ? toRagRecordsJson(ragSource, chunksResult.chunks, isNativePdf && hasMultiplePages ? clampedPage : undefined)
+                  ? toRagRecordsJson(ragSource, chunksResult.chunks, jsonScope)
                   : '저장된 청크를 불러오는 중입니다.'}
               </pre>
             )}

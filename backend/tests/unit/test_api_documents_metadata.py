@@ -242,7 +242,9 @@ async def test_pages_text_splits_pdf_text_by_page_map(db_session):  # noqa: F811
     result = await md.get_document_pages_text(doc.id, db_session, owner_user())
 
     assert result["pages"] == [
-        {"page_number": 1, "text": "AAA"}, {"page_number": 2, "text": "BBB"}, {"page_number": 3, "text": "CC"},
+        {"page_number": 1, "text": "AAA", "start": 0, "end": 3},
+        {"page_number": 2, "text": "BBB", "start": 3, "end": 6},
+        {"page_number": 3, "text": "CC", "start": 6, "end": 8},
     ]
 
 
@@ -250,7 +252,9 @@ async def test_pages_text_without_page_map_is_single_page_or_empty(db_session): 
     with_text = await add_doc(db_session, "m-pages-one", original_filename="a.pdf", parsed_text="전체")
     empty = await add_doc(db_session, "m-pages-empty", original_filename="b.pdf")
 
-    assert (await md.get_document_pages_text(with_text.id, db_session, owner_user()))["pages"] == [{"page_number": 1, "text": "전체"}]
+    assert (await md.get_document_pages_text(with_text.id, db_session, owner_user()))["pages"] == [
+        {"page_number": 1, "text": "전체", "start": 0, "end": 2},
+    ]
     assert (await md.get_document_pages_text(empty.id, db_session, owner_user()))["pages"] == []
 
 
@@ -261,7 +265,9 @@ async def test_pages_text_non_pdf_uses_preview_pdf_pages_then_falls_back(db_sess
     with patch("app.services.preview_service.pdf_pages_text_for", return_value=preview_pages):
         assert (await md.get_document_pages_text(doc.id, db_session, owner_user()))["pages"] == preview_pages
     with patch("app.services.preview_service.pdf_pages_text_for", return_value=[]):
-        assert (await md.get_document_pages_text(doc.id, db_session, owner_user()))["pages"] == [{"page_number": 1, "text": "본문"}]
+        assert (await md.get_document_pages_text(doc.id, db_session, owner_user()))["pages"] == [
+            {"page_number": 1, "text": "본문", "start": 0, "end": 2},
+        ]
 
 
 async def test_pages_text_reports_total_pages_including_pages_without_text(db_session):  # noqa: F811
@@ -286,6 +292,9 @@ async def test_pages_text_non_pdf_splits_parsed_text_by_preview_pages(db_session
         result = await md.get_document_pages_text(doc.id, db_session, owner_user())
 
     assert result["synced"] is True and result["total_pages"] == 2
+    # 원문 대조의 JSON 보기가 쪽 글과 같은 구간의 청크를 고르도록 쪽마다 본문 속 위치를 준다(2026-11-26)
+    assert all(body[p["start"]:p["end"]] == p["text"] for p in result["pages"])
+    assert result["pages"][-1]["end"] == len(body)
     assert [p["text"].split("\n")[0] for p in result["pages"]] == ["제1장 총칙 이 지침의 목적을 정한다", "제2장 사업 대상 축산 농가와 생산자 단체"]
 
 

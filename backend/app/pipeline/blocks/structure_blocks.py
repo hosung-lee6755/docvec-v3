@@ -44,6 +44,8 @@ _HEADING_KOREAN_RE = re.compile(r"^제\s*\d+\s*[장절조편]")
 # 공고문·계획서 hwpx 는 글자 크기 없이 "□ 사업개요" 로 절을 나눈다(한국 공문서 관례).
 _HEADING_SQUARE_BULLET_RE = re.compile(r"^□\s*\S")
 _LIST_RE = re.compile(r"^([-*•]|\d+[\).])\s+\S")
+# 줄 정보의 style_name 가운데 파서가 목록 항목으로 판정한 값(Docling label)
+_PARSER_LIST_STYLES = frozenset({"list_item", "list-item"})
 # pdf_adapter.py가 표를 만나면 "[표 N]\n{table_text}" 형태로 RawTextBlock을
 # 만들고, extraction_blocks.py가 그걸 다른 블록들과 "\n\n"로 이어붙여
 # parsed_text를 만든다 — 이 마커 줄이 표의 시작이라는 유일한 신호다. 표의
@@ -309,6 +311,10 @@ def _classify(
     # 태깅된 줄은 일반 정규식 분류보다 먼저 확정한다.
     if layout and layout.get("role") == "footnote":
         return "FOOTNOTE", None
+    # 파서(Docling)가 목록 항목으로 읽은 줄은 번호가 붙어도 제목이 아니다. 목록 기호를 되살린 뒤(2026-11-26)
+    # "1. 데이터 파이프라인" 같은 짧은 번호 항목이 아래 번호 제목 규칙에 걸리지 않게 먼저 정한다
+    if layout and layout.get("style_name") in _PARSER_LIST_STYLES:
+        return "LIST_ITEM", None
     m = _HEADING_NUMBERED_RE.match(line)
     if m and _plausible_numbered_heading(line, m.group(1)):
         if line[len(m.group(1)):].startswith(")"):
@@ -797,7 +803,9 @@ class StructureAnalyzeBlock(BaseBlock):
         # 1.23.1: 번호·붙임 제목 상자를 이미 쓴 문서에서는 표어 상자를 제목으로 올리지 않는다. 조사료 지침의 주체 표시
         #         상자("시·도(시·군), 농협경제지주…")가 1단계 제목이 되어 장 밖으로 튀어나왔다(2026-11-24).
         # 1.24.0: 붙임표 번호 절 제목("1-1. 개발 범위")을 점 번호처럼 제목으로 받는다(AIDE 제안서 DOCX, 2026-11-25).
-        return "1.24.0"
+        # 1.25.0: 파서가 목록 항목으로 읽은 줄(Docling list_item)은 번호가 붙어도 목록 항목으로 둔다. 목록 기호를 본문에
+        #         되살리면서 "1. 데이터 파이프라인" 같은 짧은 항목이 제목이 되지 않게 했다(2026-11-26).
+        return "1.25.0"
 
     @property
     def category(self) -> str:

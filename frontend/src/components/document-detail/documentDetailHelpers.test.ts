@@ -40,10 +40,25 @@ describe('toRagRecordsJson', () => {
     expect(json.chunks[1]).not.toHaveProperty('table')
   })
 
-  it('keeps only chunks that start on the given page', () => {
-    const json = JSON.parse(toRagRecordsJson(DOC, [chunk({}), chunk({ id: 'c2', page_number: 2 })], 2))
+  it('keeps chunks whose page range covers the given page', () => {
+    // 2026-11-26: 시작 쪽만 보아 1~2쪽에 걸친 청크가 2쪽 JSON 에서 빠졌다
+    const chunks = [chunk({}), chunk({ id: 'c2', page_number: 1, page_end: 2 }), chunk({ id: 'c3', page_number: 2 })]
+    const json = JSON.parse(toRagRecordsJson(DOC, chunks, { page_number: 2 }))
 
-    expect(json.chunks.map((c: { id: string }) => c.id)).toEqual(['c2'])
+    expect(json.chunks.map((c: { id: string }) => c.id)).toEqual(['c2', 'c3'])
+    expect(json.chunks[0]).toMatchObject({ page: 1, page_end: 2 })
+  })
+
+  it('picks chunks by the page text span when the page carries its position in the body', () => {
+    // HWP·DOCX 는 쪽을 미리보기 PDF 에 맞춰 나눠, 청크의 쪽 번호보다 본문 위치가 쪽 글과 정확히 맞는다
+    const chunks = [
+      chunk({ id: 'c1', page_number: 1, span_start: 0, span_end: 10 }),
+      chunk({ id: 'c2', page_number: 1, span_start: 10, span_end: 25 }),
+      chunk({ id: 'c3', page_number: 3, span_start: 25, span_end: 40 }),
+    ]
+    const json = JSON.parse(toRagRecordsJson(DOC, chunks, { page_number: 2, start: 12, end: 30 }))
+
+    expect(json.chunks.map((c: { id: string }) => c.id)).toEqual(['c2', 'c3'])
   })
 })
 

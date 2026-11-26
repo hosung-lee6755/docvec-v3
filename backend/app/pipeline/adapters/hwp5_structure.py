@@ -13,6 +13,7 @@ from app.pipeline.adapters.hwpx_structure import (
     BODY_FONT_FALLBACK,
     CharShape,
     HwpxStyles,
+    _bullet_text,
     grid_from_cells,
     outline_level,
 )
@@ -55,6 +56,49 @@ def load_hwp_styles(root) -> HwpxStyles:
                 if level:
                     outline_levels[style_id] = level
     return HwpxStyles(char_shapes=char_shapes, outline_levels=outline_levels, style_names=style_names)
+
+
+def _hwp_paragraph_marks(root) -> dict[str, str]:
+    """글머리표 문단 모양(ParaShape head-shape="bullet")의 번호(문서 순서, 0부터) → 붙일 기호.
+    numbering-bullet-id 는 Bullet 정의의 1부터 센 번호다."""
+    bullets: list[str] = []
+    shapes: list[tuple[str | None, int]] = []
+    for section in root:
+        if section.tag == BODY_TAG:
+            continue
+        for elem in section.iter():
+            if elem.tag == "Bullet":
+                bullets.append(_bullet_text(elem.get("char", "")))
+            elif elem.tag == "ParaShape":
+                shapes.append((elem.get("head-shape"), _int_attr(elem, "numbering-bullet-id", 0)))
+    return {
+        str(index): bullets[bullet_id - 1]
+        for index, (head_shape, bullet_id) in enumerate(shapes)
+        if head_shape == "bullet" and 1 <= bullet_id <= len(bullets)
+    }
+
+
+def add_hwp_paragraph_marks(root) -> None:
+    """글머리표 문단 앞에 기호 글(<Text>)을 넣는다. 본문 문단과 표 칸 문단을 읽는 코드가 모두 이 글을 읽는다.
+
+    구형 HWP 도 HWPX 처럼 글머리표가 글이 아니라 문단 모양에 있어, "- 대상 항만(31개)" 의 "-" 가 본문에서
+    빠졌다(1_지능형 항만수요예측 컨설팅, 2026-11-26). 처음 대조에서는 글머리표 모양 문단이 없다고 보았으나 표본을
+    잘못 골랐던 것으로, 올린 HWP 10건 중 6건에 있다. 번호 문단(number)은 다루지 않는다. 글이 이미 그 기호로
+    시작하면 두 번 붙이지 않는다. root 는 pyhwp 가 이 문서를 읽으려고 방금 만든 XML 이라 고쳐도 원본에는 영향이 없다."""
+    marks = _hwp_paragraph_marks(root)
+    if not marks:
+        return
+    body = root.find(BODY_TAG)
+    for paragraph in (body.iter("Paragraph") if body is not None else ()):
+        mark = marks.get(paragraph.get("parashape-id"))
+        if mark is None:
+            continue
+        own_text = "".join(t.text or "" for t in paragraph.iter("Text"))
+        if own_text.lstrip().startswith(mark):
+            continue
+        text = paragraph.makeelement("Text", {})
+        text.text = f"{mark} "
+        paragraph.insert(0, text)
 
 
 def _own_text_lengths(elem, lengths: dict[str, int]) -> None:

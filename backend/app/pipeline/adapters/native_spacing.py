@@ -29,6 +29,9 @@ _MIN_REPAIR_ALLOWANCE = 8
 _PRIVATE_USE_RE = re.compile(r"[\ue000-\uf8ff]")
 # 영문 뒤에 붙은 숫자(CO2, H2O). 원본 글자 층은 아래첨자 숫자를 줄 뒤로 보내므로 원본에도 그대로 있어야 한다
 _LETTER_DIGIT_RE = re.compile(r"[A-Za-z]+\d+")
+# Docling 이 글을 조립하며 바꿔 적는 글자(docling page_assemble_model.sanitize_text). 원본 글과 견줄 때 원본에도
+# 같이 적용하고, 저장할 글에는 원본 글자를 되돌린다(2026-11-26, 사례집 "•" 가 "·" 로 저장됨)
+_DOCLING_SANITIZED = str.maketrans({"⁄": "/", "’": "'", "‘": "'", "“": '"', "”": '"', "•": "·"})
 # 기준선에서 글자 윗변까지를 글꼴 크기의 이 비율로 잡는다(pdfplumber 의 글자 높이와 맞춘 어림값)
 _ASCENT_RATIO = 0.8
 # 영역 테두리에 걸친 글자를 놓치지 않을 여유(pt)
@@ -69,24 +72,67 @@ def _restores_symbols(docling_chars: str, native_chars: str) -> bool:
     return added <= max(_MIN_REPAIR_ALLOWANCE, len(docling_chars))
 
 
+def _as_docling_writes(text: str) -> str:
+    return text.translate(_DOCLING_SANITIZED)
+
+
+def _is_plain_symbol(ch: str) -> bool:
+    return not ch.isalnum() and ch.isprintable() and not _PRIVATE_USE_RE.match(ch)
+
+
+def _differs_only_in_symbols(a: str, b: str) -> bool:
+    return len(a) == len(b) and all(x == y or (_is_plain_symbol(x) and _is_plain_symbol(y)) for x, y in zip(a, b))
+
+
+def _docling_view(docling_chars: str, native_chars: str) -> str:
+    """원본 글을 Docling 이 적는 글자로 맞춘 글. Docling 글과 견줄 때 쓴다.
+
+    Docling 은 글을 조립하며 "•" 를 "·" 로, 둥근 따옴표를 곧은 따옴표로 바꾸고(sanitize_text), docling-parse 는
+    "—" 를 "-" 로 읽는다(Pub120bk). 원본 끝부분(목록 기호 뒤)이 Docling 글과 기호 자리만 다르면 같은 글로 본다."""
+    view = _as_docling_writes(native_chars)
+    cut = len(view) - len(docling_chars)
+    if cut >= 0 and _differs_only_in_symbols(view[cut:], docling_chars):
+        view = view[:cut] + docling_chars
+    return view
+
+
+def _with_native_chars(text: str, native_chars: str) -> str:
+    """text 의 공백 아닌 글자를 같은 자리의 원본 글자로 바꾼다. 글자 수가 다르면 그대로 둔다."""
+    text = unicodedata.normalize("NFC", text)
+    if sum(1 for ch in text if not ch.isspace()) != len(native_chars):
+        return text
+    native = iter(native_chars)
+    return "".join(ch if ch.isspace() else next(native) for ch in text)
+
+
+def _only_marker_before(docling_chars: str, native_chars: str) -> bool:
+    prefix = native_chars[: len(native_chars) - len(docling_chars)]
+    return native_chars.endswith(docling_chars) and bool(_LIST_MARKER_RE.fullmatch(prefix))
+
+
+def restore_marker(marker: str, native_text: str) -> str:
+    """Docling 이 바꿔 적은 목록 기호("·")를 원본 글자 층의 기호("•")로 되돌린다."""
+    lead = native_text.lstrip()[: len(marker)]
+    return lead if lead != marker and _as_docling_writes(lead) == marker else marker
+
+
 def choose_spacing(docling_text: str, native_text: str) -> str:
     """두 글의 글자가 같으면(원본 앞의 목록 번호는 허용) 띄어쓰기가 덜 깨진 쪽을 돌려준다. 원본 글은 한 문단으로 잇는다.
-    한글은 같은데 Docling 이 숫자·기호를 옮기거나 빠뜨렸으면 원본 글을 쓴다."""
+    한글은 같은데 Docling 이 숫자·기호를 옮기거나 빠뜨렸으면 원본 글을 쓴다. Docling 글을 쓸 때도 Docling 이
+    바꿔 적은 글자("·", 곧은 따옴표)는 원본 글자로 되돌린다."""
     native_flat = " ".join(native_text.split())
     docling_chars, native_chars = _compact(docling_text), _compact(native_flat)
     if not docling_chars or not native_chars:
         return docling_text
-    if native_chars != docling_chars and _restores_symbols(docling_chars, native_chars):
-        prefix = native_chars[: len(native_chars) - len(docling_chars)]
-        if not (native_chars.endswith(docling_chars) and _LIST_MARKER_RE.fullmatch(prefix)):
+    native_view = _docling_view(docling_chars, native_chars)
+    if native_view != docling_chars and _restores_symbols(docling_chars, native_view):
+        if not _only_marker_before(docling_chars, native_view):
             return native_flat
-    if native_chars != docling_chars:
-        prefix = native_chars[: len(native_chars) - len(docling_chars)]
-        if not (native_chars.endswith(docling_chars) and _LIST_MARKER_RE.fullmatch(prefix)):
-            return docling_text
+    if native_view != docling_chars and not _only_marker_before(docling_chars, native_view):
+        return docling_text
     if spacing_score(native_flat) < spacing_score(docling_text):
         return native_flat
-    return docling_text
+    return _with_native_chars(docling_text, native_chars[len(native_chars) - len(docling_chars):])
 
 
 def _page_chars(page) -> list[dict]:

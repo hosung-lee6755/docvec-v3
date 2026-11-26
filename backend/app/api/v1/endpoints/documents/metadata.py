@@ -303,21 +303,37 @@ async def get_document_pages_text(
                 split_text_for_preview, text, doc.page_map, [p["text"] for p in preview_pages],
             )
             if pieces is not None:
-                pages = [{"page_number": i + 1, "text": piece} for i, piece in enumerate(pieces)]
+                pages = _with_offsets([{"page_number": i + 1, "text": piece} for i, piece in enumerate(pieces)], text)
                 return _pages_response(doc, pages, len(preview_pages), synced=True)
             return _pages_response(doc, preview_pages, len(preview_pages), synced=False)
 
     pages = []
     start = 0
     for end_offset, page_number in doc.page_map or []:
-        pages.append({"page_number": page_number, "text": text[start:end_offset]})
+        pages.append({"page_number": page_number, "text": text[start:end_offset], "start": start, "end": end_offset})
         start = end_offset
     if not pages and text:
-        pages = [{"page_number": 1, "text": text}]
+        pages = [{"page_number": 1, "text": text, "start": 0, "end": len(text)}]
     last_page = max((p["page_number"] for p in pages), default=0)
     # 글이 없는 쪽(그림·빈 쪽)은 page_map 에 없다. 원본 쪽 수까지 넘길 수 있도록 page_count 를 함께 준다
     total = max(doc.page_count or 0, last_page)
     return _pages_response(doc, pages, total, synced=bool(doc.page_map))
+
+
+def _with_offsets(pages: list[dict], text: str) -> list[dict]:
+    """쪽마다 본문(parsed_text) 속 시작·끝 위치(start, end)를 붙인 새 목록. 원문 대조의 JSON 보기는 이 구간에 걸친
+    청크(span_start~span_end)를 보여 준다(2026-11-26). 예전에는 청크의 시작 쪽만 보고 원본 PDF 만 걸러, 여러 쪽에 걸친
+    청크가 뒤쪽에서 빠지고 HWP·DOCX 는 쪽을 넘겨도 문서 전체 청크가 그대로 나왔다. 쪽 글을 이으면 본문과 같아야 위치를
+    믿을 수 있으므로, 다르면 위치 없이 돌려준다."""
+    if "".join(page["text"] for page in pages) != text:
+        return pages
+    with_offsets: list[dict] = []
+    position = 0
+    for page in pages:
+        end = position + len(page["text"])
+        with_offsets.append({**page, "start": position, "end": end})
+        position = end
+    return with_offsets
 
 
 def _pages_response(doc: Document, pages: list[dict], total_pages: int, synced: bool) -> dict:

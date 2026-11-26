@@ -4,7 +4,12 @@ from unittest.mock import MagicMock, patch
 from xml.etree import ElementTree as ET
 
 from app.pipeline.adapters import hwp_adapter as hwp
-from app.pipeline.adapters.hwp5_structure import hwp_paragraph_layout, hwp_table_grid, load_hwp_styles
+from app.pipeline.adapters.hwp5_structure import (
+    add_hwp_paragraph_marks,
+    hwp_paragraph_layout,
+    hwp_table_grid,
+    load_hwp_styles,
+)
 from app.pipeline.adapters.hwp_adapter import HWPAdapter
 
 DOC_INFO = (
@@ -75,6 +80,39 @@ def test_paragraph_layout_without_known_shape_leaves_font_empty():
     layout = hwp_paragraph_layout(root.find("BodyText/Paragraph"), "본문", load_hwp_styles(root))
 
     assert layout["font_size"] is None and not layout["is_bold"] and layout["style_name"] == "바탕글"
+
+
+BULLET_DOC_INFO = (
+    "<DocInfo><IdMappings>"
+    '<Bullet char="-"/><Bullet char=""/>'
+    '<ParaShape head-shape="none" numbering-bullet-id="0"/>'
+    '<ParaShape head-shape="bullet" numbering-bullet-id="1"/>'
+    '<ParaShape head-shape="bullet" numbering-bullet-id="2"/>'
+    '<ParaShape head-shape="outline" numbering-bullet-id="1"/>'
+    "</IdMappings></DocInfo>"
+)
+
+
+def _shaped(text: str, shape_id: str) -> str:
+    return f'<Paragraph parashape-id="{shape_id}"><LineSeg><Text charshape-id="0">{text}</Text></LineSeg></Paragraph>'
+
+
+def test_bulleted_paragraphs_keep_their_bullet_in_body_and_cells():
+    # 1_지능형 항만수요예측(컨설팅) HWP: 글머리표가 글이 아니라 문단 모양(head-shape=bullet)에 있어
+    # "- 대상 항만(31개)" 의 "-" 가 본문에서 빠졌다(2026-11-26 기호 대조)
+    body = (
+        _shaped("대상 항만(31개)", "1") + _shaped("기호 글꼴 글머리표", "2") + _shaped("일반 문단", "0")
+        + _shaped("개요 번호 문단", "3") + _shaped("- 이미 기호가 있는 문단", "1")
+        + f'<TableControl><TableBody><TableCell>{_shaped("칸 안 항목", "1")}</TableCell></TableBody></TableControl>'
+    )
+    root = ET.fromstring(f"<HwpDoc>{BULLET_DOC_INFO}<BodyText>{body}</BodyText></HwpDoc>".encode())
+
+    add_hwp_paragraph_marks(root)
+
+    texts = [hwp._hwp_collect_text(p).strip() for p in root.iter("Paragraph")]
+    assert texts == [
+        "- 대상 항만(31개)", "• 기호 글꼴 글머리표", "일반 문단", "개요 번호 문단", "- 이미 기호가 있는 문단", "- 칸 안 항목",
+    ]
 
 
 def test_row_span_keeps_columns_aligned_and_repeats_the_text():

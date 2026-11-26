@@ -108,8 +108,26 @@ export interface RagRecordSource {
  * 예전 JSON 보기는 본문을 빈 줄로 잘라 {blocks: [...]}로만 보여 줘, 구조와 요소 정보가 전혀 없었다(2026-11-13).
  * page를 주면 그 쪽에서 시작하는 청크만 담는다.
  */
-export function toRagRecordsJson(doc: RagRecordSource, chunks: DocumentChunk2[], page?: number): string {
-  const selected = page == null ? chunks : chunks.filter((c) => c.page_number === page)
+/** 원문 대조에서 지금 보는 쪽. start/end 는 그 쪽 글의 본문(parsed_text) 속 위치다(백엔드가 줄 때만). */
+export interface ChunkPageScope {
+  page_number: number
+  start?: number
+  end?: number
+}
+
+/** 이 청크가 지금 쪽에 걸치는지. 쪽 글 위치와 청크 본문 위치가 다 있으면 위치로, 아니면 청크의 쪽 범위로 본다. */
+function isChunkOnPage(chunk: DocumentChunk2, scope: ChunkPageScope): boolean {
+  const { start, end } = scope
+  if (start != null && end != null && chunk.span_start != null && chunk.span_end != null) {
+    return chunk.span_start < end && chunk.span_end > start
+  }
+  if (chunk.page_number == null) return false
+  return chunk.page_number <= scope.page_number && scope.page_number <= (chunk.page_end ?? chunk.page_number)
+}
+
+// scope 가 있으면 그 쪽에 걸친 청크만 보인다. 예전에는 청크의 시작 쪽만 보아 여러 쪽에 걸친 청크가 뒤쪽에서 빠졌다(2026-11-26)
+export function toRagRecordsJson(doc: RagRecordSource, chunks: DocumentChunk2[], scope?: ChunkPageScope): string {
+  const selected = scope == null ? chunks : chunks.filter((c) => isChunkOnPage(c, scope))
   return JSON.stringify({
     document: {
       id: doc.id,
@@ -123,6 +141,7 @@ export function toRagRecordsJson(doc: RagRecordSource, chunks: DocumentChunk2[],
       id: c.id,
       index: c.chunk_index,
       page: c.page_number,
+      ...(c.page_end != null && c.page_end !== c.page_number ? { page_end: c.page_end } : {}),
       section_path: c.section_path ?? [],
       chunk_type: c.chunk_type,
       element_id: c.element_id,

@@ -73,6 +73,18 @@ def test_images_keep_their_anchor_and_unplaced_ones_go_last_without_one():
     ]
 
 
+def test_unplaced_copy_of_a_placed_picture_is_dropped():
+    """같은 그림이 BinData 에 두 번 들어 있고 하나만 본문에 놓인 HWP 에서, 자리 없는 사본이 1쪽에 붙고 그림 인식의
+    중복 제거가 그 사본을 남겨 5쪽 그림이 1쪽에 나왔다(예측분석 설계보고서, 2026-11-26). 본문에 놓인 그림과 내용이
+    같은 사본은 버린다."""
+    paragraph = RawTextBlock(text="계절 요소 설명", page_number=1)
+    named = [("BIN0001", b"prophet"), ("BIN0007", b"prophet"), ("BIN0009", b"logo")]
+
+    regions = anchored_image_regions(["BIN0007"], [(0, paragraph)], named)
+
+    assert [(r.image_bytes, r.anchor) for r in regions] == [(b"prophet", paragraph), (b"logo", None)]
+
+
 def test_figure_text_follows_the_anchor_paragraph_of_its_picture():
     from unittest.mock import MagicMock, patch
 

@@ -29,7 +29,7 @@ from app.pipeline.adapters.base import (
     RawTextBlock,
 )
 from app.pipeline.adapters.docling_toc import TOC_LABELS, choose_toc_lines, grid_text
-from app.pipeline.adapters.native_spacing import NativeRegionReader, choose_spacing
+from app.pipeline.adapters.native_spacing import NativeRegionReader, choose_spacing, restore_marker
 from app.pipeline.adapters.hwpx_structure import grid_from_cells
 from app.pipeline.adapters.ruled_tables import RuledTable, find_ruled_tables, match_ruled_table
 from app.pipeline.adapters.table_text_coverage import TextLine, lines_from_words, missing_lines, refill_cells
@@ -45,6 +45,22 @@ _FOOTER_LABELS = {"page_footer", "page-footer"}
 _PICTURE_LABELS = {"picture", "figure"}
 _LIST_ITEM_LABELS = {"list_item", "list-item"}
 _CAPTION_LABELS = {"caption"}
+
+
+def _with_list_marker(item, text: str, native_text: str = "") -> str:
+    """목록 항목 글 앞에 원문의 기호("◦", "1.", "-")를 되살린다.
+
+    Docling 은 기호를 marker 로 떼어 내고 text 에는 기호 없는 글만 둔다. 공고문의 "◦ (신청 기간)" 이 "(신청 기간)" 으로,
+    Pub120 의 "1. A requirement" 가 "A requirement" 로 저장되어 원문의 번호와 글머리표가 RAG 본문에서 사라졌다
+    (2026-11-26). Docling 은 원문에 기호가 없어도 기본 기호를 넣을 수 있어, 원래 글(orig)이 그 기호로 시작할 때만 붙인다."""
+    marker = (getattr(item, "marker", "") or "").strip()
+    orig = (getattr(item, "orig", "") or "").lstrip()
+    if not marker or not text or not orig.startswith(marker):
+        return text
+    glyph = restore_marker(marker, native_text)  # Docling 은 "•" 를 "·" 로 적는다
+    if text.startswith((marker, glyph)):
+        return text
+    return f"{glyph} {text}"
 
 
 def _item_label(item) -> str:
@@ -747,8 +763,11 @@ class DoclingAdapter(BaseAdapter):
                 continue
 
             text = (getattr(item, "text", "") or "").strip()
+            region_text = native_region.read(page_no, bbox) if text else ""
             if text:
-                text = choose_spacing(text, native_region.read(page_no, bbox))
+                text = choose_spacing(text, region_text)
+            if label in _LIST_ITEM_LABELS:
+                text = _with_list_marker(item, text, region_text)
             if label in _HEADING_LABELS:
                 section_path = [text] if text else section_path
             _emit_text(page, elements, section_path, label, text, bbox, level=getattr(item, "level", None))

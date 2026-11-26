@@ -46,6 +46,51 @@ _ARROWS = " ↑▲⇧"
 _HTML_SEPARATED_CHILDREN = {"summary"}
 
 
+# CSS 규칙("선택자 { 선언 }")과 목록 기호를 숨기는 선언, 선택자의 가상 요소("::before")
+_CSS_RULE_RE = re.compile(r"([^{}]+)\{([^{}]*)\}")
+_LIST_STYLE_NONE_RE = re.compile(r"list-style(?:-type)?\s*:\s*none", re.IGNORECASE)
+_PSEUDO_RE = re.compile(r"::?[\w-]+(\([^)]*\))?")
+_UNORDERED_MARK = "•"
+
+
+def _hidden_marker_lists(soup) -> set[int]:
+    """CSS 가 목록 기호를 숨긴(list-style: none) ul·ol·li 의 id. 목차나 자체 번호를 그리는 목록이다."""
+    hidden: set[int] = set()
+    css = " ".join(style.get_text() for style in soup.find_all("style"))
+    for selectors, declarations in _CSS_RULE_RE.findall(css):
+        if not _LIST_STYLE_NONE_RE.search(declarations):
+            continue
+        for selector in selectors.split(","):
+            selector = _PSEUDO_RE.sub("", selector).strip()
+            if not selector or selector.startswith("@"):
+                continue
+            try:
+                hidden.update(id(element) for element in soup.select(selector))
+            except Exception:  # noqa: BLE001 - soupsieve 가 못 읽는 선택자는 건너뛴다
+                continue
+    return hidden
+
+
+def _add_list_markers(soup) -> None:
+    """화면이 그리는 목록 기호("•", "3.")를 <li> 맨 앞 글로 넣는다. HTML 목록의 번호와 글머리표는 글이 아니라
+    <ol>/<ul> 이 그려, 본문에 "1.", "•" 가 하나도 남지 않았다(완료보고서·연동가이드, 2026-11-26). CSS 가 숨긴 목록은
+    그대로 둔다. soup 는 이 문서를 읽으려고 방금 푼 트리라 고쳐도 원본에는 영향이 없다."""
+    from bs4.element import NavigableString
+
+    hidden = _hidden_marker_lists(soup)
+    for listing in soup.find_all(["ul", "ol"]):
+        if id(listing) in hidden:
+            continue
+        number = _span_attr(listing, "start") if listing.name == "ol" and listing.get("start") else 1
+        for item in listing.find_all("li", recursive=False):
+            if item.get("value"):
+                number = _span_attr(item, "value")
+            if id(item) not in hidden:
+                mark = f"{number}." if listing.name == "ol" else _UNORDERED_MARK
+                item.insert(0, NavigableString(f"{mark} "))
+            number += 1
+
+
 def _is_back_to_top_link(node) -> bool:
     href = (node.get("href") or "").strip()
     if not href.startswith("#"):
@@ -223,6 +268,7 @@ def parse_html(html: str) -> tuple[list[RawTextBlock], list[RawTableCandidate], 
 
     soup = BeautifulSoup(html, "lxml")
     title = soup.title.get_text(strip=True) if soup.title else None
+    _add_list_markers(soup)
     collector = BlockCollector()
     blocks: list[RawTextBlock] = []
     tables: list[RawTableCandidate] = []

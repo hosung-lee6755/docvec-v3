@@ -479,3 +479,27 @@ def test_picture_region_shares_the_picture_element_id(fake_docling_module, tmp_p
     parsed = DoclingAdapter().extract(pdf_path, {})
 
     assert parsed.pages[0].image_regions[0].element_id == parsed.metadata["elements"][0]["id"]
+
+
+def test_list_item_keeps_the_marker_written_in_the_original():
+    """Docling 은 목록 항목의 기호("◦", "1.", "-")를 marker 로 떼어 내고 text 에는 기호 없는 글만 둔다. 공고문의 "◦ (신청
+    기간)" 이 "(신청 기간)" 으로, Pub120 의 "1. A requirement" 가 "A requirement" 로 저장되었다(2026-11-26).
+    원래 글(orig)이 그 기호로 시작할 때만 되살린다. 원문에 없는 기본 기호("-")는 붙이지 않는다."""
+    from types import SimpleNamespace
+
+    from app.pipeline.adapters.docling_adapter import _with_list_marker
+
+    bullet = SimpleNamespace(marker="◦", orig="◦ ( 신청 기간 ) 2026. 4. 27.")
+    numbered = SimpleNamespace(marker="1.", orig="1. A requirement by a state")
+    default_marker = SimpleNamespace(marker="-", orig="사업자번호로 구분되는 도입기업")
+    already = SimpleNamespace(marker="-", orig="-사업자번호로 구분")
+
+    assert _with_list_marker(bullet, "(신청 기간) 2026. 4. 27.") == "◦ (신청 기간) 2026. 4. 27."
+    assert _with_list_marker(numbered, "A requirement by a state") == "1. A requirement by a state"
+    assert _with_list_marker(default_marker, "사업자번호로 구분되는 도입기업") == "사업자번호로 구분되는 도입기업"
+    assert _with_list_marker(already, "-사업자번호로 구분") == "-사업자번호로 구분"
+    assert _with_list_marker(SimpleNamespace(), "글") == "글"
+    # Docling 은 "•" 를 "·" 로 적는다. 원본 글자 층의 기호로 되돌린다
+    dot = SimpleNamespace(marker="·", orig="· 데이터 기반 예측")
+    assert _with_list_marker(dot, "데이터 기반 예측", "• 데이터 기반 예측") == "• 데이터 기반 예측"
+    assert _with_list_marker(dot, "• 데이터 기반 예측", "• 데이터 기반 예측") == "• 데이터 기반 예측"

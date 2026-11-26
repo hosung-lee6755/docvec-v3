@@ -44,11 +44,80 @@ def _bbox(shape) -> tuple[float, float, float, float]:
     return (left, top, left + _points(shape.width), top + _points(shape.height))
 
 
+# 문단 글머리표(buChar)·자동 번호(buAutoNum). 글이 아니라 문단 서식이라 예전에는 "✓ 데이터 수집" 의 "✓" 가
+# 빠졌다(산업단지 발표자료, 2026-11-26). 기호 글꼴 글자는 화면 모양으로 적고, 모르는 기호 글꼴 글자는 "•" 로 적는다.
+_SYMBOL_FONTS = ("wingdings", "symbol", "webdings")
+_SYMBOL_FONT_CHARS = {"ü": "✓", "§": "▪", "Ø": "➢", "q": "❑", "n": "■", "l": "●", "v": "❖", "Ÿ": "•", "ð": "⇨"}
+_DEFAULT_BULLET = "•"
+_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+_ROMAN = ((1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
+          (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"))
+
+
+def _roman(number: int) -> str:
+    out = []
+    for value, letters in _ROMAN:
+        count, number = divmod(number, value)
+        out.append(letters * count)
+    return "".join(out)
+
+
+def _auto_number(kind: str, number: int) -> str:
+    """buAutoNum 형식(arabicPeriod, alphaLcParenR, romanUcPeriod, circleNumDbPlain 등)대로 적은 번호."""
+    if kind.startswith("circleNum"):
+        return _CIRCLED[number - 1] if 0 < number <= len(_CIRCLED) else str(number)
+    if kind.startswith("alpha"):
+        core = chr(ord("a") + (number - 1) % 26)
+    elif kind.startswith("roman"):
+        core = _roman(number)
+    else:
+        core = str(number)
+    if "Uc" in kind:
+        core = core.upper()
+    if kind.endswith("ParenBoth"):
+        return f"({core})"
+    if kind.endswith("ParenR"):
+        return f"{core})"
+    if kind.endswith("Period"):
+        return f"{core}."
+    return core
+
+
+def _bullet_char(char: str, typeface: str) -> str:
+    if any(font in typeface.lower() for font in _SYMBOL_FONTS):
+        return _SYMBOL_FONT_CHARS.get(char, _DEFAULT_BULLET)
+    return char.strip() or _DEFAULT_BULLET
+
+
+def _paragraph_mark(paragraph, counters: dict[int, tuple[str, int]]) -> str:
+    """문단 앞에 화면이 그리는 기호. counters 는 수준마다 이어 매기는 자동 번호(형식, 마지막 번호)다."""
+    properties = paragraph._p.pPr
+    level = paragraph.level
+    children = {child.tag.rsplit("}", 1)[-1]: child for child in properties} if properties is not None else {}
+    if "buAutoNum" in children:
+        auto = children["buAutoNum"]
+        kind = auto.get("type", "arabicPeriod")
+        previous = counters.get(level)
+        number = previous[1] + 1 if previous and previous[0] == kind else int(auto.get("startAt", "1"))
+        counters[level] = (kind, number)
+        return _auto_number(kind, number)
+    counters.pop(level, None)
+    if "buChar" in children and "buNone" not in children:
+        typeface = children["buFont"].get("typeface", "") if "buFont" in children else ""
+        return _bullet_char(children["buChar"].get("char", ""), typeface)
+    return ""
+
+
 def _shape_text(shape) -> str:
-    return "\n".join(
-        text for paragraph in shape.text_frame.paragraphs
-        if (text := "".join(run.text for run in paragraph.runs).strip())
-    )
+    lines: list[str] = []
+    counters: dict[int, tuple[str, int]] = {}
+    for paragraph in shape.text_frame.paragraphs:
+        text = "".join(run.text for run in paragraph.runs).strip()
+        if not text:
+            continue
+        mark = _paragraph_mark(paragraph, counters)
+        lines.append(f"{mark} {text}" if mark else text)
+    return "\n".join(lines)
 
 
 # 제목 자리(placeholder)가 없는 슬라이드의 제목 고르기(2026-11-25). 글상자로만 꾸민 발표 자료는 제목 자리가 없어

@@ -76,7 +76,8 @@ def test_html_drops_scripts_and_keeps_headings_tables_and_text_order():
 
     texts = [b.text for b in blocks]
     assert title == "안내문"
-    assert texts[:4] == ["모집 공고", "첫 문단\n둘째 줄", "항목 하나", "항목 둘"]
+    # 목록 항목은 화면처럼 글머리표를 앞에 둔다(2026-11-26)
+    assert texts[:4] == ["모집 공고", "첫 문단\n둘째 줄", "• 항목 하나", "• 항목 둘"]
     assert texts[-1] == "꼬리" and not any("alert" in t or "주석" in t for t in texts)
     assert len(tables) == 1 and tables[0].rows == [["구분", "내용"], ["기간", "안쪽 3일"]]
     assert collector.line_layout[0]["style_name"] == "Heading 1"
@@ -402,3 +403,64 @@ def test_pptx_fixed_text_on_a_slide_layout_is_read_once_on_its_first_slide(tmp_p
     assert texts[0] == ["빅데이터기반 항만수요 모니터링 연구"]
     assert "빅데이터기반 항만수요 모니터링 연구" not in texts[1] + texts[2]
     assert "첫 슬라이드 본문" in texts[1]
+
+
+def test_html_list_items_keep_the_marker_the_page_shows():
+    """HTML 목록의 번호와 글머리표는 글이 아니라 <ol>/<ul> 이 그려, 본문에 "1.", "•" 가 하나도 남지 않았다
+    (완료보고서·연동가이드, 2026-11-26). 화면이 보이는 기호를 넣되 CSS 가 숨긴 목록(list-style: none)은 그대로 둔다."""
+    from app.pipeline.adapters.text_adapter import parse_html
+
+    html = (
+        "<html><head><style>.toc ul { list-style: none; } ol.claims > li::before { content: counter(c); }"
+        " ol.claims { list-style: none; }</style></head><body>"
+        '<nav class="toc"><ul><li>00 요약</li></ul></nav>'
+        "<ul><li>수집 단계</li><li>정제 단계</li></ul>"
+        '<ol start="3"><li>세 번째</li><li value="7">일곱 번째</li><li>여덟 번째</li></ol>'
+        '<ol class="claims"><li>주장</li></ol>'
+        "<table><tr><td><ul><li>칸 안 항목</li></ul></td><td>값</td></tr>"
+        "<tr><td>둘째 줄</td><td>값2</td></tr></table>"
+        "</body></html>"
+    )
+    blocks, tables, _collector, _title = parse_html(html)
+
+    texts = [b.text for b in blocks]
+    assert texts[:7] == ["00 요약", "• 수집 단계", "• 정제 단계", "3. 세 번째", "7. 일곱 번째", "8. 여덟 번째", "주장"]
+    assert tables[0].rows[0][0] == "• 칸 안 항목"
+
+
+def test_pptx_paragraph_bullets_and_numbers_are_kept(tmp_path):
+    """슬라이드 문단의 글머리표(buChar)와 자동 번호(buAutoNum)는 글이 아니라 문단 서식이라 "✓ 데이터 수집" 의 "✓" 가
+    빠졌다(산업단지 발표자료, 2026-11-26). Wingdings 글자("ü", "§")는 화면 모양("✓", "▪")으로 적는다."""
+    from lxml import etree
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from app.pipeline.adapters.slide_adapter import SlideAdapter
+
+    ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = slide.shapes.add_textbox(Inches(0.5), Inches(2), Inches(6), Inches(3)).text_frame
+    bullets = [
+        ('<a:buFont xmlns:a="{0}" typeface="Wingdings"/>', '<a:buChar xmlns:a="{0}" char="ü"/>', "데이터 수집"),
+        ('<a:buFont xmlns:a="{0}" typeface="Wingdings"/>', '<a:buChar xmlns:a="{0}" char="§"/>', "정제"),
+        ("", '<a:buChar xmlns:a="{0}" char="-"/>', "세부 항목"),
+        ("", '<a:buAutoNum xmlns:a="{0}" type="arabicParenR"/>', "첫째"),
+        ("", '<a:buAutoNum xmlns:a="{0}" type="arabicParenR"/>', "둘째"),
+        ("", '<a:buNone xmlns:a="{0}"/>', "기호 없음"),
+    ]
+    for index, (font, bullet, text) in enumerate(bullets):
+        paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
+        paragraph.text = text
+        properties = paragraph._p.get_or_add_pPr()
+        for xml in (font, bullet):
+            if xml:
+                properties.append(etree.fromstring(xml.format(ns)))
+    path = tmp_path / "bullets.pptx"
+    presentation.save(path)
+
+    parsed = SlideAdapter().extract(path, {})
+
+    assert parsed.pages[0].text_blocks[0].text.split("\n") == [
+        "✓ 데이터 수집", "▪ 정제", "- 세부 항목", "1) 첫째", "2) 둘째", "기호 없음",
+    ]

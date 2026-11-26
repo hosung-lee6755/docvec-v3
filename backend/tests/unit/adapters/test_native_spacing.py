@@ -5,7 +5,7 @@ Pub120bk 에서는 "V oluntary"처럼 영어 첫 글자를 떼었다. 사례집 
 낱말을 붙여 읽는 경우도 있어, 글자가 같을 때만 덜 깨진 쪽을 고른다."""
 import fitz
 
-from app.pipeline.adapters.native_spacing import NativeRegionReader, choose_spacing, spacing_score
+from app.pipeline.adapters.native_spacing import NativeRegionReader, choose_spacing, restore_marker, spacing_score
 
 
 def test_broken_korean_spacing_scores_worse_than_natural_spacing():
@@ -96,6 +96,34 @@ def test_subscript_digits_moved_away_by_native_text_block_the_symbol_rule():
 
 def test_english_text_is_not_repaired_by_symbol_rule():
     assert choose_spacing("Total cost .", "Total cost 2. 3") == "Total cost ."
+
+
+def test_characters_docling_normalized_are_restored_from_the_native_text():
+    # 2026-11-26 기호 대조: Docling 은 "•" 를 "·" 로, 둥근 따옴표를 곧은 따옴표로 바꿔 원문 글자가 RAG 본문에서 바뀌었다
+    assert choose_spacing("· 데이터 기반 예측을 통해", "• 데이터 기반 예측을 통해") == "• 데이터 기반 예측을 통해"
+    assert choose_spacing("· 데이터 기반 예측을 통해", "•데이터기반예측을통해") == "• 데이터 기반 예측을 통해"
+    assert choose_spacing('the "Voluntary" area\'s 1/2', "the “Voluntary” area’s 1⁄2") == "the “Voluntary” area’s 1⁄2"
+
+
+def test_symbols_docling_parse_rewrote_are_restored_but_letters_are_not():
+    # Pub120bk: 원본 "Alert—Provides" 가 "Alert-Provides" 로 저장되었다(docling-parse 가 대시를 바꾼다)
+    assert choose_spacing("1. U.S. Maritime Alert-Provides basic", "1. U.S. Maritime Alert—Provides basic") == (
+        "1. U.S. Maritime Alert—Provides basic"
+    )
+    # 문자·숫자가 다르거나, 원본이 사용자 정의 영역 글자면 Docling 글을 둔다
+    assert choose_spacing("Alert-Provides 2024", "Alert—Provides 2025") == "Alert-Provides 2024"
+    assert choose_spacing("- 데이터 기반", " 데이터 기반") == "- 데이터 기반"
+
+
+def test_characters_are_restored_after_a_list_marker_docling_dropped():
+    # 원본 앞의 목록 기호는 Docling 글에 없으므로, 그 뒤 글자만 원본 글자로 되돌린다
+    assert choose_spacing('"효율" 증대', '1. “효율”증대') == "“효율” 증대"
+
+
+def test_list_marker_is_written_as_the_original_glyph():
+    assert restore_marker("·", "• 데이터 기반") == "•"
+    assert restore_marker("1.", "1. 사업 개요") == "1."
+    assert restore_marker("·", "") == "·"
 
 
 def _pdf_with_text(tmp_path):
