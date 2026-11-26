@@ -28,6 +28,8 @@ _PROCESSING_STATUSES = {
     "QUEUED", "INGESTING", "PARSING", "STRUCTURING", "NORMALIZING",
     "CHUNKING", "EMBEDDING", "UPLOADING", "VALIDATING", "MASKING", "ANALYZING",
 }
+# 검토 대기: 워크플로우의 WAITING_REVIEW 와 옛 고정 파이프라인의 REVIEW_PENDING(화면 거르기 "검토대기" 와 같은 묶음)
+_REVIEW_STATUSES = {"WAITING_REVIEW", "REVIEW_PENDING"}
 _PROCESSING_STATS_WINDOW = timedelta(hours=24)
 
 
@@ -84,12 +86,21 @@ async def get_stats(
             Document.status == "INDEXED",
         )
     ) or 0
+    # 문서 화면 요약 띠도 이 값을 쓴다. 한 페이지만 세면 표시 건수에 따라 값이 달라졌다(2026-11-26)
+    waiting_review = await db.scalar(
+        select(func.count(Document.id)).where(doc_scope, Document.status.in_(_REVIEW_STATUSES))
+    ) or 0
+    failed = await db.scalar(
+        select(func.count(Document.id)).where(doc_scope, Document.status == "FAILED")
+    ) or 0
     collections = len(shared_ids)
 
     return {
         "total_documents": total_documents,
         "processing": processing,
         "indexed": indexed,
+        "waiting_review": waiting_review,
+        "failed": failed,
         "collections": collections,
     }
 

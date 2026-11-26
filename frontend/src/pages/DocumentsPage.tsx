@@ -3,7 +3,8 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import { Upload, Trash2, X, RefreshCw } from 'lucide-react'
 import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, useBatchMoveDocuments, summarizeMoveResults, type DocumentLifecycleFilter, type DocumentQualityFilter, type DocumentSortBy, type SortOrder } from '../hooks/useDocuments'
 import { useCollections } from '../hooks/useCollections'
-import { PROCESSING_STATUSES, STATUS_FILTER_OPTIONS, statusFilterValue } from '../lib/documentStatus'
+import { STATUS_FILTER_OPTIONS, statusFilterValue } from '../lib/documentStatus'
+import { useDocumentStats } from '../hooks/useDocumentStats'
 import { LIFECYCLE_FILTER_LABELS } from '../lib/documentLifecycle'
 import { DocumentsTable } from '../components/documents/DocumentsTable'
 import { UploadModal } from '../components/documents/UploadModal'
@@ -98,11 +99,10 @@ export default function DocumentsPage() {
   const [reprocessSummary, setReprocessSummary] = useState<string | null>(null)
   const { data: collectionsData } = useCollections(projectId)
 
-  const items = data?.items ?? []
-  // 요약 띠는 지금 받은 목록(이 페이지)으로만 센다. 새 API를 부르지 않는다.
-  const processingCount = items.filter((d) => PROCESSING_STATUSES.includes(d.status)).length
-  const waitingCount = items.filter((d) => REVIEW_WAITING_STATUS.split(',').includes(d.status)).length
-  const failedCount = items.filter((d) => d.status === FAILED_STATUS).length
+  // 요약 띠는 대시보드와 같은 /stats 값(보이는 문서 전체)을 쓴다. 한 페이지만 세면 표시 건수에 따라 값이 달라졌다
+  const { data: stats } = useDocumentStats()
+  const waitingCount = stats?.waiting_review ?? 0
+  const failedCount = stats?.failed ?? 0
 
   const toggleSort = (column: DocumentSortBy) => {
     if (sortBy === column) {
@@ -201,15 +201,14 @@ export default function DocumentsPage() {
       <StatStrip>
         <Stat
           label="전체"
-          value={data?.total ?? 0}
+          value={stats?.total_documents ?? 0}
           isActive={filterStatus === ''}
           onClick={() => setUrlFilter('status', '')}
         />
-        <Stat label="처리 중" value={processingCount} hint="이 페이지" />
+        <Stat label="처리 중" value={stats?.processing ?? 0} />
         <Stat
           label="검토 대기"
           value={waitingCount}
-          hint="이 페이지"
           tone={waitingCount > 0 ? 'warning' : 'default'}
           isActive={filterStatus === REVIEW_WAITING_STATUS}
           onClick={() => setUrlFilter('status', REVIEW_WAITING_STATUS)}
@@ -217,7 +216,6 @@ export default function DocumentsPage() {
         <Stat
           label="실패"
           value={failedCount}
-          hint="이 페이지"
           tone={failedCount > 0 ? 'danger' : 'default'}
           isActive={filterStatus === FAILED_STATUS}
           onClick={() => setUrlFilter('status', FAILED_STATUS)}

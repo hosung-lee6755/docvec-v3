@@ -43,6 +43,8 @@ async def test_get_stats_counts_owned_and_shared_documents_by_status(world):
     await make_document(db, owner, own_col, status="EMBEDDING")
     await make_document(db, owner, own_col, status="ANALYZING")  # 처리 중으로 집계
     await make_document(db, owner, own_col, status="FAILED")
+    await make_document(db, owner, own_col, status="WAITING_REVIEW")  # 검토 대기(옛 REVIEW_PENDING 과 묶음)
+    await make_document(db, owner, own_col, status="REVIEW_PENDING")
     # 남의 프로젝트 컬렉션 문서는 프로젝트 멤버일 때만 보인다
     project = await make_project(db, other, "shared")
     await add_member(db, project, owner, "viewer", other)
@@ -53,13 +55,17 @@ async def test_get_stats_counts_owned_and_shared_documents_by_status(world):
 
     stats = await api.get_stats(db, owner)
 
-    assert stats == {"total_documents": 5, "processing": 2, "indexed": 2, "collections": 2}
+    assert stats == {
+        "total_documents": 7, "processing": 2, "indexed": 2, "waiting_review": 2, "failed": 1, "collections": 2,
+    }
 
 
 @pytest.mark.asyncio
 async def test_get_stats_empty_for_user_without_data(world):
     stats = await api.get_stats(world["db"], world["other"])
-    assert stats == {"total_documents": 0, "processing": 0, "indexed": 0, "collections": 0}
+    assert stats == {
+        "total_documents": 0, "processing": 0, "indexed": 0, "waiting_review": 0, "failed": 0, "collections": 0,
+    }
 
 
 # ---------- /stats/processing ----------

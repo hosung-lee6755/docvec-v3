@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
   FolderPlus, Upload, FileText, History, FolderOpen, Search, MessageSquare,
   FolderKanban, ArrowRight, Loader2,
 } from 'lucide-react'
-import { apiClient } from '../lib/apiClient'
 import { useDocuments } from '../hooks/useDocuments'
+import { useDocumentStats } from '../hooks/useDocumentStats'
 import { useSearchHistory } from '../hooks/useSearchHistory'
 import { useProjects } from '../hooks/useProjects'
 import { useAuthStore } from '../store/authStore'
@@ -14,18 +13,6 @@ import { PROCESSING_STATUSES } from '../lib/documentStatus'
 import { Button, Card, ErrorAlert, Page, PageBody, PageHeader, Stat, StatStrip, StatusBadge } from '../components/ui'
 import type { StatTone } from '../components/ui'
 import '../styles/screens/user.css'
-
-interface Stats {
-  total_documents: number
-  processing: number
-  indexed: number
-  collections: number
-}
-
-async function fetchStats(): Promise<Stats> {
-  const { data } = await apiClient.get<Stats>('/stats')
-  return data
-}
 
 const GREETINGS = [
   { before: 5, text: '늦은 밤이네요' },
@@ -73,11 +60,7 @@ export default function DashboardPage() {
     ? errorCount > 2 ? false : errorCount > 0 ? 30000 : baseInterval
     : false // Pause when tab is hidden
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['stats'],
-    queryFn: fetchStats,
-    refetchInterval,
-  })
+  const { data, isLoading, isError, error, refetch } = useDocumentStats(refetchInterval)
 
   // Track error count for backoff
   useEffect(() => {
