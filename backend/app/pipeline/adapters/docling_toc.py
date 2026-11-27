@@ -39,6 +39,34 @@ def toc_lines(text: str) -> list[str]:
     return entries
 
 
+# 옆 단 차례 줄로 받을 최대 글자 수(본문 줄이 우연히 숫자로 끝나도 차례로 받지 않게)
+_SIDE_LINE_MAX_CHARS = 80
+
+
+def toc_columns(lines: list[list[tuple]], right_edge: float) -> tuple[list[str], list[str]]:
+    """화면 줄(낱말 (x0, y0, x1, y1, 글) 목록)을 Docling 차례 영역(오른쪽 끝 right_edge) 안 줄과 옆 단 차례 줄로 나눈다.
+
+    Docling 차례 영역은 오른쪽 끝 쪽 번호 열을 자주 빠뜨려(기계설비 매뉴얼 3쪽) 쪽 너비로 읽는데, 두 단 차례 상자나
+    옆 단 본문이 같은 높이에 있으면 서로 다른 단의 글이 한 줄로 섞였다(Pub120bk 490쪽 "Search and Rescue 528
+    The terrain is Kharst plateau…", 2026-11-26). 영역 밖 글은 점선·쪽 번호뿐이면 그 줄 끝에 붙이고, "항목 쪽번호"
+    모양이면 옆 단 차례 줄로 따로 모으고(왼쪽 단 다음에 적는다), 그 밖의 글(옆 단 본문)은 버린다."""
+    main: list[str] = []
+    side: list[str] = []
+    for line in lines:
+        inside = " ".join(word[4] for word in line if word[0] < right_edge)
+        outside = " ".join(word[4] for word in line if word[0] >= right_edge)
+        if outside and _CONTINUATION_RE.match(outside):
+            inside = f"{inside} {outside}".strip()
+        elif (
+            outside and _has_page_number(outside) and len(outside) <= _SIDE_LINE_MAX_CHARS
+            and any(char.isalpha() for char in outside)
+        ):
+            side.append(outside)
+        if inside:
+            main.append(inside)
+    return main, side
+
+
 def choose_toc_lines(native_text: str, cell_text: str) -> list[str]:
     """원본 글에 쪽 번호가 붙은 목차 줄이 하나라도 있으면 원본 글을, 아니면 Docling 표 칸 글을 쓴다.
 

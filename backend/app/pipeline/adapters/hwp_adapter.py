@@ -15,6 +15,7 @@ from app.pipeline.adapters.base import (
 from app.pipeline.blocks.table_markdown import rows_to_markdown
 from app.pipeline.adapters.hwp5_structure import (
     add_hwp_paragraph_marks,
+    add_hwp_symbol_chars,
     hwp_paragraph_layout,
     hwp_table_grid,
     load_hwp_styles,
@@ -22,6 +23,7 @@ from app.pipeline.adapters.hwp5_structure import (
 from app.pipeline.adapters.hwpx_structure import (
     HwpxStyles,
     add_paragraph_marks,
+    add_symbol_chars,
     load_styles,
     paragraph_layout,
     table_grid,
@@ -103,8 +105,9 @@ def _hwpx_local_tag(elem) -> str:
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
-# <hp:t> 안에 끼는 글자 요소. 요소 자리에 이 글자를 두고, 요소 뒤의 글(tail)도 이어 읽는다
-_HWPX_INLINE_CHARS = {"lineBreak": " ", "tab": " ", "fwSpace": " ", "nbSpace": " ", "hyphen": "-"}
+# <hp:t> 안에 끼는 글자 요소. 요소 자리에 이 글자를 두고, 요소 뒤의 글(tail)도 이어 읽는다. 강제 줄바꿈은 원문처럼 줄을
+# 나눈다(예전에는 빈칸으로 적어 화면에서 줄이 이어 붙었다, 2026-11-27). 표 칸 안 줄바꿈은 표를 만들 때 빈칸이 된다
+_HWPX_INLINE_CHARS = {"lineBreak": "\n", "tab": " ", "fwSpace": " ", "nbSpace": " ", "hyphen": "-"}
 
 
 def _hwpx_t_text(t) -> str:
@@ -287,6 +290,11 @@ def _collect_nested_hwpx_tables(
         _collect_nested_hwpx_tables(child, tables, order, ctx)
 
 
+# 구형 HWP 문단 안 글자 제어 문자. HWPX 의 _HWPX_INLINE_CHARS 와 같은 글자로 적는다. 예전에는 제어 문자를 모두
+# 버려 "-<고정폭 빈칸>관련 프로세스"가 "-관련 프로세스"로, 강제 줄바꿈 앞뒤 낱말이 붙어서 나왔다(2026-11-26 글머리 대조)
+_HWP_INLINE_CHARS = {"LINE_BREAK": "\n", "TAB": " ", "FIXWIDTH_SPACE": " ", "NONBREAK_SPACE": " ", "HYPHEN": "-"}
+
+
 def _hwp_collect_text(elem) -> str:
     """Concatenates this element's own Text runs, skipping over any nested
     TableControl/GShapeObjectControl subtree so an anchored table's or
@@ -296,6 +304,8 @@ def _hwp_collect_text(elem) -> str:
         tag = child.tag
         if tag == "Text":
             texts.append(child.text or "")
+        elif tag == "ControlChar":
+            texts.append(_HWP_INLINE_CHARS.get(child.get("name") or "", ""))
         elif tag == "AutoNumbering":
             texts.append(child.get("number", "") if child.get("kind") in _CAPTION_NUMBER_KINDS else "")
         elif tag in ("TableControl", "GShapeObjectControl"):
@@ -536,6 +546,7 @@ class HWPAdapter(BaseAdapter):
             if body is not None:
                 ctx.styles = load_hwp_styles(root)
                 add_hwp_paragraph_marks(root)  # 글머리표 문단 모양의 기호를 문단 글 앞에 넣는다
+                add_hwp_symbol_chars(root)  # 기호 글꼴 코드(U+F0xx)를 화면에 보이는 글자로 적는다
                 ctx.bin_stems = hwp_bin_stems(root)
                 _walk_hwp_body(body, paragraphs, raw_tables, order, ctx)
         except Exception as exc:
@@ -597,6 +608,7 @@ class HWPAdapter(BaseAdapter):
                             section = parse_xml(f)
                         # 글머리표 문단(문단 모양에만 기호가 있다)의 기호를 글로 넣는다(2026-11-26)
                         add_paragraph_marks(section, ctx.styles)
+                        add_symbol_chars(section, ctx.styles)  # 기호 글꼴 코드를 화면에 보이는 글자로 적는다
                         _walk_hwpx(section, paragraphs, raw_tables, order, ctx)
                 manifest = z.read(HWPX_MANIFEST) if HWPX_MANIFEST in z.namelist() else b""
                 named_images = _hwpx_bindata_named(z, hwpx_manifest_stems(manifest) if manifest else None)

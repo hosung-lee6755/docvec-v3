@@ -503,3 +503,96 @@ def test_list_item_keeps_the_marker_written_in_the_original():
     dot = SimpleNamespace(marker="·", orig="· 데이터 기반 예측")
     assert _with_list_marker(dot, "데이터 기반 예측", "• 데이터 기반 예측") == "• 데이터 기반 예측"
     assert _with_list_marker(dot, "• 데이터 기반 예측", "• 데이터 기반 예측") == "• 데이터 기반 예측"
+
+
+class _FakeRef:
+    def __init__(self, cref):
+        self.cref = cref
+
+
+class _CaptionedTableItem(_FakeTableItem):
+    def __init__(self, rows, page_no, caption, caption_ref):
+        super().__init__(rows, page_no)
+        self._caption = caption
+        self.captions = [_FakeRef(caption_ref)]
+
+    def caption_text(self, doc):
+        return self._caption
+
+
+def test_a_table_caption_used_as_the_table_title_is_not_written_again(fake_docling_module, tmp_path):
+    # 정민산업 진단보고서 PDF: "[표 1] Air COMP. 현황" 이 표 제목으로 한 번, 표 뒤 본문 글로 또 한 번 나왔다.
+    # Docling 은 표의 caption 항목을 표 다음에 따로 돌려준다(2026-11-26 쪽별 중복 줄 대조, PDF 15건 182쪽)
+    from app.pipeline.adapters.docling_adapter import DoclingAdapter
+
+    caption = _FakeTextItem("[표 1] Air COMP. 현황", "caption", page_no=1)
+    caption.self_ref = "#/texts/3"
+    items = [
+        (_FakeTextItem("본문 문단입니다.", "text", page_no=1), 1),
+        (_CaptionedTableItem([["구분", "형식"], ["Air COMP.", "스크류"]], 1, "[표 1] Air COMP. 현황", "#/texts/3"), 1),
+        (caption, 2),
+        (_FakeTextItem("다음 문단입니다.", "text", page_no=1), 1),
+    ]
+    fake_docling_module["fake_document"] = _FakeDoclingDocument(items)
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4")
+
+    parsed = DoclingAdapter().extract(pdf_path, {})
+
+    texts = [b.text for b in parsed.pages[0].text_blocks]
+    assert "\n".join(texts).count("[표 1] Air COMP. 현황") == 1
+    assert texts[1].startswith("[표 1] Air COMP. 현황\n|") and texts[-1] == "다음 문단입니다."
+    assert len(parsed.metadata["elements"]) == len(texts)
+
+
+def test_a_title_line_taken_from_above_the_table_is_not_left_behind(fake_docling_module, tmp_path):
+    # 기계설비 매뉴얼: 표 바로 위 "[별표 1] 표 2 …" 줄을 표 제목으로 가져다 쓰면서 그 줄도 본문에 남아 두 번 나왔다
+    from app.pipeline.adapters.docling_adapter import DoclingAdapter
+
+    items = [
+        (_FakeTextItem("본문 문단입니다.", "text", page_no=1), 1),
+        (_FakeTextItem("표 9 덕트 보온두께", "text", page_no=1), 1),
+        (_FakeTableItem([["구분", "두께"], ["덕트", "25"]], page_no=1), 1),
+    ]
+    fake_docling_module["fake_document"] = _FakeDoclingDocument(items)
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4")
+
+    parsed = DoclingAdapter().extract(pdf_path, {})
+
+    texts = [b.text for b in parsed.pages[0].text_blocks]
+    assert texts[0] == "본문 문단입니다." and texts[1].startswith("표 9 덕트 보온두께\n|") and len(texts) == 2
+    assert [el["id"] for el in parsed.metadata["elements"]] == [b.element_id for b in parsed.pages[0].text_blocks]
+    assert parsed.pages[0].table_candidates[0].title == "표 9 덕트 보온두께"
+
+
+def test_toc_text_read_across_the_page_is_not_written_again_from_the_next_column(fake_docling_module, tmp_path):
+    # Pub120bk 260쪽: 나라별 차례 상자는 두 단인데 Docling 은 왼쪽 단만 차례로 잡고 오른쪽 단 항목("Time Zone",
+    # "298")을 따로 본문 글로 돌려준다. 차례 줄을 쪽 너비로 읽어 두 단이 한 줄로 섞이고 오른쪽 단은 두 번 나왔다. 왼쪽 단 다음에 오른쪽 단을 적는다(2026-11-26)
+    import fitz
+
+    from app.pipeline.adapters.docling_adapter import DoclingAdapter
+
+    pdf_path = tmp_path / "toc2.pdf"
+    with fitz.open() as pdf:
+        page = pdf.new_page(width=595, height=842)
+        page.insert_text((60, 100), "General 280")
+        page.insert_text((320, 100), "Time Zone 298")
+        page.insert_text((60, 120), "Currency 284")
+        page.insert_text((320, 120), "U.S. Embassy 298")
+        page.insert_text((320, 300), "New Zealand is located in the Pacific.")
+        pdf.save(str(pdf_path))
+    toc = _toc_item([["", ""]], page_no=1, bbox=(50, 842 - 85, 300, 842 - 125))
+    items = [
+        (toc, 0),
+        (_FakeTextItem("Time Zone", "text", page_no=1, bbox=(315, 842 - 88, 380, 842 - 102)), 1),
+        (_FakeTextItem("298", "text", page_no=1, bbox=(400, 842 - 88, 420, 842 - 102)), 1),
+        (_FakeTextItem("New Zealand is located in the Pacific.", "text", page_no=1, bbox=(315, 842 - 290, 560, 842 - 305)), 1),
+    ]
+    fake_docling_module["fake_document"] = _FakeDoclingDocument(items)
+
+    elements = DoclingAdapter().extract(pdf_path, {}).metadata["elements"]
+
+    assert [e["content"]["text"] for e in elements] == [
+        "General 280", "Currency 284", "Time Zone 298", "U.S. Embassy 298", "New Zealand is located in the Pacific.",
+    ]

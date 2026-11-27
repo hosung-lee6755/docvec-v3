@@ -80,7 +80,20 @@ def test_hwpx_collect_text_keeps_text_after_line_breaks_tabs_and_wide_spaces():
     ))
 
     for skip_tables in (False, True):
-        assert hwp._hwpx_collect_text(root[0], skip_tables=skip_tables) == "중소벤처기업부 장관 ① OPC-UA ② AAS (IEC 63278) 끝"
+        assert hwp._hwpx_collect_text(root[0], skip_tables=skip_tables) == "중소벤처기업부 장관 ① OPC-UA\n② AAS (IEC 63278) 끝"
+
+
+def test_hwp_collect_text_writes_spaces_for_fixed_width_spaces_and_tabs_and_keeps_line_breaks():
+    # 구형 HWP 의 제어 문자는 Text 사이의 ControlChar 다. 예전에는 버려 "-<고정폭 빈칸>관련 프로세스"가
+    # "-관련 프로세스"로 붙어서 나왔다(과업지시서, 2026-11-26). 문단 끝 표시는 글자가 아니다
+    paragraph = ET.fromstring(
+        '<Paragraph><LineSeg><Text>    -</Text><ControlChar kind="CHAR" code="31" name="FIXWIDTH_SPACE"/>'
+        '<Text>관련 프로세스</Text><ControlChar kind="INLINE" code="9" name="TAB"/><Text>등</Text>'
+        '<ControlChar kind="CHAR" code="10" name="LINE_BREAK"/><Text>다음 줄</Text>'
+        '<ControlChar kind="CHAR" code="13" name="PARAGRAPH_BREAK"/></LineSeg></Paragraph>'
+    )
+
+    assert hwp._hwp_collect_text(paragraph) == "    - 관련 프로세스 등\n다음 줄"
 
 
 def test_hwpx_collect_text_handles_empty_t_element():

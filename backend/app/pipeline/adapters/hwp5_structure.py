@@ -17,6 +17,7 @@ from app.pipeline.adapters.hwpx_structure import (
     grid_from_cells,
     outline_level,
 )
+from app.pipeline.adapters.symbol_fonts import hancom_symbol_kind, with_symbol_font_chars
 
 # basesize는 1/100pt 단위다
 _SIZE_UNIT = 100.0
@@ -99,6 +100,54 @@ def add_hwp_paragraph_marks(root) -> None:
         text = paragraph.makeelement("Text", {})
         text.text = f"{mark} "
         paragraph.insert(0, text)
+
+
+# 글꼴 이름(FaceName)은 언어 무리 순서대로 이어 적혀 있고, 무리마다 몇 개인지는 IdMappings 에 있다
+_FONT_GROUPS = ("ko", "en", "cn", "jp", "other", "symbol", "user")
+
+
+def _hwp_symbol_kinds(root) -> list[str]:
+    """글자 모양(CharShape, 문서 순서)마다 기호 글꼴 코드를 읽을 글꼴 종류. 기호·사용자 글자 무리의 글꼴을 본다."""
+    doc_info = root.find("DocInfo")
+    if doc_info is None:
+        return []
+    mappings = next(doc_info.iter("IdMappings"), None)
+    faces = [elem.get("name") or "" for elem in doc_info.iter("FaceName")]
+    starts: dict[str, int] = {}
+    offset = 0
+    for group in _FONT_GROUPS:
+        starts[group] = offset
+        offset += _int_attr(mappings, f"{group}-fonts", 0) if mappings is not None else 0
+
+    def face(font_face, group: str) -> str | None:
+        if font_face is None:
+            return None
+        position = _int_attr(font_face, group, -1)
+        index = starts[group] + position
+        return faces[index] if position >= 0 and index < len(faces) else None
+
+    kinds: list[str] = []
+    for char_shape in doc_info.iter("CharShape"):
+        font_face = char_shape.find("FontFace")
+        kinds.append(hancom_symbol_kind([face(font_face, "symbol"), face(font_face, "user")]))
+    return kinds
+
+
+def add_hwp_symbol_chars(root) -> None:
+    """본문 글(<Text>)의 기호 글꼴 코드(U+F020~F0FF)를 화면에 보이는 글자로 바꾼다(symbol_fonts.py).
+
+    제안요청서 HWP 의 "\\uf071 사업명", "\\uf06d 세부" 가 파싱 본문과 청크에서 빈칸으로 보였다(2026-11-26). 글자 모양의
+    글꼴이 Symbol 이면 Symbol 표로, 아니면 한글 문서의 쓰임새대로 Wingdings 로 읽는다. root 는 방금 만든 XML 이다."""
+    body = root.find(BODY_TAG)
+    if body is None:
+        return
+    kinds = _hwp_symbol_kinds(root)
+    for text in body.iter("Text"):
+        if not text.text:
+            continue
+        index = _int_attr(text, "charshape-id", -1)
+        kind = kinds[index] if 0 <= index < len(kinds) else "wingdings"
+        text.text = with_symbol_font_chars(text.text, kind)
 
 
 def _own_text_lengths(elem, lengths: dict[str, int]) -> None:

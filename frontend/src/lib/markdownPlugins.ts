@@ -73,6 +73,31 @@ function remarkPlainText(this: { data: () => unknown }) {
   data.micromarkExtensions = [...(data.micromarkExtensions ?? []), { disable: { null: PLAIN_TEXT_DISABLED } }]
 }
 
+/** 글 마디의 줄바꿈 자리에 줄바꿈 마디(break)를 넣은 새 자식 목록. */
+function withLineBreaks(children: MdNode[]): MdNode[] {
+  return children.flatMap((node) => {
+    if (node.type === 'text' && node.value?.includes('\n')) {
+      return node.value.split('\n').flatMap((line, index) => [
+        ...(index > 0 ? [{ type: 'break' }] : []),
+        ...(line ? [{ type: 'text', value: line }] : []),
+      ])
+    }
+    return node.children ? [{ ...node, children: withLineBreaks(node.children) }] : [node]
+  })
+}
+
+/**
+ * 파싱 본문의 한 줄 줄바꿈을 화면에서도 줄바꿈으로 그린다.
+ *
+ * 본문은 원문의 줄을 옮긴 평문이라 줄바꿈 하나도 원문의 줄이다(HWP 강제 줄바꿈, PPTX 문단, 그림 안 글 줄). 마크다운은
+ * 빈 줄 없는 줄바꿈을 빈칸으로 합쳐 "봄/가을 10 11 여름"처럼 여러 줄이 한 줄로 보였다(2026-11-27).
+ */
+function remarkLineBreaks() {
+  return (tree: MdNode) => {
+    tree.children = withLineBreaks(tree.children ?? [])
+  }
+}
+
 /**
  * 파싱 본문을 그릴 때 쓰는 remark 플러그인.
  *
@@ -85,4 +110,5 @@ export const markdownPlugins: NonNullable<Options['remarkPlugins']> = [
   [remarkGfm, { singleTilde: false }],
   remarkPlainText,
   remarkLiteralListMarkers,
+  remarkLineBreaks,
 ]

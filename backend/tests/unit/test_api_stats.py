@@ -61,6 +61,27 @@ async def test_get_stats_counts_owned_and_shared_documents_by_status(world):
 
 
 @pytest.mark.asyncio
+async def test_get_stats_for_a_project_counts_only_its_current_documents_like_the_list(world):
+    # 프로젝트 문서 화면 요약 띠가 모든 프로젝트와 이전 버전까지 세어 "전체 70" 옆 목록이 26건이었다(2026-11-26)
+    db, owner, other = world["db"], world["owner"], world["other"]
+    project = await make_project(db, owner, "mine")
+    col = await make_collection(db, owner, project, name="in-project")
+    await make_document(db, owner, col, status="INDEXED")
+    await make_document(db, owner, col, status="PARSING")
+    old = await make_document(db, owner, col, status="INDEXED")
+    old.lifecycle_state = "superseded"
+    elsewhere = await make_collection(db, owner, None, name="elsewhere")
+    await make_document(db, owner, elsewhere, status="PARSING")
+    await db.flush()
+
+    in_project = await api.get_stats(db, owner, project_id=project.id)
+    everywhere = await api.get_stats(db, owner)
+
+    assert (in_project["total_documents"], in_project["processing"], in_project["indexed"]) == (2, 1, 1)
+    assert (everywhere["total_documents"], everywhere["processing"]) == (3, 2)
+
+
+@pytest.mark.asyncio
 async def test_get_stats_empty_for_user_without_data(world):
     stats = await api.get_stats(world["db"], world["other"])
     assert stats == {

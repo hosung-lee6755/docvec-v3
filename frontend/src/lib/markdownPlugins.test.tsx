@@ -50,6 +50,17 @@ describe('markdownPlugins', () => {
     }
   })
 
+  it('keeps single line breaks of the parsed text as line breaks', () => {
+    // 2026-11-27: 본문의 한 줄 줄바꿈(HWP 강제 줄바꿈, PPTX 문단, 그림 안 글 줄)을 마크다운이 빈칸으로 합쳐 한 줄로 보였다
+    const { container } = render(
+      <ReactMarkdown remarkPlugins={markdownPlugins}>{'봄/가을\n10 11\n여름\n\nCEMS\n- 수용가 160개'}</ReactMarkdown>,
+    )
+
+    const paragraphs = [...container.querySelectorAll('p')]
+    expect(paragraphs[0].querySelectorAll('br')).toHaveLength(2)
+    expect(paragraphs.map((p) => p.textContent)).toEqual(['봄/가을\n10 11\n여름', 'CEMS', '- 수용가 160개'])
+  })
+
   it('still renders GFM tables', () => {
     const { container } = render(<ReactMarkdown remarkPlugins={markdownPlugins}>{'| a | b |\n|---|---|\n| 1 | 2 |'}</ReactMarkdown>)
 

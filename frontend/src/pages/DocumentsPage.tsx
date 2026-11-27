@@ -99,8 +99,8 @@ export default function DocumentsPage() {
   const [reprocessSummary, setReprocessSummary] = useState<string | null>(null)
   const { data: collectionsData } = useCollections(projectId)
 
-  // 요약 띠는 대시보드와 같은 /stats 값(보이는 문서 전체)을 쓴다. 한 페이지만 세면 표시 건수에 따라 값이 달라졌다
-  const { data: stats } = useDocumentStats()
+  // 요약 띠는 /stats 값을 쓴다. 한 페이지만 세면 표시 건수에 따라 값이 달라졌다. 프로젝트 화면이면 그 프로젝트만 센다
+  const { data: stats } = useDocumentStats(undefined, projectId)
   const waitingCount = stats?.waiting_review ?? 0
   const failedCount = stats?.failed ?? 0
 

@@ -208,3 +208,37 @@ def test_bulleted_paragraphs_keep_their_bullet_in_body_and_cells(tmp_path):
     assert texts[0] == "• 헤드리스 브라우저"
     assert texts[1] == "표 앞 문단"
     assert parsed.pages[0].table_candidates[0].rows == [["- 대상 R&D과제 요약문 / - 사업계획서", "제출"]]
+
+
+SYMBOL_HEADER = """<head xmlns:hh="h"><hh:fontfaces>
+  <hh:fontface lang="HANGUL"><hh:font id="0" face="맑은 고딕"/></hh:fontface>
+  <hh:fontface lang="SYMBOL"><hh:font id="0" face="맑은 고딕"/><hh:font id="1" face="Symbol"/></hh:fontface>
+  <hh:fontface lang="USER"><hh:font id="0" face="맑은 고딕"/><hh:font id="1" face="Symbol"/></hh:fontface>
+</hh:fontfaces><hh:charProperties>
+  <hh:charPr id="0" height="1000"><hh:fontRef hangul="0" symbol="0" user="0"/></hh:charPr>
+  <hh:charPr id="1" height="1000"><hh:fontRef hangul="0" symbol="1" user="1"/></hh:charPr>
+</hh:charProperties></head>"""
+
+
+def test_symbol_font_codes_in_body_and_cells_are_written_as_the_symbols_they_show(tmp_path):
+    # R&D 공고 HWPX: "절차 /  SMTECH 접속 →  고객지원" 의 번호 단계가 빈칸으로 보였다(2026-11-26).
+    # 한글은 이 코드를 맑은 고딕으로 적어 두지만 쓰임새는 Wingdings(❶❷)다. Symbol 글꼴 글자는 Symbol 표로 읽는다
+    section = (
+        '<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>절차 /  SMTECH 접속<lineBreak/> 고객지원</t></run>'
+        '<run charPrIDRef="1"><t> 오차 </t></run></p>'
+        '<p paraPrIDRef="0"><run charPrIDRef="0"><t>표</t>'
+        "<tbl><tr><tc><subList>"
+        '<p paraPrIDRef="0"><run charPrIDRef="0"><t> 칸 안 </t></run></p>'
+        '</subList><cellAddr colAddr="0" rowAddr="0"/><cellSpan colSpan="1" rowSpan="1"/></tc></tr></tbl>'
+        "</run></p></sec>"
+    )
+    path = tmp_path / "symbols.hwpx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("Contents/header.xml", SYMBOL_HEADER)
+        archive.writestr("Contents/section0.xml", section)
+
+    parsed = HWPAdapter().extract(path, {})
+
+    texts = [block.text for block in parsed.pages[0].text_blocks]
+    assert texts[0] == "절차 / ❶ SMTECH 접속\n❷ 고객지원 오차 μ"
+    assert parsed.pages[0].table_candidates[0].rows == [["❑ 칸 안 "]]

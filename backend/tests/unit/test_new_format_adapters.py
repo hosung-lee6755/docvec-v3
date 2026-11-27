@@ -464,3 +464,52 @@ def test_pptx_paragraph_bullets_and_numbers_are_kept(tmp_path):
     assert parsed.pages[0].text_blocks[0].text.split("\n") == [
         "✓ 데이터 수집", "▪ 정제", "- 세부 항목", "1) 첫째", "2) 둘째", "기호 없음",
     ]
+
+
+def test_pptx_symbol_font_runs_are_written_as_the_symbols_they_show(tmp_path):
+    # 산업단지 완료보고 PPTX: Wingdings 글자 묶음의 " 2023년" 이 파싱 본문과 청크에서 빈칸으로 보였다(2026-11-26)
+    from lxml import etree
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from app.pipeline.adapters.slide_adapter import SlideAdapter
+
+    ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    paragraph = slide.shapes.add_textbox(Inches(0.5), Inches(2), Inches(6), Inches(3)).text_frame.paragraphs[0]
+    arrow = paragraph.add_run()
+    arrow.text = " "
+    arrow._r.get_or_add_rPr().append(etree.fromstring(f'<a:sym xmlns:a="{ns}" typeface="Wingdings"/>'))
+    paragraph.add_run().text = "2023년  그대로"
+    path = tmp_path / "symbols.pptx"
+    presentation.save(path)
+
+    parsed = SlideAdapter().extract(path, {})
+
+    # sym 글꼴이 Wingdings 인 글자 묶음만 바꾼다. 글꼴을 모르는 묶음의 코드는 그대로 둔다
+    assert parsed.pages[0].text_blocks[0].text == "➔ 2023년  그대로"
+
+
+def test_pptx_line_breaks_and_fields_inside_a_paragraph_are_kept(tmp_path):
+    # 글자 묶음만 이으면 문단 안 줄바꿈(<a:br/>)과 필드(<a:fld>)가 빠져 "첫 줄둘째 줄" 처럼 붙었다(2026-11-26)
+    from lxml import etree
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from app.pipeline.adapters.slide_adapter import SlideAdapter
+
+    ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    paragraph = slide.shapes.add_textbox(Inches(0.5), Inches(2), Inches(6), Inches(3)).text_frame.paragraphs[0]
+    paragraph.add_run().text = "첫 줄"
+    paragraph.add_line_break()
+    paragraph.add_run().text = "둘째 줄 "
+    paragraph._p.append(etree.fromstring(f'<a:fld xmlns:a="{ns}" id="{{00000000-0000-0000-0000-000000000001}}" type="slidenum"><a:t>7</a:t></a:fld>'))
+    path = tmp_path / "breaks.pptx"
+    presentation.save(path)
+
+    parsed = SlideAdapter().extract(path, {})
+
+    assert parsed.pages[0].text_blocks[0].text == "첫 줄\n둘째 줄 7"

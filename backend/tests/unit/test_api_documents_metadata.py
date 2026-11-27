@@ -262,8 +262,11 @@ async def test_pages_text_non_pdf_uses_preview_pdf_pages_then_falls_back(db_sess
     doc = await add_doc(db_session, "m-pages-docx", original_filename="a.docx", parsed_text="본문")
     preview_pages = [{"page_number": 1, "text": "미리보기 PDF 1쪽"}]
 
+    # 미리보기가 한 쪽이면 파싱 본문 전체가 그 쪽이다. 예전에는 미리보기에서 뽑은 원본 글이 파싱 쪽에 나왔다(2026-11-26)
     with patch("app.services.preview_service.pdf_pages_text_for", return_value=preview_pages):
-        assert (await md.get_document_pages_text(doc.id, db_session, owner_user()))["pages"] == preview_pages
+        result = await md.get_document_pages_text(doc.id, db_session, owner_user())
+    assert result["synced"] is True
+    assert result["pages"] == [{"page_number": 1, "text": "본문", "start": 0, "end": 2}]
     with patch("app.services.preview_service.pdf_pages_text_for", return_value=[]):
         assert (await md.get_document_pages_text(doc.id, db_session, owner_user()))["pages"] == [
             {"page_number": 1, "text": "본문", "start": 0, "end": 2},

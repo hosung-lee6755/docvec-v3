@@ -6,6 +6,7 @@ from xml.etree import ElementTree as ET
 from app.pipeline.adapters import hwp_adapter as hwp
 from app.pipeline.adapters.hwp5_structure import (
     add_hwp_paragraph_marks,
+    add_hwp_symbol_chars,
     hwp_paragraph_layout,
     hwp_table_grid,
     load_hwp_styles,
@@ -111,7 +112,7 @@ def test_bulleted_paragraphs_keep_their_bullet_in_body_and_cells():
 
     texts = [hwp._hwp_collect_text(p).strip() for p in root.iter("Paragraph")]
     assert texts == [
-        "- 대상 항만(31개)", "• 기호 글꼴 글머리표", "일반 문단", "개요 번호 문단", "- 이미 기호가 있는 문단", "- 칸 안 항목",
+        "- 대상 항만(31개)", "● 기호 글꼴 글머리표", "일반 문단", "개요 번호 문단", "- 이미 기호가 있는 문단", "- 칸 안 항목",
     ]
 
 
@@ -179,3 +180,28 @@ def test_extract_hwp_fills_line_layout_and_table_spans():
     paragraphs = [block for block in doc.pages[0].text_blocks if block.block_type != "table"]
     assert len(layout) == len(paragraphs)
     assert doc.pages[0].table_candidates[0].spans == [{"row": 0, "col": 0, "row_span": 2, "col_span": 1}]
+
+
+SYMBOL_DOC_INFO = (
+    '<DocInfo><IdMappings ko-fonts="2" en-fonts="2" cn-fonts="2" jp-fonts="2" other-fonts="2" symbol-fonts="2" user-fonts="2">'
+    + '<FaceName name="맑은 고딕"/><FaceName name="Symbol"/>' * 7
+    + '<CharShape basesize="1100"><FontFace ko="0" en="0" cn="0" jp="0" other="0" symbol="0" user="0"/></CharShape>'
+    + '<CharShape basesize="1100"><FontFace ko="0" en="0" cn="0" jp="0" other="0" symbol="1" user="1"/></CharShape>'
+    + "</IdMappings></DocInfo>"
+)
+
+
+def test_symbol_font_codes_in_body_text_are_written_as_the_symbols_they_show():
+    # 제안요청서 HWP: " 사업명", " 세부" 가 파싱 본문과 청크에서 빈칸으로 보였다(2026-11-26).
+    # 한글은 이 코드를 맑은 고딕으로 적어 두지만 쓰임새는 Wingdings 다. Symbol 글꼴 글자는 Symbol 표로 읽는다
+    body = (
+        '<Paragraph parashape-id="0"><LineSeg><Text charshape-id="0"> 사업명 </Text></LineSeg></Paragraph>'
+        '<Paragraph parashape-id="0"><LineSeg><Text charshape-id="0"> 세부</Text>'
+        '<Text charshape-id="1"> 오차 </Text></LineSeg></Paragraph>'
+    )
+    root = ET.fromstring(f"<HwpDoc>{SYMBOL_DOC_INFO}<BodyText>{body}</BodyText></HwpDoc>".encode())
+
+    add_hwp_symbol_chars(root)
+
+    texts = [hwp._hwp_collect_text(p) for p in root.iter("Paragraph")]
+    assert texts == ["❑ 사업명 ", "❍ 세부 오차 μ"]

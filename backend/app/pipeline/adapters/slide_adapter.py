@@ -13,6 +13,7 @@ from app.pipeline.adapters.base import (
     RawParsedDocument,
 )
 from app.pipeline.adapters.simple_layout import PAGE_HEIGHT, PAGE_WIDTH, BlockCollector, failed
+from app.pipeline.adapters.symbol_fonts import symbol_char, symbol_font_kind, with_symbol_font_chars
 
 _EMU_PER_POINT = 12700
 NOTES_LABEL = "발표자 노트"
@@ -45,9 +46,9 @@ def _bbox(shape) -> tuple[float, float, float, float]:
 
 
 # 문단 글머리표(buChar)·자동 번호(buAutoNum). 글이 아니라 문단 서식이라 예전에는 "✓ 데이터 수집" 의 "✓" 가
-# 빠졌다(산업단지 발표자료, 2026-11-26). 기호 글꼴 글자는 화면 모양으로 적고, 모르는 기호 글꼴 글자는 "•" 로 적는다.
+# 빠졌다(산업단지 발표자료, 2026-11-26). 기호 글꼴 글자는 화면 모양으로 적고(symbol_fonts.py), 표가 없는 기호
+# 글꼴(Webdings, Wingdings 2·3)이나 표에 없는 글자는 "•" 로 적는다.
 _SYMBOL_FONTS = ("wingdings", "symbol", "webdings")
-_SYMBOL_FONT_CHARS = {"ü": "✓", "§": "▪", "Ø": "➢", "q": "❑", "n": "■", "l": "●", "v": "❖", "Ÿ": "•", "ð": "⇨"}
 _DEFAULT_BULLET = "•"
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 _ROMAN = ((1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
@@ -85,8 +86,37 @@ def _auto_number(kind: str, number: int) -> str:
 
 def _bullet_char(char: str, typeface: str) -> str:
     if any(font in typeface.lower() for font in _SYMBOL_FONTS):
-        return _SYMBOL_FONT_CHARS.get(char, _DEFAULT_BULLET)
+        return symbol_char(char, symbol_font_kind(typeface)) or _DEFAULT_BULLET
     return char.strip() or _DEFAULT_BULLET
+
+
+def _run_text(run) -> str:
+    """글자 묶음의 글. sym 글꼴이 기호 글꼴이면 기호 글꼴 코드(U+F0xx)를 화면에 보이는 글자로 바꾼다. 예전에는
+    "\\uf0e0 2023년" 의 화살표가 파싱 본문과 청크에서 빈칸으로 보였다(산업단지 완료보고, 2026-11-26)."""
+    properties = run._r.rPr
+    sym = next((child for child in properties if child.tag.endswith("}sym")), None) if properties is not None else None
+    return with_symbol_font_chars(run.text, symbol_font_kind(sym.get("typeface")) if sym is not None else None)
+
+
+def _with_run_symbols(paragraphs, text: str) -> str:
+    """paragraphs 의 글자 묶음 중 sym 글꼴이 기호 글꼴인 묶음의 코드만 text 안에서 화면 글자로 바꾼 새 글."""
+    replaced: dict[str, str] = {}
+    for paragraph in paragraphs:
+        for run in paragraph.runs:
+            shown = _run_text(run)
+            replaced.update((code, char) for code, char in zip(run.text, shown, strict=True) if code != char)
+    return "".join(replaced.get(char, char) for char in text) if replaced else text
+
+
+def _cell_text(cell) -> str:
+    """표 칸의 글(python-pptx 의 cell.text, 문단 안 줄바꿈 포함). 기호 글꼴 글자 묶음에 든 코드만 화면 글자로 바꾼다."""
+    return _with_run_symbols(cell.text_frame.paragraphs, cell.text)
+
+
+def _paragraph_text(paragraph) -> str:
+    """문단 글. 글자 묶음만 이으면 문단 안 줄바꿈(<a:br/>)과 필드(<a:fld>, 날짜·쪽 번호)가 빠져 줄 앞뒤 낱말이
+    붙었다(2026-11-26 대조). python-pptx 의 paragraph.text 는 줄바꿈을 "\\v" 로 적으므로 줄바꿈으로 바꾼다."""
+    return _with_run_symbols((paragraph,), paragraph.text).replace("\v", "\n")
 
 
 def _paragraph_mark(paragraph, counters: dict[int, tuple[str, int]]) -> str:
@@ -112,7 +142,7 @@ def _shape_text(shape) -> str:
     lines: list[str] = []
     counters: dict[int, tuple[str, int]] = {}
     for paragraph in shape.text_frame.paragraphs:
-        text = "".join(run.text for run in paragraph.runs).strip()
+        text = _paragraph_text(paragraph).strip()
         if not text:
             continue
         mark = _paragraph_mark(paragraph, counters)
@@ -175,7 +205,7 @@ def _fixed_texts(shapes) -> list[str]:
             continue
         if getattr(shape, "has_table", False) and shape.has_table:
             for row in shape.table.rows:
-                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                cells = [_cell_text(cell).strip() for cell in row.cells if _cell_text(cell).strip()]
                 if cells:
                     texts.append(" / ".join(cells))
         elif shape.has_text_frame and _shape_text(shape):
@@ -259,7 +289,7 @@ class SlideAdapter(BaseAdapter):
             if title_shape is not None and shape.shape_id == title_shape.shape_id:
                 continue
             if getattr(shape, "has_table", False) and shape.has_table:
-                rows = [[cell.text.strip() for cell in row.cells] for row in shape.table.rows]
+                rows = [[_cell_text(cell).strip() for cell in row.cells] for row in shape.table.rows]
                 collector.table(blocks, tables, rows, page_number)
             elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                 try:

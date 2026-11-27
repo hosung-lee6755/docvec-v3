@@ -70,11 +70,15 @@ def test_csv_preview_is_an_html_table_without_libreoffice(monkeypatch):
 
 def test_office_formats_use_libreoffice_and_keep_old_rules(monkeypatch):
     calls = []
-    monkeypatch.setattr(ps, "_soffice_to_pdf", lambda raw, suffix: calls.append(suffix) or b"%PDF-1")
+    monkeypatch.setattr(
+        ps, "_soffice_to_pdf", lambda raw, suffix, export_filter="": calls.append((suffix, export_filter)) or b"%PDF-1",
+    )
 
     for suffix in (".xlsx", ".pptx"):
         assert ps._generate_preview(suffix, b"x")[1] == "pdf"
 
-    assert calls == [".xlsx", ".pptx"]
+    # 엑셀은 시트 하나를 한 쪽으로 그린다(넓은 시트의 열이 여러 쪽으로 잘리지 않게, 2026-11-26)
+    assert calls == [(".xlsx", ps._XLSX_PDF_FILTER), (".pptx", "")]
+    assert '"SinglePageSheets"' in ps._XLSX_PDF_FILTER
     assert ps._is_approximate(".docx", "pdf") is False and ps._is_approximate(".hwp", "pdf") is False
     assert ps._is_approximate(".docx", "html") is True

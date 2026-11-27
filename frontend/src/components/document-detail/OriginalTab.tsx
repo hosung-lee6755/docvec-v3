@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { PdfPageViewer } from './PdfPageViewer'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import { markdownPlugins } from '../../lib/markdownPlugins'
 import { MarkdownLink } from './MarkdownLink'
 import { usePdfBlobUrl } from '../../hooks/usePdfBlobUrl'
@@ -10,7 +10,14 @@ import { legacyTablesToMarkdown, toRagRecordsJson, type RagRecordSource } from '
 import type { DocumentChunksResult, DocumentTable } from '../../hooks/useDocuments'
 import { splitByTables } from '../../lib/tableSpans'
 import { SpanTable } from './SpanTable'
+import { closeSplitTables, isEmptyTableHead } from './pageTableFragments'
 import { ErrorText } from '../ui'
+
+// 쪽 조각의 이어진 표에 붙인 빈 머리 행(closeSplitTables)은 그리지 않는다
+const PAGE_MARKDOWN_COMPONENTS: Components = {
+  a: MarkdownLink,
+  thead: ({ node, ...props }) => (isEmptyTableHead(node) ? null : <thead {...props} />),
+}
 
 interface Page {
   page_number: number
@@ -204,8 +211,8 @@ export default function OriginalTab({
                   part.kind === 'table'
                     ? <SpanTable key={index} table={part.table} label={part.table.title ?? undefined} />
                     : (
-                      <ReactMarkdown key={index} remarkPlugins={markdownPlugins} components={{ a: MarkdownLink }}>
-                        {legacyTablesToMarkdown(part.text)}
+                      <ReactMarkdown key={index} remarkPlugins={markdownPlugins} components={PAGE_MARKDOWN_COMPONENTS}>
+                        {legacyTablesToMarkdown(currentPageText === null ? part.text : closeSplitTables(part.text))}
                       </ReactMarkdown>
                     )
                 ))}

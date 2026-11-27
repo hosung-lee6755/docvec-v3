@@ -189,10 +189,11 @@ class SofficeTimeoutError(RuntimeError):
     """LibreOffice 변환이 _SOFFICE_TIMEOUT_SECONDS 안에 끝나지 않았다."""
 
 
-def _soffice_convert(input_path: Path, target: str) -> Path:
+def _soffice_convert(input_path: Path, target: str, export_filter: str = "") -> Path:
     """Runs `soffice --headless --convert-to <target>` next to the input file, in
     an isolated profile dir (required so concurrent conversions don't collide over
-    the LibreOffice user profile lock), and returns the output path."""
+    the LibreOffice user profile lock), and returns the output path. export_filter
+    는 "calc_pdf_Export:{...}" 처럼 내보내기 필터와 옵션을 붙일 때 쓴다."""
     work = input_path.parent
     output_path = work / f"{input_path.stem}.{target}"
     returncode, stderr_bytes = _run_soffice(
@@ -203,7 +204,7 @@ def _soffice_convert(input_path: Path, target: str) -> Path:
             "--nolockcheck",
             f"-env:UserInstallation=file://{work / 'profile'}",
             "--convert-to",
-            target,
+            f"{target}:{export_filter}" if export_filter else target,
             "--outdir",
             str(work),
             str(input_path),
@@ -236,12 +237,18 @@ def _is_complete_output(path: Path, target: str) -> bool:
     return False
 
 
-def _soffice_to_pdf(raw: bytes, suffix: str) -> bytes:
+def _soffice_to_pdf(raw: bytes, suffix: str, export_filter: str = "") -> bytes:
     """Converts the raw file to PDF with LibreOffice and returns the PDF bytes."""
     with tempfile.TemporaryDirectory() as workdir:
         input_path = Path(workdir) / f"input{suffix}"
         input_path.write_bytes(raw)
-        return _soffice_convert(input_path, "pdf").read_bytes()
+        return _soffice_convert(input_path, "pdf", export_filter).read_bytes()
+
+
+# 엑셀은 시트 하나를 한 쪽으로 그린다. 인쇄 쪽 나눔으로 그리면 넓은 시트의 열이 여러 쪽으로 잘려 쪽 순서가 행 순서와
+# 달랐고, 원문 대조의 쪽과 파싱 본문(시트마다 표)이 맞지 않았다(테이블 정의서 3시트가 14쪽, 2026-11-26).
+# 시트에는 원래 쪽이 없으므로 시트 단위가 원본에 더 가깝다
+_XLSX_PDF_FILTER = 'calc_pdf_Export:{"SinglePageSheets":{"type":"boolean","value":"true"}}'
 
 
 def _hwp_original_to_pdf(raw: bytes, suffix: str) -> bytes:
@@ -372,7 +379,7 @@ _PDF_CONVERTERS = {
     ".hwpx": lambda raw: _hwp_original_to_pdf(raw, ".hwpx"),
     ".html": _uploaded_html_to_pdf,
     ".htm": _uploaded_html_to_pdf,
-    ".xlsx": lambda raw: _soffice_to_pdf(raw, ".xlsx"),
+    ".xlsx": lambda raw: _soffice_to_pdf(raw, ".xlsx", _XLSX_PDF_FILTER),
     ".pptx": lambda raw: _soffice_to_pdf(raw, ".pptx"),
     **{suffix: _image_to_pdf(suffix) for suffix in sorted(IMAGE_SUFFIXES)},
 }

@@ -1,12 +1,14 @@
 from datetime import datetime, timezone, timedelta
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_current_user
-from app.services.access_policy import build_access_context, document_visibility_clause
+from app.api.v1.permissions import accessible_collection_ids, check_project_access
+from app.services.access_policy import LIFECYCLE_SUPERSEDED, build_access_context, document_visibility_clause
 from app.db.models.document import Document
 from app.db.models.quality_report import QualityReport
 from app.db.models.user import User
@@ -62,14 +64,21 @@ class ProcessingStatsResponse(BaseModel):
 async def get_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    project_id: UUID | None = None,
 ):
     # Match list_documents visibility scope: include not only owned documents but
     # also documents in accessible (shared) collections. Filtering only created_by
     # would exclude shared collection documents and cause stats to undercount.
     # v3: 목록과 같은 가시성 조건(컬렉션 접근 + 보안등급 + 문서 ACL + 업로더 본인).
+    # 문서 목록의 기본 보기처럼 이전 버전(superseded)은 세지 않고, project_id 를 주면 그 프로젝트 컬렉션만 센다.
+    # 예전에는 프로젝트 문서 화면 요약 띠가 모든 프로젝트와 이전 버전까지 세어 "전체 70" 옆 목록이 26건이었다(2026-11-26)
     ctx = await build_access_context(db, current_user)
     shared_ids = ctx.collection_ids
-    doc_scope = document_visibility_clause(ctx)
+    doc_scope = and_(document_visibility_clause(ctx), Document.lifecycle_state != LIFECYCLE_SUPERSEDED)
+    if project_id is not None:
+        await check_project_access(db, project_id, current_user, min_role="viewer")
+        shared_ids = await accessible_collection_ids(db, current_user, project_id=project_id)
+        doc_scope = and_(doc_scope, Document.collection_id.in_(shared_ids) if shared_ids else false())
 
     total_documents = await db.scalar(
         select(func.count(Document.id)).where(doc_scope)

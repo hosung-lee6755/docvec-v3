@@ -1,4 +1,5 @@
 import re
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from app.pipeline.adapters.base import (
     RawTableCandidate,
     RawTextBlock,
 )
+from app.pipeline.adapters.native_spacing import PdfSymbolPages, with_symbol_map
+from app.pipeline.adapters.symbol_fonts import is_symbol_code
 
 _POINTS_PER_CM = 72 / 2.54
 # Reference density for a "fully covered" text page, per engine_design.md
@@ -516,6 +519,7 @@ class PDFAdapter(BaseAdapter):
         warnings = []
         ocr_used = False
         fitz_doc = None
+        symbol_pages = PdfSymbolPages(file_path, warnings)
         line_layout: list[dict] = []
         # 메타 정보 생성.txt 1절 document_created_at — PDF info dict의
         # creationDate("D:YYYYMMDDHHmmSS..." 형식)를 읽는다. 별도의 짧은 fitz
@@ -658,6 +662,18 @@ class PDFAdapter(BaseAdapter):
                             # discarded text, not what this page actually reports.
                             page_ocr_confidence, page_ocr_word_count = None, None
 
+                    # 기호 글꼴(Wingdings·Symbol) 코드는 그 쪽에서 그린 글꼴의 화면 글자로 적는다(Docling 경로와 같은 규칙)
+                    symbols = (
+                        symbol_pages.for_page(page_num)
+                        if any(any(is_symbol_code(ch) for ch in char.get("text") or "") for char in page.chars) else {}
+                    )
+                    if symbols:
+                        text = with_symbol_map(text, symbols)
+                        table_candidates = [
+                            replace(t, rows=[[with_symbol_map(cell, symbols) for cell in row] for row in t.rows])
+                            for t in table_candidates
+                        ]
+
                     text_blocks = []
                     if text.strip():
                         text_blocks.append(
@@ -671,6 +687,7 @@ class PDFAdapter(BaseAdapter):
                         if block_type != "ocr" and extract_font_signals_enabled:
                             for line in _extract_line_layout(page, exclusion_rects):
                                 line["page_number"] = page_num
+                                line["text"] = with_symbol_map(line.get("text") or "", symbols)
                                 line_layout.append(line)
 
                     for table in table_candidates:
@@ -748,6 +765,7 @@ class PDFAdapter(BaseAdapter):
                 warnings=[str(e)],
             )
         finally:
+            symbol_pages.close()
             if fitz_doc is not None:
                 fitz_doc.close()
 

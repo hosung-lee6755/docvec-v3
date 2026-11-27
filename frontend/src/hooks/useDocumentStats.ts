@@ -14,8 +14,10 @@ export interface DocumentStats {
 export const DOCUMENT_STATS_QUERY_KEY = ['stats'] as const
 const STATS_REFRESH_MS = 10000
 
-export async function fetchDocumentStats(): Promise<DocumentStats> {
-  const { data } = await apiClient.get<DocumentStats>('/stats')
+export async function fetchDocumentStats(projectId?: string): Promise<DocumentStats> {
+  const { data } = await apiClient.get<DocumentStats>('/stats', {
+    params: projectId ? { project_id: projectId } : undefined,
+  })
   return data
 }
 
@@ -24,7 +26,13 @@ export async function fetchDocumentStats(): Promise<DocumentStats> {
  *
  * 문서 화면 요약 띠가 지금 받은 한 페이지의 문서만 세어, 20건씩 보면 "처리 중 0", 100건씩 보면 "처리 중 1"처럼 표시 건수에
  * 따라 값이 달라지고 대시보드와도 달랐다(2026-11-26). 대시보드와 같은 질의 키를 써 두 화면이 같은 값을 보인다.
+ * 프로젝트 문서 화면은 projectId 를 주어 목록과 같은 프로젝트 문서만 센다. 주지 않으면 모든 프로젝트를 세어
+ * "전체 70" 옆 목록이 26건으로 서로 달랐다(2026-11-26).
  */
-export function useDocumentStats(refetchInterval: number | false = STATS_REFRESH_MS) {
-  return useQuery({ queryKey: DOCUMENT_STATS_QUERY_KEY, queryFn: fetchDocumentStats, refetchInterval })
+export function useDocumentStats(refetchInterval: number | false = STATS_REFRESH_MS, projectId?: string) {
+  return useQuery({
+    queryKey: projectId ? [...DOCUMENT_STATS_QUERY_KEY, 'project', projectId] : DOCUMENT_STATS_QUERY_KEY,
+    queryFn: () => fetchDocumentStats(projectId),
+    refetchInterval,
+  })
 }

@@ -10,7 +10,10 @@ Docling 은 글꼴 정보가 없는 PDF 에서 낱말 중간을 띄우거나("�
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Callable, Iterable
 from pathlib import Path
+
+from app.pipeline.adapters.symbol_fonts import is_symbol_code, symbol_char, symbol_font_kind
 
 # 한 글자짜리 한글 토막. 자연스러운 글에도 "수", "및"이 있지만 같은 글자의 두 글을 견줄 때만 쓰므로 상대 비교다
 _SINGLE_HANGUL_RE = re.compile(r"[가-힣]")
@@ -150,9 +153,106 @@ def _page_chars(page) -> list[dict]:
                     top = ch["origin"][1] - size * _ASCENT_RATIO
                     chars.append({
                         "x0": ch["bbox"][0], "x1": ch["bbox"][2], "top": top, "bottom": top + size,
-                        "doctop": top, "text": ch["c"], "upright": upright, "size": size,
+                        "doctop": top, "text": ch["c"], "upright": upright, "size": size, "font": span["font"],
                     })
     return chars
+
+
+def page_symbol_chars(
+    spans: Iterable[tuple[str, str]], real_font_name: Callable[[str], str | None],
+) -> dict[str, str]:
+    """쪽의 (글꼴 이름, 글) 묶음에서 기호 글꼴 코드(U+F020~F0FF) → 화면 글자. 글꼴 이름이 가려진 내장 글꼴
+    ("CIDFont+F4")은 real_font_name 으로 실제 이름("Wingdings Regular")을 본다. 같은 코드가 표를 모르는 글꼴
+    (아이콘 Type3, 수식 글꼴)에도 쓰였으면 어느 글자인지 모르므로 넣지 않는다."""
+    shown: dict[str, str | None] = {}
+    for font, text in spans:
+        for char in text:
+            if not is_symbol_code(char):
+                continue
+            kind = symbol_font_kind(font) or symbol_font_kind(real_font_name(font))
+            glyph = symbol_char(char, kind)
+            shown[char] = glyph if shown.get(char, glyph) == glyph else None
+    return {code: glyph for code, glyph in shown.items() if glyph}
+
+
+def real_font_namer(doc, page, cache: dict[int, str | None]) -> Callable[[str], str | None]:
+    """글자 층의 글꼴 이름 → 내장 글꼴 파일 안의 실제 이름. "CIDFont+F4" 처럼 이름을 가린 글꼴을 알아보려고 쓴다.
+    cache 는 글꼴 xref → 이름이며 같은 문서를 읽는 동안 이어 쓴다."""
+    import fitz  # pymupdf
+
+    xrefs = {font[3]: font[0] for font in page.get_fonts(full=True)}
+
+    def real_name(font: str) -> str | None:
+        xref = xrefs.get(font)
+        if not xref:
+            return None
+        if xref not in cache:
+            try:
+                cache[xref] = fitz.Font(fontbuffer=doc.extract_font(xref)[3]).name
+            except Exception:  # 글꼴 파일을 못 읽으면 이름을 모르는 글꼴로 둔다
+                cache[xref] = None
+        return cache[xref]
+
+    return real_name
+
+
+def with_page_symbols(doc, page, text: str, cache: dict[int, str | None] | None = None) -> str:
+    """PyMuPDF 쪽에서 읽은 text 의 기호 글꼴 코드를 그 쪽에서 그려진 글꼴의 화면 글자로 바꾼 새 글.
+    그림 영역 안 글처럼 NativeRegionReader 를 거치지 않는 글에 쓴다. 예전에는 그림으로 잡힌 쪽의 "●" 가
+    청크에서 빈칸으로 남았다(법령심사 PDF, 세원화성 보고서 [그림 13], 2026-11-26)."""
+    if not text or not any(is_symbol_code(ch) for ch in text):
+        return text
+    symbols = page_symbol_map(doc, page, cache)
+    return "".join(symbols.get(ch, ch) for ch in text)
+
+
+def page_symbol_map(doc, page, cache: dict[int, str | None] | None = None) -> dict[str, str]:
+    """PyMuPDF 쪽의 기호 글꼴 코드 → 화면 글자(page_symbol_chars). 한 쪽의 글 여러 개(본문, 표 칸)를 바꿀 때 한 번만 센다."""
+    spans = [(c["font"], c["text"]) for c in _page_chars(page) if is_symbol_code(c["text"])]
+    if not spans:
+        return {}
+    return page_symbol_chars(spans, real_font_namer(doc, page, {} if cache is None else cache))
+
+
+class PdfSymbolPages:
+    """PDF 쪽마다 기호 글꼴 코드 → 화면 글자. Docling 을 거치지 않는 PDF 읽기(pdf_adapter, pdfplumber)가 쓴다.
+    예전에는 이 경로에 바꾸는 단계가 없어 법령심사 PDF 의 "●" 가 파싱 본문에 사설 영역 코드로 남았다(2026-11-26).
+    처음 쓸 때 한 번만 열고, 열거나 읽지 못하면 빈 표를 돌려준다(기호 글자 보강일 뿐이다)."""
+
+    def __init__(self, file_path: Path, warnings: list[str]) -> None:
+        self._path = file_path
+        self._warnings = warnings
+        self._doc = None
+        self._failed = False
+        self._fonts: dict[int, str | None] = {}
+
+    def for_page(self, page_no: int) -> dict[str, str]:
+        if self._failed:
+            return {}
+        try:
+            if self._doc is None:
+                import fitz  # pymupdf
+
+                self._doc = fitz.open(str(self._path))
+            if page_no < 1 or page_no > self._doc.page_count:
+                return {}
+            return page_symbol_map(self._doc, self._doc[page_no - 1], self._fonts)
+        except Exception as exc:  # 기호 글자 보강일 뿐이다. 실패하면 글을 그대로 쓴다
+            self._failed = True
+            self._warnings.append(f"기호 글꼴 글자 읽기 실패: {exc}")
+            return {}
+
+    def close(self) -> None:
+        if self._doc is not None:
+            self._doc.close()
+            self._doc = None
+
+
+def with_symbol_map(text: str, symbols: dict[str, str]) -> str:
+    """text 의 기호 글꼴 코드를 symbols(page_symbol_map)로 바꾼 새 글."""
+    if not symbols or not text:
+        return text
+    return "".join(symbols.get(ch, ch) for ch in text)
 
 
 class NativeRegionReader:
@@ -171,6 +271,8 @@ class NativeRegionReader:
         self._page_no: int | None = None
         self._chars: list[dict] = []
         self._size: tuple[float, float] = (0.0, 0.0)
+        self._symbols: dict[str, str] = {}
+        self._font_names: dict[int, str | None] = {}
 
     def _chars_for(self, page_no: int) -> list[dict] | None:
         if self._doc is None:
@@ -182,7 +284,26 @@ class NativeRegionReader:
         if self._page_no != page_no:
             page = self._doc[page_no - 1]
             self._chars, self._size, self._page_no = _page_chars(page), (page.rect.width, page.rect.height), page_no
+            symbol_spans = [(c["font"], c["text"]) for c in self._chars if is_symbol_code(c["text"])]
+            self._symbols = page_symbol_chars(symbol_spans, self._font_namer(page)) if symbol_spans else {}
         return self._chars
+
+    def _font_namer(self, page) -> Callable[[str], str | None]:
+        return real_font_namer(self._doc, page, self._font_names)
+
+    def with_symbols(self, page_no: int, text: str) -> str:
+        """text 의 기호 글꼴 코드를 그 쪽에서 그려진 글꼴의 화면 글자로 바꾼 새 글(page_symbol_chars).
+        예전에는 "\\uf06c 법제처의 업무" 의 "●" 가 파싱 본문과 청크에서 빈칸으로 보였다(법령심사 PDF, 2026-11-26)."""
+        if self._failed or not text or not any(is_symbol_code(ch) for ch in text):
+            return text
+        try:
+            if self._chars_for(page_no) is None:
+                return text
+        except Exception as exc:  # 기호 글자 보강일 뿐이다. 실패하면 글을 그대로 쓴다
+            self._failed = True
+            self._warnings.append(f"기호 글꼴 글자 읽기 실패: {exc}")
+            return text
+        return "".join(self._symbols.get(ch, ch) for ch in text)
 
     def read(self, page_no: int, bbox: tuple[float, float, float, float] | None) -> str:
         if bbox is None or self._failed:

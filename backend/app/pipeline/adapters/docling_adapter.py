@@ -16,6 +16,7 @@ content.markdown/metadata 형태)만 얹는다.
 후) 실제 문서로 재검증 필요."""
 import io
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -28,8 +29,8 @@ from app.pipeline.adapters.base import (
     RawTableCandidate,
     RawTextBlock,
 )
-from app.pipeline.adapters.docling_toc import TOC_LABELS, choose_toc_lines, grid_text
-from app.pipeline.adapters.native_spacing import NativeRegionReader, choose_spacing, restore_marker
+from app.pipeline.adapters.docling_toc import TOC_LABELS, choose_toc_lines, grid_text, toc_columns
+from app.pipeline.adapters.native_spacing import NativeRegionReader, choose_spacing, restore_marker, with_page_symbols
 from app.pipeline.adapters.hwpx_structure import grid_from_cells
 from app.pipeline.adapters.ruled_tables import RuledTable, find_ruled_tables, match_ruled_table
 from app.pipeline.adapters.table_text_coverage import TextLine, lines_from_words, missing_lines, refill_cells
@@ -308,6 +309,60 @@ _CAPTION_LINE_RE = re.compile(
 _CAPTION_MAX_CHARS = 80
 
 
+def _squashed(text: str) -> str:
+    return "".join((text or "").split())
+
+
+@dataclass(frozen=True)
+class _TocBand:
+    """옆 단까지 읽은 차례의 쪽, 높이 범위(아래·위), Docling 차례 영역의 오른쪽 끝, 옆 단 차례 줄(공백 뺀 글)."""
+    page_no: int
+    span: tuple[float, float]
+    right_edge: float
+    side_lines: tuple[str, ...]
+
+
+# 차례 띠 안에 드는지 볼 때 위아래로 허용하는 여유(pt)
+_TOC_BAND_PAD = 2.0
+
+
+def _vertical_span(bbox) -> tuple[float, float]:
+    if not bbox:
+        return (0.0, 0.0)
+    return (min(bbox[1], bbox[3]), max(bbox[1], bbox[3]))
+
+
+def _already_in_toc(bands: list[_TocBand], page_no: int, bbox, text: str) -> bool:
+    """글 항목이 같은 쪽 차례의 옆 단(차례 영역 오른쪽, 같은 높이)에 있고 그 글이 옆 단 차례 줄 하나에 이미 들어 있는지."""
+    squashed = _squashed(text)
+    if not squashed or not bbox:
+        return False
+    low, high = _vertical_span(bbox)
+    left = min(bbox[0], bbox[2])
+    return any(
+        band.page_no == page_no and band.span[0] - _TOC_BAND_PAD <= low and high <= band.span[1] + _TOC_BAND_PAD
+        and left >= band.right_edge - _TOC_BAND_PAD and any(squashed in line for line in band.side_lines)
+        for band in bands
+    )
+
+
+def _caption_refs(item) -> set[str]:
+    """표 항목이 가리키는 caption 항목들의 참조("#/texts/3")."""
+    refs = getattr(item, "captions", None) or []
+    return {ref.cref for ref in refs if getattr(ref, "cref", None)}
+
+
+def _take_preceding_caption(page: RawPage, elements: list[dict]) -> str | None:
+    """_preceding_caption 이 고른 줄을 표 제목으로 가져가며 그 줄의 본문 블록과 요소를 뺀다. 예전에는 그 줄이 본문에도
+    남아 "[별표 1] 표 2 …" 가 두 번 나왔다(기계설비 매뉴얼, 2026-11-26 쪽별 중복 줄 대조)."""
+    line = _preceding_caption(page)
+    if line is None:
+        return None
+    block = page.text_blocks.pop()
+    elements[:] = [element for element in elements if element["id"] != block.element_id]
+    return line
+
+
 def _preceding_caption(page: RawPage) -> str | None:
     """캡션이 없는 표의 제목으로 쓸, 같은 쪽에서 바로 앞에 나온 제목 줄. 기계설비 매뉴얼에서 제목 없는 표 169개 중
     50개가 "[별표 1] 표 2 냉·난방설비의 …" 같은 줄을 바로 위에 두었다(2026-11-19)."""
@@ -394,7 +449,8 @@ def _native_text_in_bbox(fitz_doc, page_no: int, bbox: tuple[float, float, float
         top, bottom = page.rect.height - first_y, page.rect.height - second_y
     else:
         top, bottom = first_y, second_y
-    return page.get_text("text", clip=fitz.Rect(left, top, right, bottom)).strip()
+    text = page.get_text("text", clip=fitz.Rect(left, top, right, bottom)).strip()
+    return with_page_symbols(fitz_doc, page, text)
 
 
 _TOC_RIGHT_OVERFLOW = 3.0
@@ -403,8 +459,8 @@ _TOC_LEFT_MARGIN = 4.0
 _SAME_LINE_TOLERANCE = 3.0
 
 
-def _visual_lines(words: list[tuple]) -> str:
-    """PyMuPDF 낱말 목록을 화면에 보이는 줄로 다시 묶는다.
+def _word_lines(words: list[tuple]) -> list[list[tuple]]:
+    """PyMuPDF 낱말 목록을 화면에 보이는 줄(왼쪽부터 놓인 낱말 목록)로 다시 묶는다.
 
     목차의 쪽 번호가 항목과 다른 글 블록에 들어 있는 PDF 가 있어(기계설비 매뉴얼 3쪽), 블록 순서대로 읽으면
     항목들이 먼저 나오고 쪽 번호가 맨 뒤에 몰린다. 세로 위치가 같은 낱말을 한 줄로 모아 왼쪽부터 잇는다."""
@@ -415,7 +471,7 @@ def _visual_lines(words: list[tuple]) -> str:
             lines[-1].append(word)
         else:
             lines.append([word])
-    return "\n".join(" ".join(w[4] for w in sorted(line, key=lambda w: w[0])) for line in lines)
+    return [sorted(line, key=lambda w: w[0]) for line in lines]
 
 
 class _NativeTextReader:
@@ -427,18 +483,19 @@ class _NativeTextReader:
         self._doc = None
         self._failed = False
 
-    def read_full_width(self, page_no: int, bbox: tuple[float, float, float, float] | None) -> str:
-        """bbox 의 위아래 범위를 쪽 너비 전체로 넓혀 읽는다. Docling 의 목차 영역은 오른쪽 끝 쪽 번호 열을
-        자주 빠뜨린다(기계설비 매뉴얼 3쪽에서 항목 30개 중 20여 개의 쪽 번호가 잘렸다, 2026-11-20)."""
+    def read_toc(self, page_no: int, bbox: tuple[float, float, float, float] | None) -> tuple[str, list[str]]:
+        """차례 영역의 원본 글(줄마다)과 그 가운데 옆 단 차례 줄. bbox 의 위아래 범위를 쪽 너비로 넓혀 읽는다.
+        Docling 의 목차 영역은 오른쪽 끝 쪽 번호 열을 자주 빠뜨린다(기계설비 매뉴얼 3쪽에서 항목 30개 중 20여 개의
+        쪽 번호가 잘렸다, 2026-11-20). 넓혀 읽은 글은 toc_columns 가 단마다 나눈다."""
         if bbox is None or self._failed:
-            return ""
+            return "", []
         try:
             if self._doc is None:
                 import fitz  # pymupdf
 
                 self._doc = fitz.open(str(self._path))
             if page_no < 1 or page_no > len(self._doc):
-                return ""
+                return "", []
             # 점선이 길면 쪽 번호가 쪽 오른쪽 끝 밖에 찍힌 PDF 도 있어(같은 매뉴얼) 오른쪽은 넉넉히 연다
             page = self._doc[page_no - 1]
             first_y, second_y = bbox[1], bbox[3]
@@ -449,11 +506,12 @@ class _NativeTextReader:
             # 왼쪽은 목차 영역에서 시작한다(옆 단·사이드바 글이 섞이지 않게). 오른쪽만 쪽 번호 열까지 넓힌다
             left = max(0.0, min(bbox[0], bbox[2]) - _TOC_LEFT_MARGIN)
             clip = fitz.Rect(left, first_y, page.rect.width * _TOC_RIGHT_OVERFLOW, second_y)
-            return _visual_lines(page.get_text("words", clip=clip))
+            main, side = toc_columns(_word_lines(page.get_text("words", clip=clip)), max(bbox[0], bbox[2]))
+            return "\n".join(main + side), side
         except Exception as exc:  # 보강일 뿐이다. 실패하면 Docling 표 칸 글로 대신한다
             self._failed = True
             self._warnings.append(f"목차 영역 원본 텍스트 읽기 실패: {exc}")
-            return ""
+            return "", []
 
     def lines_in(self, page_no: int, bbox: tuple[float, float, float, float] | None) -> list[TextLine]:
         """위쪽 원점 bbox 안의 원본 글자 줄. 글자 층이 없거나(스캔) 읽지 못하면 빈 목록이다."""
@@ -671,10 +729,29 @@ class DoclingAdapter(BaseAdapter):
                 )
             return pages_by_no[page_no]
 
+        # 표 제목으로 쓴 caption 항목. Docling 은 표의 caption 을 표 다음에 따로 돌려주어, 예전에는 같은 제목이 표
+        # 위와 표 뒤에 두 번 나왔다(정민산업 진단보고서 "[표 1] Air COMP. 현황", 2026-11-26 쪽별 중복 줄 대조)
+        used_captions: set[str] = set()
+        # 쪽 너비로 읽은 차례 줄(read_toc)의 높이 띠. 옆 단 항목을 Docling 이 본문 글로 또 돌려주면 건너뛴다
+        toc_bands: list[_TocBand] = []
         for item, _level in doc.iterate_items():
+            if getattr(item, "self_ref", None) in used_captions:
+                continue
             label = _item_label(item)
             page_no, bbox = _item_page_and_bbox(item)
             page = page_for(page_no)
+
+            def symbol_rows(rows, page_no=page_no):
+                return [[native_region.with_symbols(page_no, cell) if cell else cell for cell in row] for row in rows]
+
+            def table_title(own_title=None, item=item, page=page) -> str | None:
+                """표 제목. 선 표가 읽은 제목, Docling caption, 표 바로 위 제목 줄 순서로 고르고, 고른 글은 본문에
+                다시 나오지 않게 한다(caption 항목은 건너뛰고, 위 제목 줄은 본문 블록에서 뺀다)."""
+                caption = _table_caption(item, doc)
+                if caption and (not own_title or _squashed(own_title) == _squashed(caption)):
+                    used_captions.update(_caption_refs(item))
+                    return own_title or caption
+                return own_title or _take_preceding_caption(page, elements)
 
             if label in _TABLE_LABELS:
                 table_box = _top_left_bbox(item, page.height)
@@ -689,14 +766,13 @@ class DoclingAdapter(BaseAdapter):
                     ruled = None
                 if ruled is not None:
                     # 선으로 그린 표는 선 그대로 읽은 결과를 쓴다. 칸 안의 작은 표는 바로 뒤에 따로 낸다
-                    caption = _table_caption(item, doc) or _preceding_caption(page)
                     outer_id = _emit_table(
-                        page, elements, section_path, ruled.rows, list(ruled.spans) or None, bbox, "ruled_lines",
-                        ruled.title or caption,
+                        page, elements, section_path, symbol_rows(ruled.rows), list(ruled.spans) or None, bbox, "ruled_lines",
+                        table_title(ruled.title),
                     )
                     for t in ruled.nested:
                         _emit_table(
-                            page, elements, section_path, t.rows, list(t.spans) or None, bbox, "ruled_lines",
+                            page, elements, section_path, symbol_rows(t.rows), list(t.spans) or None, bbox, "ruled_lines",
                             t.title, parent_table_id=outer_id, parent_cell=t.host,
                         )
                     table_ordinal += 1 + len(ruled.nested)
@@ -713,8 +789,8 @@ class DoclingAdapter(BaseAdapter):
                         continue
                     table_ordinal += 1
                     _emit_table(
-                        page, elements, section_path, rows, spans, bbox, "docling_table",
-                        _table_caption(item, doc) or _preceding_caption(page),
+                        page, elements, section_path, symbol_rows(rows), spans, bbox, "docling_table",
+                        table_title(),
                     )
                 continue
 
@@ -757,17 +833,26 @@ class DoclingAdapter(BaseAdapter):
 
             if label in TOC_LABELS:
                 # 목차는 글이 표 칸에 담겨 text 가 비어 있다. 원본 글(없으면 표 칸)을 목차 줄 하나씩 낸다
-                lines = choose_toc_lines(native_text.read_full_width(page_no, bbox), grid_text(_table_grid(item)[0]))
+                toc_text, side_lines = native_text.read_toc(page_no, bbox)
+                lines = choose_toc_lines(toc_text, grid_text(_table_grid(item)[0]))
                 for line in lines:
-                    _emit_text(page, elements, section_path, label, line, bbox)
+                    _emit_text(page, elements, section_path, label, native_region.with_symbols(page_no, line), bbox)
+                if bbox and side_lines:
+                    kept = {" ".join(line.split()) for line in lines}
+                    side = tuple(_squashed(line) for line in side_lines if " ".join(line.split()) in kept)
+                    toc_bands.append(_TocBand(page_no, _vertical_span(bbox), max(bbox[0], bbox[2]), side))
                 continue
 
             text = (getattr(item, "text", "") or "").strip()
+            if _already_in_toc(toc_bands, page_no, bbox, text):
+                continue  # 쪽 너비로 읽은 차례 줄에 이미 든 옆 단 항목이다(Pub120bk 나라별 차례, 2026-11-26)
             region_text = native_region.read(page_no, bbox) if text else ""
             if text:
                 text = choose_spacing(text, region_text)
             if label in _LIST_ITEM_LABELS:
                 text = _with_list_marker(item, text, region_text)
+            # 기호 글꼴 코드(U+F0xx)는 그 쪽에서 그린 글꼴(Wingdings 등)의 화면 글자로 적는다(2026-11-26)
+            text = native_region.with_symbols(page_no, text)
             if label in _HEADING_LABELS:
                 section_path = [text] if text else section_path
             _emit_text(page, elements, section_path, label, text, bbox, level=getattr(item, "level", None))

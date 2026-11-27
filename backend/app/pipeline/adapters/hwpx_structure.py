@@ -13,6 +13,7 @@
 import re
 from dataclasses import dataclass, field
 
+from app.pipeline.adapters.symbol_fonts import hancom_symbol_kind, symbol_char, with_symbol_font_chars
 from app.pipeline.adapters.table_merge import fill_columns
 
 BODY_FONT_FALLBACK = 10.0
@@ -60,18 +61,73 @@ class HwpxStyles:
     style_names: dict[str, str] = field(default_factory=dict)
     # 문단 모양 id → 그 문단 앞에 붙는 글머리표 글("-", "•")
     para_marks: dict[str, str] = field(default_factory=dict)
+    # 글자 모양 id → 기호 글꼴 코드(U+F020~F0FF)를 읽을 기호 글꼴 종류("wingdings", "symbol")
+    symbol_kinds: dict[str, str] = field(default_factory=dict)
 
 
-# 글머리표 글자가 기호 글꼴(Wingdings 등)의 사설 영역 글자면 화면처럼 "•" 로 적는다
+# 글머리표 글자가 기호 글꼴의 사설 영역 글자면 Wingdings 표의 글자로 적고(❍, ❑, •), 표에 없으면 "•" 로 적는다
 _PRIVATE_USE = range(0xE000, 0xF900)
 _DEFAULT_BULLET = "•"
 
 
 def _bullet_text(char: str) -> str:
     char = (char or "").strip()
-    if not char or any(ord(c) in _PRIVATE_USE for c in char):
+    if not char:
         return _DEFAULT_BULLET
+    if any(ord(c) in _PRIVATE_USE for c in char):
+        return symbol_char(char, "wingdings") or _DEFAULT_BULLET
     return char
+
+
+def _fontface_names(header_root) -> dict[str, list[str]]:
+    """언어 무리(SYMBOL, USER 등) → 글꼴 이름 목록(id 순서)."""
+    names: dict[str, list[str]] = {}
+    for fontface in header_root.iter():
+        if local_tag(fontface) != "fontface":
+            continue
+        fonts = [font for font in fontface if local_tag(font) == "font"]
+        names[(fontface.get("lang") or "").upper()] = [font.get("face") or "" for font in fonts]
+    return names
+
+
+def _font_name(names: dict[str, list[str]], lang: str, index: str | None) -> str | None:
+    fonts = names.get(lang, [])
+    try:
+        return fonts[int(index)] if index is not None else None
+    except (ValueError, IndexError):
+        return None
+
+
+def _symbol_kinds(header_root) -> dict[str, str]:
+    """글자 모양(charPr)마다 기호 글꼴 코드를 읽을 글꼴 종류. 기호·사용자 글자 무리의 글꼴을 본다."""
+    names = _fontface_names(header_root)
+    kinds: dict[str, str] = {}
+    for char_pr in header_root.iter():
+        if local_tag(char_pr) != "charPr" or char_pr.get("id") is None:
+            continue
+        ref = next((child for child in char_pr if local_tag(child) == "fontRef"), None)
+        fonts = [] if ref is None else [
+            _font_name(names, "SYMBOL", ref.get("symbol")), _font_name(names, "USER", ref.get("user")),
+        ]
+        kinds[char_pr.get("id")] = hancom_symbol_kind(fonts)
+    return kinds
+
+
+def add_symbol_chars(section_root, styles: "HwpxStyles") -> None:
+    """본문 글 조각(<t>)의 기호 글꼴 코드를 화면에 보이는 글자로 바꾼다(symbol_fonts.py). 글자 묶음(run)의 글자 모양으로
+    글꼴 종류를 고르고, 모르면 한글 문서의 쓰임새대로 Wingdings 로 읽는다. section_root 는 방금 푼 XML 이다."""
+    for run in section_root.iter():
+        if local_tag(run) != "run":
+            continue
+        kind = styles.symbol_kinds.get(run.get("charPrIDRef") or "", "wingdings")
+        for piece in run:
+            if local_tag(piece) != "t":
+                continue
+            if piece.text:
+                piece.text = with_symbol_font_chars(piece.text, kind)
+            for child in piece:
+                if child.tail:
+                    child.tail = with_symbol_font_chars(child.tail, kind)
 
 
 def _paragraph_marks(header_root) -> dict[str, str]:
@@ -132,7 +188,7 @@ def load_styles(header_root) -> HwpxStyles:
                 outline_levels[elem.get("id")] = level
     return HwpxStyles(
         char_shapes=char_shapes, outline_levels=outline_levels, style_names=style_names,
-        para_marks=_paragraph_marks(header_root),
+        para_marks=_paragraph_marks(header_root), symbol_kinds=_symbol_kinds(header_root),
     )
 
 

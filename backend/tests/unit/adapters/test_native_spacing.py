@@ -167,3 +167,60 @@ def test_region_reader_reports_once_and_gives_up_on_a_broken_file(tmp_path):
     assert reader.read(1, (0.0, 0.0, 10.0, 10.0)) == ""
     assert reader.read(1, (0.0, 0.0, 10.0, 10.0)) == ""
     assert len(warnings) == 1
+
+
+def test_symbol_font_codes_on_a_page_are_read_by_the_font_they_are_drawn_with():
+    # 법령심사 PDF 는 " 법제처의 업무" 를 Wingdings 로, 세원화성 PDF 는 " 고효율변압기" 를 이름을 가린 내장
+    # 글꼴(CIDFont+F4, 실제 이름 Wingdings)로 그렸다. 파싱 본문에는 코드가 남아 빈칸으로 보였다(2026-11-26)
+    from app.pipeline.adapters.native_spacing import page_symbol_chars
+
+    real_names = {"CIDFont+F4": "Wingdings Regular", "CIDFont+F2": "Gulim Regular"}
+    spans = [("Wingdings", ""), ("CIDFont+F4", ""), ("CIDFont+F2", "법제처"), ("SymbolMT", "")]
+
+    assert page_symbol_chars(spans, real_names.get) == {"": "●", "": "•", "": "✓", "": "μ"}
+
+
+def test_symbol_codes_drawn_with_an_unknown_font_on_the_page_are_left_alone():
+    # 같은 코드가 표를 모르는 글꼴(아이콘 글꼴 Type3, 수식 글꼴)에도 쓰였으면 어느 글자인지 모르므로 바꾸지 않는다
+    from app.pipeline.adapters.native_spacing import page_symbol_chars
+
+    spans = [("Wingdings", ""), ("Type3", ""), ("Type3", ""), ("HCRDotum", "")]
+
+    assert page_symbol_chars(spans, lambda name: None) == {}
+
+
+def test_text_read_inside_a_picture_gets_the_symbol_font_glyphs(monkeypatch):
+    # 그림 영역 안 글은 NativeRegionReader 를 거치지 않아 "" 가 청크에 빈칸으로 남았다(2026-11-26)
+    from app.pipeline.adapters import native_spacing
+
+    class _Page:
+        def get_fonts(self, full=True):
+            return []
+
+    monkeypatch.setattr(native_spacing, "_page_chars", lambda page: [
+        {"font": "Wingdings", "text": ""}, {"font": "Malgun Gothic", "text": "법"},
+    ])
+
+    assert native_spacing.with_page_symbols(None, _Page(), " 법제처의 업무") == "● 법제처의 업무"
+    assert native_spacing.with_page_symbols(None, _Page(), "기호 없는 글") == "기호 없는 글"
+
+
+def test_pdf_symbol_pages_maps_codes_for_the_pdfplumber_path(monkeypatch, tmp_path):
+    # pdf_adapter(pdfplumber) 경로에는 바꾸는 단계가 없어 법령심사 PDF 의 "●" 가 코드로 남았다(2026-11-26)
+    import fitz
+
+    from app.pipeline.adapters import native_spacing
+
+    path = tmp_path / "one.pdf"
+    with fitz.open() as pdf:
+        pdf.new_page()
+        pdf.save(str(path))
+    monkeypatch.setattr(native_spacing, "page_symbol_map", lambda doc, page, cache: {"": "●"})
+    warnings: list[str] = []
+    pages = native_spacing.PdfSymbolPages(path, warnings)
+
+    symbols = pages.for_page(1)
+    pages.close()
+
+    assert native_spacing.with_symbol_map(" 법제처", symbols) == "● 법제처"
+    assert native_spacing.with_symbol_map("그대로", {}) == "그대로" and warnings == []
