@@ -33,6 +33,8 @@ _PROCESSING_STATUSES = {
 # 검토 대기: 워크플로우의 WAITING_REVIEW 와 옛 고정 파이프라인의 REVIEW_PENDING(화면 거르기 "검토대기" 와 같은 묶음)
 _REVIEW_STATUSES = {"WAITING_REVIEW", "REVIEW_PENDING"}
 _PROCESSING_STATS_WINDOW = timedelta(hours=24)
+# 전처리 실행 뒤 자동으로 이어지는 분석 실행. 처리 한 번에 딸린 실행이라 처리 수로 세지 않는다
+_ANALYSIS_TRIGGER = "AUTO_ANALYSIS"
 
 
 class BlockStat(BaseModel):
@@ -119,19 +121,28 @@ async def get_processing_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """최근 24시간 처리 현황 — 와이어프레임 §9 위젯. 관리자 전용이 아니라 /stats와
-    동일하게 current_user 소유 문서로 스코프한다(§0: '문서 처리' 그룹, 관리 그룹 아님)."""
-    user_id = str(current_user.id)
+    """최근 24시간 처리 현황 — 와이어프레임 §9 위젯.
+
+    문서 목록과 같은 가시성(document_visibility_clause)으로 센다. 예전에는 본인이 올린 문서만 세어, 관리자는 볼 수 있는
+    문서 70건 가운데 본인 업로드 37건만 셌고 "검토 대기" 수가 사이드바 배지와 달랐다(2026-11-27). 검토 대기 수는 배지처럼
+    이전 버전 문서를 빼고 센다.
+
+    처리 한 번은 전처리 실행(업로드·수동·재처리)과 그 뒤 자동으로 이어지는 분석 실행(AUTO_ANALYSIS) 둘이다. 실패율·
+    재처리율의 분모와 큐 대기는 전처리 실행으로 센다. 실행 수를 그대로 쓰면 재처리만 한 날도 재처리율이 50% 를 넘지
+    못하고 실패율·큐 대기는 절반으로 나왔다. 실패는 두 실행 가운데 어느 쪽이 실패해도 그 처리의 실패다."""
+    ctx = await build_access_context(db, current_user)
+    visible = document_visibility_clause(ctx)
     since = datetime.now(timezone.utc).replace(tzinfo=None) - _PROCESSING_STATS_WINDOW
 
     runs_in_window = (
         select(WorkflowRun)
         .join(Document, WorkflowRun.document_id == Document.id)
-        .where(Document.created_by == user_id, WorkflowRun.created_at >= since)
+        .where(visible, WorkflowRun.created_at >= since)
         .subquery()
     )
+    is_processing = runs_in_window.c.trigger != _ANALYSIS_TRIGGER
 
-    total_runs = await db.scalar(select(func.count(runs_in_window.c.id))) or 0
+    total_processings = await db.scalar(select(func.count(runs_in_window.c.id)).where(is_processing)) or 0
     processed_documents = await db.scalar(
         select(func.count(func.distinct(runs_in_window.c.document_id))).where(
             runs_in_window.c.status == "COMPLETED"
@@ -147,22 +158,23 @@ async def get_processing_stats(
     ) or 0
     avg_queue_seconds = await db.scalar(
         select(func.avg(func.extract("epoch", runs_in_window.c.started_at - runs_in_window.c.created_at)))
-        .where(runs_in_window.c.started_at.is_not(None))
+        .where(is_processing, runs_in_window.c.started_at.is_not(None))
     )
 
-    failure_rate = failed_runs / total_runs if total_runs else 0.0
-    reprocess_rate = reprocess_runs / total_runs if total_runs else 0.0
+    # 기간 앞에서 시작한 처리의 분석 실행만 기간 안에 실패하면 분모보다 커질 수 있어 1 을 넘지 않게 한다
+    failure_rate = min(failed_runs / total_processings, 1.0) if total_processings else 0.0
+    reprocess_rate = reprocess_runs / total_processings if total_processings else 0.0
 
     avg_quality = await db.scalar(
         select(func.avg(QualityReport.overall_score))
         .select_from(QualityReport)
         .join(Document, QualityReport.document_id == Document.id)
-        .where(Document.created_by == user_id, QualityReport.created_at >= since)
+        .where(visible, QualityReport.created_at >= since)
     )
 
     waiting_review_count = await db.scalar(
         select(func.count(Document.id)).where(
-            Document.created_by == user_id, Document.status == "WAITING_REVIEW"
+            visible, Document.lifecycle_state != LIFECYCLE_SUPERSEDED, Document.status == "WAITING_REVIEW"
         )
     ) or 0
 
@@ -193,7 +205,7 @@ async def get_processing_stats(
             .join(WorkflowRun, WorkflowRunStep.run_id == WorkflowRun.id)
             .join(Document, WorkflowRun.document_id == Document.id)
             .join(WorkflowBlockInstance, WorkflowRunStep.block_instance_id == WorkflowBlockInstance.id)
-            .where(Document.created_by == user_id, WorkflowRun.created_at >= since)
+            .where(visible, WorkflowRun.created_at >= since)
             .group_by(WorkflowBlockInstance.block_type)
         )
     ).all()
@@ -213,7 +225,7 @@ async def get_processing_stats(
             .select_from(WorkflowRun)
             .join(Document, WorkflowRun.document_id == Document.id)
             .where(
-                Document.created_by == user_id,
+                visible,
                 WorkflowRun.status == "FAILED",
                 WorkflowRun.created_at >= since,
             )

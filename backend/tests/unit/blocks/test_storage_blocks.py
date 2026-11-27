@@ -336,7 +336,7 @@ def test_rag_store_closes_db_on_embedding_error():
 def test_block_metadata():
     split, store = sb.ChunkSplitBlock(), sb.RagStoreBlock()
     assert (split.block_type, store.block_type) == ("chunk_split", "rag_store")
-    assert split.block_version == "1.11.0" and store.block_version == "1.4.0"
+    assert split.block_version == "1.12.0" and store.block_version == "1.4.0"
     assert split.category == store.category == "분할·저장"
     assert split.config_schema is sb.ChunkSplitConfig
     assert store.config_schema is sb.RagStoreConfig
@@ -406,7 +406,7 @@ def test_structure_chunks_follow_the_normalized_text():
                         settings=("m", 200, 10, 0, "size"))
 
     child = [r for r in _added(db) if r.chunk_tier == "child"][0]
-    assert child.original_text.startswith("이 사업은")
+    assert child.original_text.startswith("1. 사업 개요\n\n이 사업은")  # 본문이 있는 제목도 청크 글에 담는다
     assert child.original_text.endswith("2억 원입니다.")
 
 

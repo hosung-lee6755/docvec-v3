@@ -224,10 +224,12 @@ def test_a_heading_without_body_is_kept_in_chunk_text():
     assert "효력기간) 본 협정서는 서명과 동시에 발효한다." in joined
     assert "제8조(거래계좌) 선금은 다음 계좌로 받는다." in joined
     assert "계좌번호 123, 예금주 홍" in joined
-    # 본문이 있는 제목은 예전처럼 구획 경로로만 남는다
-    assert "제3조(구성원)" not in joined and "제9조(출자비율)" not in joined
+    # 본문이 있는 제목도 그 구획 첫 청크 앞에 담긴다. 구획 경로는 LLM 발췌문에 들어가지 않아 "제11조(요양보상) ① …"
+    # 같은 조문 첫 항이 답변 근거에서 빠졌다(복리후생규정 등 문서 89건, 2026-11-27)
+    assert "제3조(구성원) ①구성원은 다음과 같다." in joined
     last = spans[-1]
-    assert last.text.strip() == "가 : 60%" and last.section_path == ["제9조(출자비율) ①출자비율은 다음과 같다."]
+    assert last.text.strip() == "제9조(출자비율) ①출자비율은 다음과 같다.\n\n가 : 60%"
+    assert last.section_path == ["제9조(출자비율) ①출자비율은 다음과 같다."]
     orphan = next(s for s in spans if "효력기간" in s.text)
     assert orphan.section_path == []
 

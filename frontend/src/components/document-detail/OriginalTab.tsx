@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { PdfPageViewer } from './PdfPageViewer'
+import { ZoomableTextPane } from './ZoomableTextPane'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import { markdownPlugins } from '../../lib/markdownPlugins'
 import { MarkdownLink } from './MarkdownLink'
@@ -184,7 +185,10 @@ export default function OriginalTab({
             </p>
             <ViewModeToggle showJson={showJson} onChange={onShowJsonChange} />
           </div>
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'auto', overflowWrap: 'anywhere', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-3)', background: showJson ? 'var(--color-surface-subtle)' : 'var(--color-surface)' }}>
+          <ZoomableTextPane
+            contentKey={`${clampedPage}|${showJson}|${isContentLoading}|${chunksResult ? 'chunks' : ''}|${content?.full_text.length ?? 0}`}
+            background={showJson ? 'var(--color-surface-subtle)' : 'var(--color-surface)'}
+          >
             {isContentLoading && (
               <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-6)' }}>
                 <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--color-text-muted)' }} />
@@ -218,7 +222,7 @@ export default function OriginalTab({
                 ))}
               </div>
             )}
-          </div>
+          </ZoomableTextPane>
         </div>
       </div>
     </div>

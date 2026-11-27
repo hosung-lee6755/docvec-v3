@@ -538,3 +538,10 @@ def test_preview_url_html_fallback_result_is_cached_as_html(storage):
 
     assert storage.upload_file.call_args.args[1] == "preview/v2/d1.html"
     assert out == ("https://signed/preview/v2/d1.html", "html", True)
+
+
+def test_generate_preview_draws_an_hwpx_file_named_hwp_as_hwpx():
+    # 이름은 .hwp 인데 내용이 HWPX(ZIP)인 파일은 HWPX 변환기로 그린다(2026-11-27)
+    with patch.dict(ps._PDF_CONVERTERS, {".hwp": lambda raw: b"HWP", ".hwpx": lambda raw: b"HWPX"}):
+        assert ps._generate_preview(".hwp", b"PK\x03\x04rest")[0] == b"HWPX"
+        assert ps._generate_preview(".hwp", bytes.fromhex("d0cf11e0a1b11ae1"))[0] == b"HWP"

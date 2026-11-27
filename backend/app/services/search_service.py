@@ -87,7 +87,8 @@ async def perform_search(
     else:
         scope = await accessible_collection_ids(db, user, project_id=request.project_id)
         if not scope:
-            return []
+            # 볼 수 있는 컬렉션이 없으면 빈 결과다. 예전에는 빈 목록을 돌려 응답 형식 검사에서 500 이 났다(2026-11-27)
+            return SearchResponse(items=[], expanded_query=expanded_query, added_terms=added_terms, applied=applied)
 
     # v3 권한: 검색 단계에서 보안등급·ACL로 거르고(qdrant_access_filter), 결과는 Postgres
     # 기준으로 한 번 더 확인한다(페이로드 동기화가 늦어도 누출되지 않게 — fail-closed).
@@ -143,6 +144,7 @@ async def perform_search(
         candidates = candidates[: request.limit]
 
     evidence = await _result_evidence(db, expanded_query, candidates)
+    places = await _result_places(db, candidates)
     results = [
         SearchResultItem(
             chunk_id=c["chunk_id"],
@@ -153,8 +155,9 @@ async def perform_search(
             bm25_score=c.get("bm25_score"),
             final_score=c.get("final_score"),
             evidence=item_evidence,
+            **place,
         )
-        for c, item_evidence in zip(candidates, evidence)
+        for c, item_evidence, place in zip(candidates, evidence, places)
     ]
 
     db.add(
@@ -184,6 +187,34 @@ async def _result_evidence(db: AsyncSession, query: str, candidates: list[dict])
          **ocr_evidence(confidences, c["document_id"], c["metadata"].get("page_number"))}
         for c, matched in zip(candidates, terms)
     ]
+
+
+async def _result_places(db: AsyncSession, candidates: list[dict]) -> list[dict]:
+    """결과마다 프로젝트·컬렉션·문서 이름, 쪽 범위, 절 경로. 채팅 인용과 같은 정보다(2026-11-27).
+    청크 행을 찾지 못하면(예전 색인) 페이로드의 시작 쪽만 쓴다."""
+    from app.services.source_places import chunk_places, collection_places
+
+    if not candidates:
+        return []
+    collections = await collection_places(db, {c["metadata"].get("collection_id") for c in candidates} - {None})
+    chunks = await chunk_places(db, {str(c["chunk_id"]): c["document_id"] for c in candidates})
+    places = []
+    for c in candidates:
+        meta = c["metadata"]
+        col = collections.get(str(meta.get("collection_id")))
+        chunk = chunks.get(str(c["chunk_id"]))
+        page = (chunk.page_start if chunk else None) or meta.get("page_number")
+        places.append({
+            "filename": meta.get("filename"),
+            "collection_id": meta.get("collection_id"),
+            "collection_name": col.collection_name if col else None,
+            "project_id": col.project_id if col else None,
+            "project_name": col.project_name if col else None,
+            "page_number": page if isinstance(page, int) else None,
+            "page_end": chunk.page_end if chunk else None,
+            "section_path": chunk.section_path if chunk else None,
+        })
+    return places
 
 
 async def list_search_history(

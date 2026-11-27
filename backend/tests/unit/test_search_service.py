@@ -295,3 +295,22 @@ async def test_applied_settings_are_not_labelled_as_collection_settings_when_ove
             db, user, SearchRequest(query="q", mode="vector", collection_id=uuid4()))
 
     assert response.applied.mode == "vector" and response.applied.from_collection is False
+
+
+@pytest.mark.asyncio
+async def test_perform_search_without_any_visible_collection_returns_an_empty_response():
+    # 2026-11-27: 볼 수 있는 컬렉션이 없으면 빈 목록([])을 돌려 SearchResponse 응답 형식 검사에서 500 이 났다
+    user = MagicMock(id=uuid4())
+    db = AsyncMock()
+    db.add = MagicMock()
+
+    with (
+        patch("app.services.search_service.get_embedding_provider") as mock_provider,
+        patch("app.services.search_service.qdrant_service") as mock_qdrant,
+        patch("app.services.search_service.accessible_collection_ids", new=AsyncMock(return_value=[])),
+    ):
+        mock_provider.return_value.embed.return_value = [[0.1, 0.2, 0.3]]
+        response = await search_service.perform_search(db, user, SearchRequest(query="hello", limit=5))
+
+    assert response.items == [] and response.expanded_query == "hello"
+    mock_qdrant.search.assert_not_called()

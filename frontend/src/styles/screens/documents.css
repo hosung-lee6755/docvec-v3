@@ -197,3 +197,13 @@
   justify-content: center;
   padding: var(--space-8) 0;
 }
+
+/* 상세에서 돌아왔을 때 방금 연 문서 행을 잠깐 표시한다(2026-11-27) */
+@keyframes documents-recent-row {
+  from { background: var(--color-primary-subtle); box-shadow: inset 3px 0 0 var(--color-primary); }
+  to { background: transparent; box-shadow: inset 3px 0 0 var(--color-primary); }
+}
+.ds-table tbody tr.is-recent { animation: documents-recent-row 2.4s ease-out; box-shadow: inset 3px 0 0 var(--color-primary); }
+@media (prefers-reduced-motion: reduce) {
+  .ds-table tbody tr.is-recent { animation: none; background: var(--color-primary-subtle); }
+}

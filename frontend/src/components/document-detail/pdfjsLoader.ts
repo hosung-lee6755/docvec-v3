@@ -23,7 +23,9 @@ export interface PdfDocumentProxy {
 export async function loadPdfDocument(url: string): Promise<PdfDocumentProxy> {
   const pdfjs = await import('pdfjs-dist')
   const { default: workerSrc } = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
-  pdfjs.GlobalWorkerOptions.workerSrc = workerSrc
+  // 2026-11-27 전에는 nginx 가 .mjs 를 application/octet-stream 으로 보내 작업 파일이 실행되지 않았다. 그 응답이
+  // 브라우저에 1년짜리 캐시로 남아 있을 수 있으므로 주소를 바꿔 새로 받게 한다(nginx 는 쿼리를 보지 않는다)
+  pdfjs.GlobalWorkerOptions.workerSrc = `${workerSrc}?mime=js`
   const document = await pdfjs.getDocument({ url }).promise
   return document as unknown as PdfDocumentProxy
 }

@@ -513,8 +513,14 @@ class HWPAdapter(BaseAdapter):
     def extract(self, file_path: Path, options: dict) -> RawParsedDocument:
         # 두 형식 모두 metadata["line_layout"]에 문단별 글자 크기, 굵기, 개요 수준을 채운다. HWPX는 XML에서
         # 직접 읽고(hwpx_structure.py), 구형 HWP는 pyhwp가 만든 XML에서 읽는다(hwp5_structure.py, 2026-11-17).
-        suffix = file_path.suffix.lower()
-        if suffix == ".hwpx":
+        from app.pipeline.formats import hwp_suffix_by_content
+
+        try:
+            with open(file_path, "rb") as fh:
+                head = fh.read(8)
+        except OSError:
+            head = b""
+        if hwp_suffix_by_content(file_path.suffix.lower(), head) == ".hwpx":
             return self._extract_hwpx(file_path)
         return self._extract_hwp(file_path)
 

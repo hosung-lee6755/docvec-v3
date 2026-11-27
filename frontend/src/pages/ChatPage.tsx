@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Send, FileText, Settings as SettingsIcon, Plus, Pencil, Trash2, Check, X, ChevronDown, ChevronUp, FolderOpen } from 'lucide-react'
+import { Send, Settings as SettingsIcon, Plus, Pencil, Trash2, Check, X, ChevronDown, ChevronUp } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useCollections } from '../hooks/useCollections'
 import {
@@ -18,7 +18,7 @@ import { useAnswerStream } from '../hooks/useAnswerStream'
 import { DeepSearchProgress, DeepSearchSteps, DeepSearchToggle } from '../components/chat/DeepSearch'
 import { CitationEvidence, LowOcrBadge } from '../components/chat/CitationEvidence'
 import { CitationLocation } from '../components/chat/CitationLocation'
-import { formatCitationPlace } from '../components/chat/citationMeta'
+import { SourcePlace } from '../components/chat/SourcePlace'
 import { AnswerFeedback } from '../components/chat/AnswerFeedback'
 import { Alert, Badge, Button, ErrorAlert, ErrorText, IconButton, Input, Page, PageTitle, Select, buttonClass } from '../components/ui'
 import { explainFailure } from '../lib/apiError'
@@ -438,17 +438,7 @@ function ChatMessageBubble({ message: chat }: { message: ChatMessage }) {
                     >
                       <div className="user-chat__cite-meta">
                         <span className="user-chat__cite-index">[{c.index}]</span>
-                        {c.collection_name && (
-                          <span className="user-chat__cite-file">
-                            <FolderOpen size={12} />
-                            {c.collection_name}
-                          </span>
-                        )}
-                        <span className="user-chat__cite-file">
-                          <FileText size={12} />
-                          {c.filename ?? '문서'}
-                        </span>
-                        {formatCitationPlace(c) ? <span>{formatCitationPlace(c)}</span> : null}
+                        <SourcePlace {...c} />
                         <LowOcrBadge evidence={c.evidence} />
                         <span className="user-chat__spacer" />
                         {c.document_id && (

@@ -147,6 +147,53 @@ async def test_processing_stats_aggregates_runs_quality_blocks_and_failures(worl
 
 
 @pytest.mark.asyncio
+async def test_processing_stats_counts_a_processing_once_not_its_follow_up_analysis_run(world):
+    # 처리 한 번은 전처리 실행과 그 뒤 자동 분석 실행(AUTO_ANALYSIS) 둘이다. 실행 수를 분모로 써서 재처리만 한 날도
+    # 재처리율이 50%, 실패율과 큐 대기는 절반으로 나왔다(2026-11-27 처리 현황 검증)
+    db, owner = world["db"], world["owner"]
+    wf = await make_workflow(db, owner, None)
+    version = await make_version(db, wf, owner, published=True)
+    col = await make_collection(db, owner, None)
+    redone = await make_document(db, owner, col)
+    broken = await make_document(db, owner, col)
+    await _run(db, version, redone, "COMPLETED", trigger="REPROCESS", started_at=NOW + timedelta(seconds=10))
+    await _run(db, version, redone, "COMPLETED", trigger="AUTO_ANALYSIS", started_at=NOW)
+    await _run(db, version, broken, "COMPLETED", trigger="REPROCESS", started_at=NOW + timedelta(seconds=20))
+    await _run(db, version, broken, "FAILED", trigger="AUTO_ANALYSIS", started_at=NOW, error_message="x")
+
+    result = await api.get_processing_stats(db, owner)
+
+    assert result.reprocess_rate == 1.0
+    assert result.failure_rate == 0.5
+    assert result.avg_queue_seconds == pytest.approx(15.0)
+
+
+@pytest.mark.asyncio
+async def test_processing_stats_cover_the_documents_the_list_shows(world):
+    # 본인이 올린 문서만 세어, 관리자는 볼 수 있는 문서 70건 가운데 본인 업로드 37건만 셌고 검토 대기 수가 사이드바
+    # 배지(문서 목록의 WAITING_REVIEW 수)와 달랐다(2026-11-27). 문서 목록과 같은 가시성으로 센다
+    db, owner, other = world["db"], world["owner"], world["other"]
+    wf = await make_workflow(db, other, None)
+    version = await make_version(db, wf, other, published=True)
+    project = await make_project(db, other, "shared")
+    await add_member(db, project, owner, "viewer", other)
+    shared_col = await make_collection(db, other, project, name="shared-col")
+    shared = await make_document(db, other, shared_col, status="WAITING_REVIEW")
+    await _run(db, version, shared, "FAILED", error_message="boom")
+    hidden = await make_document(db, other, await make_collection(db, other, None, name="private"), status="WAITING_REVIEW")
+    await _run(db, version, hidden, "FAILED", error_message="secret")
+    old = await make_document(db, other, shared_col, status="WAITING_REVIEW")
+    old.lifecycle_state = "superseded"
+    await db.flush()
+
+    result = await api.get_processing_stats(db, owner)
+
+    assert result.waiting_review_count == 1
+    assert [f.error_message for f in result.recent_failures] == ["boom"]
+    assert result.failure_rate == 1.0
+
+
+@pytest.mark.asyncio
 async def test_processing_stats_scoped_to_current_user(world):
     db, owner, other = world["db"], world["owner"], world["other"]
     wf = await make_workflow(db, owner, None)

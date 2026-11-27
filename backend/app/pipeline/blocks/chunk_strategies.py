@@ -393,6 +393,7 @@ def _tree_based_chunks(
     chunks: list[ChunkSpan] = []
     stack: list[tuple[int, str]] = []  # (level, heading_text) — 조상 제목 경로
     table_node_ids = {str(n.id) for n in nodes if getattr(n, "node_type", None) == "TABLE"}
+    heading_node_ids = {str(n.id) for n in nodes if getattr(n, "node_type", None) == "HEADING"}
     body_less_headings = _headings_without_body(nodes)
 
     buf_node_ids: list[str] = []
@@ -504,7 +505,11 @@ def _tree_based_chunks(
                 stack.pop()
             if str(node.id) not in body_less_headings:
                 stack.append((level, node.text or ""))
-                continue
+                if include_previous_heading or tables_only:
+                    continue  # 제목 글은 청크 앞 경로 머리말로 들어간다
+                # 본문이 있는 제목도 그 구획 첫 청크의 글로 담는다. 구획 경로는 LLM 에 주는 발췌문에 들어가지 않아,
+                # "제11조(요양보상) ① 임․직원이 …"처럼 제목으로 분류된 조문 첫 항이 답변 근거에서 빠졌다
+                # (문서 104건 가운데 89건, 2026-11-27)
             # 아래에 본문이 없는 제목은 어느 청크의 구획 경로에도 들어가지 않으므로 문단처럼 담는다
 
         if node.span_start is None or node.span_end is None:
@@ -521,7 +526,10 @@ def _tree_based_chunks(
         open_tail = False
 
         if is_table and preserve_table:
-            flush()
+            # 표 바로 앞에 제목만 남아 있으면 그 표의 제목이므로 표 청크 앞에 붙인다(제목만 든 짧은 청크를 만들지 않는다)
+            title_only = bool(buf_node_ids) and set(buf_node_ids) <= heading_node_ids
+            if not (title_only and (buf_end - buf_start) + node_len <= max_chars):
+                flush()
             if node_len > max_chars and split_long_paragraph:
                 split_oversized(node)
             else:

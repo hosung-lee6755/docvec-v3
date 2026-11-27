@@ -1,12 +1,14 @@
 ﻿import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, History, FileText } from 'lucide-react'
+import { Search, History, ExternalLink } from 'lucide-react'
 import { apiClient } from '../lib/apiClient'
 import { useCollections } from '../hooks/useCollections'
 import { useAllTags } from '../hooks/useDocuments'
 import { useSearchHistory } from '../hooks/useSearchHistory'
 import { CitationEvidence, LowOcrBadge, type RetrievalEvidence } from '../components/chat/CitationEvidence'
+import { CitationLocation } from '../components/chat/CitationLocation'
+import { SourcePlace } from '../components/chat/SourcePlace'
 import { Badge, Button, EmptyState, ErrorAlert, FilterChip, Input, Page, PageBody, PageHeader, SearchInput, Segmented, Select, Toolbar } from '../components/ui'
 import '../styles/screens/user.css'
 
@@ -20,6 +22,19 @@ interface SearchResult {
   final_score: number | null
   // v3 마일스톤 6: 질문과 겹친 낱말, 그 쪽의 OCR 신뢰도
   evidence?: RetrievalEvidence | null
+  // 출처 위치(2026-11-27): 채팅 인용과 같은 정보
+  filename?: string | null
+  collection_name?: string | null
+  project_id?: string | null
+  project_name?: string | null
+  page_number?: number | null
+  page_end?: number | null
+  section_path?: string[] | null
+}
+
+function resultFilename(result: SearchResult): string {
+  if (result.filename) return result.filename
+  return typeof result.metadata.filename === 'string' ? result.metadata.filename : `문서 ${result.document_id.slice(0, 8)}...`
 }
 
 interface AppliedSearchSettings {
@@ -55,8 +70,10 @@ function appliedSummary(applied: AppliedSearchSettings): string {
 }
 
 export default function SearchPage() {
-  const navigate = useNavigate()
   const { projectId } = useParams<{ projectId?: string }>()
+  // 문서 열기는 새 탭으로 연다. 검색 결과를 잃지 않게 채팅의 인용과 같게 했다(2026-11-27)
+  const documentPath = (documentId: string) =>
+    projectId ? `/projects/${projectId}/documents/${documentId}` : `/documents/${documentId}`
   const [query, setQuery] = useState('')
   const [collectionId, setCollectionId] = useState('')
   const [mode, setMode] = useState<SearchMode>('vector')
@@ -247,25 +264,32 @@ export default function SearchPage() {
                 검색 방식: {appliedSummary(search.data.applied)}
               </p>
             )}
-            {search.data.items.map((result) => (
+            {search.data.items.map((result, i) => (
               <div key={result.chunk_id} className="user-search__result">
-                <div className="user-search__result-head">
+                {/* 채팅 인용과 같은 머리줄: 프로젝트 · 컬렉션 · 문서 · 쪽과 절 경로, 위치 보기, 문서 열기(2026-11-27) */}
+                <div className="user-chat__cite-meta user-search__result-head">
+                  <span className="user-chat__cite-index">[{i + 1}]</span>
+                  <SourcePlace {...result} filename={resultFilename(result)} />
+                  <LowOcrBadge evidence={result.evidence} />
+                  <span className="user-chat__spacer" />
+                  <Badge tone="neutral">
+                    {((result.final_score ?? result.score) * 100).toFixed(1)}%
+                    {result.bm25_score != null && ' (하이브리드)'}
+                  </Badge>
+                  <CitationLocation
+                    documentId={result.document_id}
+                    chunkId={result.chunk_id}
+                    filename={resultFilename(result)}
+                    index={i + 1}
+                  />
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => navigate(projectId ? `/projects/${projectId}/documents/${result.document_id}` : `/documents/${result.document_id}`)}
-                    title="문서 상세보기"
-                    icon={<FileText size={12} />}
+                    icon={<ExternalLink size={13} />}
+                    onClick={() => window.open(documentPath(result.document_id), '_blank', 'noopener')}
                   >
-                    {typeof result.metadata.filename === 'string' ? result.metadata.filename : `문서 ${result.document_id.slice(0, 8)}...`}
+                    문서 열기
                   </Button>
-                  <span className="user-search__result-badges">
-                    <LowOcrBadge evidence={result.evidence} />
-                    <Badge tone="neutral">
-                      {((result.final_score ?? result.score) * 100).toFixed(1)}%
-                      {result.bm25_score != null && ' (하이브리드)'}
-                    </Badge>
-                  </span>
                 </div>
                 {showScores && (
                   <div className="user-search__chips">

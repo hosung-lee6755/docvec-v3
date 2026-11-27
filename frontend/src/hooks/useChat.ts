@@ -14,6 +14,8 @@ export interface ChatCitation {
   document_id: string | null
   collection_id: string | null
   collection_name: string | null
+  // 프로젝트 밖 컬렉션이나 가린 인용에는 없다(2026-11-27)
+  project_name?: string | null
   filename: string | null
   page_number: number | null
   text: string

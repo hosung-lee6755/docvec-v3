@@ -1,7 +1,8 @@
-﻿import { useEffect, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Upload, Trash2, X, RefreshCw } from 'lucide-react'
-import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, useBatchMoveDocuments, summarizeMoveResults, type DocumentLifecycleFilter, type DocumentQualityFilter, type DocumentSortBy, type SortOrder } from '../hooks/useDocuments'
+import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, useBatchMoveDocuments, summarizeMoveResults, type DocumentLifecycleFilter, type DocumentQualityFilter, type DocumentSortBy } from '../hooks/useDocuments'
+import { PAGE_SIZE_OPTIONS, readDocumentListView, withDocumentListChange, withDocumentListPage, type DocumentListChange } from '../lib/documentListParams'
 import { useCollections } from '../hooks/useCollections'
 import { STATUS_FILTER_OPTIONS, statusFilterValue } from '../lib/documentStatus'
 import { useDocumentStats } from '../hooks/useDocumentStats'
@@ -31,20 +32,26 @@ export default function DocumentsPage() {
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [filterCollectionId, setFilterCollectionId] = useState(() => searchParams.get('collection') ?? '')
   const [filterStatus, setFilterStatus] = useState('')
-  const [filterQuality, setFilterQuality] = useState<DocumentQualityFilter | ''>('')
-  const [filterLifecycle, setFilterLifecycle] = useState<DocumentLifecycleFilter | ''>('')
   const [uploadNotice, setUploadNotice] = useState<string | null>(null)
-  const [filenameInput, setFilenameInput] = useState('')
-  const [filenameFilter, setFilenameFilter] = useState('')
-  const [sortBy, setSortBy] = useState<DocumentSortBy>('created_at')
-  const [order, setOrder] = useState<SortOrder>('desc')
-  const [page, setPage] = useState(1)
-  const [limit, setLimit] = useState(20)
+  // 쪽·표시 건수·정렬·검색어·품질·버전 거르기는 주소가 원본이다. 상세에서 뒤로 오면 보던 쪽과 거르기가 그대로다(2026-11-27)
+  const view = readDocumentListView(searchParams)
+  const { page, limit, sortBy, order, quality: filterQuality, lifecycle: filterLifecycle, filename: filenameFilter } = view
+  const [filenameInput, setFilenameInput] = useState(filenameFilter)
+  // 주소만 고친다(기록을 늘리지 않는다). 뒤로가기는 문서 상세에서 목록으로 한 번에 돌아온다
+  const changeView = (change: DocumentListChange) =>
+    setSearchParams((prev) => withDocumentListChange(prev, change), { replace: true })
+  const goToPage = (next: number) =>
+    setSearchParams((prev) => withDocumentListPage(prev, next), { replace: true })
 
   useEffect(() => {
-    const id = setTimeout(() => setFilenameFilter(filenameInput.trim()), 300)
+    const id = setTimeout(() => {
+      const trimmed = filenameInput.trim()
+      if (trimmed !== filenameFilter) changeView({ filename: trimmed })
+    }, 300)
     return () => clearTimeout(id)
-  }, [filenameInput])
+    // changeView 는 렌더마다 새로 만들어지지만 하는 일은 같다. 입력이 바뀔 때만 다시 건다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filenameInput, filenameFilter])
 
   // Deep-link support: ?collection=<id> (e.g. clicking a collection name in the
   // collections list). Always sync — including clearing back to '' when the
@@ -83,11 +90,22 @@ export default function DocumentsPage() {
   })
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / limit))
 
-  // 필터/정렬/표시건수가 바뀌면 이전 페이지 번호가 새 결과 범위를 벗어날 수
-  // 있어(예: 3페이지 보다가 필터링하면 결과가 1페이지뿐) 1페이지로 되돌린다.
+  // 거르기·정렬·표시 건수를 바꾸면 changeView 가 1쪽으로 보낸다. 예전에는 effect 로 되돌려, 화면을 처음 그릴
+  // 때도 1쪽이 되어 상세에서 뒤로 오면 보던 쪽을 잃었다. 문서가 지워져 쪽 수가 줄었으면 마지막 쪽으로 간다
   useEffect(() => {
-    setPage(1)
-  }, [filterCollectionId, filterStatus, filterQuality, filterLifecycle, filenameFilter, sortBy, order, limit])
+    if (data && page > totalPages) goToPage(totalPages)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, page, totalPages])
+
+  // 상세에서 돌아오면 방금 연 문서 행을 화면 가운데로 가져와 이어서 볼 수 있게 한다
+  const openedDocumentId = (location.state as { openedDocumentId?: string } | null)?.openedDocumentId
+  const scrolledForKey = useRef<string | null>(null)
+  useEffect(() => {
+    if (!openedDocumentId || !data?.items.some((d) => d.id === openedDocumentId)) return
+    if (scrolledForKey.current === location.key) return
+    scrolledForKey.current = location.key
+    document.querySelector(`[data-document-id="${CSS.escape(openedDocumentId)}"]`)?.scrollIntoView?.({ block: 'center' })
+  }, [openedDocumentId, data, location.key])
   const deleteDoc = useDeleteDocument()
   const batchDelete = useBatchDeleteDocuments()
   const batchReprocess = useBatchReprocessDocuments()
@@ -105,12 +123,8 @@ export default function DocumentsPage() {
   const failedCount = stats?.failed ?? 0
 
   const toggleSort = (column: DocumentSortBy) => {
-    if (sortBy === column) {
-      setOrder((o) => (o === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortBy(column)
-      setOrder('asc')
-    }
+    if (sortBy === column) changeView({ order: order === 'asc' ? 'desc' : 'asc' })
+    else changeView({ sortBy: column, order: 'asc' })
   }
 
   // 상태·컬렉션 필터는 URL이 원본이다. 화면 안에서 바꿀 때도 URL을 고쳐야 사이드바 강조와
@@ -120,6 +134,7 @@ export default function DocumentsPage() {
       const next = new URLSearchParams(prev)
       if (value) next.set(key, value)
       else next.delete(key)
+      next.delete('page')  // 거르기가 바뀌면 결과 범위가 달라지므로 1쪽으로 간다
       return next
     }, { replace: true })
   }
@@ -127,15 +142,12 @@ export default function DocumentsPage() {
   const hasActiveFilters = !!(filterCollectionId || filterStatus || filterQuality || filterLifecycle || filenameFilter)
   const clearFilters = () => {
     setSearchParams((prev) => {
-      const next = new URLSearchParams(prev)
+      const next = withDocumentListChange(prev, { filename: '', quality: '', lifecycle: '' })
       next.delete('status')
       next.delete('collection')
       return next
     }, { replace: true })
-    setFilterQuality('')
-    setFilterLifecycle('')
     setFilenameInput('')
-    setFilenameFilter('')
   }
 
   const toggleSelect = (id: string) =>
@@ -258,7 +270,7 @@ export default function DocumentsPage() {
         <Select
           controlSize="sm"
           value={filterQuality}
-          onChange={(e) => setFilterQuality(e.target.value as DocumentQualityFilter | '')}
+          onChange={(e) => changeView({ quality: e.target.value as DocumentQualityFilter | '' })}
           style={{ width: 170 }}
           aria-label="처리 품질로 거르기"
         >
@@ -271,7 +283,7 @@ export default function DocumentsPage() {
         <Select
           controlSize="sm"
           value={filterLifecycle}
-          onChange={(e) => setFilterLifecycle(e.target.value as DocumentLifecycleFilter | '')}
+          onChange={(e) => changeView({ lifecycle: e.target.value as DocumentLifecycleFilter | '' })}
           style={{ width: 200 }}
           aria-label="버전·보관 상태로 거르기"
         >
@@ -291,10 +303,10 @@ export default function DocumentsPage() {
           controlSize="sm"
           aria-label="표시 건수"
           value={limit}
-          onChange={(e) => setLimit(Number(e.target.value))}
+          onChange={(e) => changeView({ limit: Number(e.target.value) })}
           style={{ width: 110 }}
         >
-          {[10, 20, 50, 100, 200].map((n) => (
+          {PAGE_SIZE_OPTIONS.map((n) => (
             <option key={n} value={n}>{n}건씩 보기</option>
           ))}
         </Select>
@@ -393,19 +405,24 @@ export default function DocumentsPage() {
             onConfirmDelete={(id) => { deleteDoc.mutate(id); setConfirmDeleteId(null) }}
             onCancelDelete={() => setConfirmDeleteId(null)}
             onDeleteClick={setConfirmDeleteId}
-            onDocumentClick={(id) => navigate(
-              projectId ? `/projects/${projectId}/documents/${id}` : `/documents/${id}`,
-              // 상세의 "문서 목록"이 지금 거른 목록(?collection= 등)으로 돌아오게 한다
-              { state: { backTo: `${location.pathname}${location.search}` } },
-            )}
+            onDocumentClick={(id) => {
+              // 지금 목록 기록에 연 문서를 남겨 둔다. 뒤로 오면 그 행으로 스크롤한다
+              navigate(`${location.pathname}${location.search}`, { replace: true, state: { openedDocumentId: id } })
+              navigate(
+                projectId ? `/projects/${projectId}/documents/${id}` : `/documents/${id}`,
+                // 상세의 "문서 목록"이 지금 거른 목록(?collection=, ?page= 등)으로 돌아오게 한다
+                { state: { backTo: `${location.pathname}${location.search}` } },
+              )
+            }}
+            recentDocumentId={openedDocumentId}
             isDeleting={deleteDoc.isPending}
           />
           <div className="documents-pager">
-            <Button size="sm" variant="secondary" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+            <Button size="sm" variant="secondary" onClick={() => goToPage(Math.max(1, page - 1))} disabled={page <= 1}>
               이전
             </Button>
             <span>{page} / {totalPages} 페이지 (총 {data.total}건)</span>
-            <Button size="sm" variant="secondary" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>
+            <Button size="sm" variant="secondary" onClick={() => goToPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages}>
               다음
             </Button>
           </div>

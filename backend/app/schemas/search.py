@@ -38,6 +38,15 @@ class SearchResultItem(BaseModel):
     final_score: float | None = None
     # v3 마일스톤 6: 질문과 겹친 낱말, 그 쪽의 OCR 신뢰도와 기준 미달 여부
     evidence: dict | None = None
+    # 출처 위치(2026-11-27): 채팅 인용과 같은 수준으로 프로젝트·컬렉션·문서 이름, 쪽 범위, 절 경로를 준다
+    filename: str | None = None
+    collection_id: str | None = None
+    collection_name: str | None = None
+    project_id: str | None = None
+    project_name: str | None = None
+    page_number: int | None = None
+    page_end: int | None = None
+    section_path: list[str] | None = None
 
 
 class AppliedSearchSettings(BaseModel):

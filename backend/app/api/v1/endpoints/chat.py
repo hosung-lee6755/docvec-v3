@@ -34,6 +34,9 @@ class ChatCitation(BaseModel):
     document_id: str | None
     collection_id: str | None = None
     collection_name: str | None = None
+    # 프로젝트(2026-11-27). 저장하지 않고 응답할 때 컬렉션에서 읽어 붙이므로 예전 답변에도 나온다
+    project_id: str | None = None
+    project_name: str | None = None
     filename: str | None
     page_number: int | None
     text: str
@@ -122,7 +125,7 @@ def _as_uuid(value: str | None) -> str | None:
 def _masked(citation: ChatCitation) -> ChatCitation:
     return citation.model_copy(update={
         "hidden": True, "document_id": None, "collection_id": None, "collection_name": None,
-        "filename": None, "page_number": None, "text": "", "evidence": None, "chunk_id": None,
+        "project_id": None, "project_name": None, "filename": None, "page_number": None, "text": "", "evidence": None, "chunk_id": None,
         "section_path": None, "page_end": None,
     })
 
@@ -145,9 +148,23 @@ async def _mask_hidden_citations(
         ctx = await build_access_context(db, user)
         visible = visible_document_ids(ctx, await load_document_facts(db, doc_ids))
 
+    from app.services.source_places import collection_places
+
+    places = await collection_places(
+        db, {c.collection_id for m in messages for c in (m.citations or []) if c.collection_id}
+    )
+
     def check(c: ChatCitation) -> ChatCitation:
         # 문서를 특정할 수 없는 인용은 판정할 수 없으므로 가린다(fail-closed).
-        return c if _as_uuid(c.document_id) in visible else _masked(c)
+        if _as_uuid(c.document_id) not in visible:
+            return _masked(c)
+        place = places.get(str(c.collection_id))
+        if place is None:
+            return c
+        return c.model_copy(update={
+            "collection_name": c.collection_name or place.collection_name,
+            "project_id": place.project_id, "project_name": place.project_name,
+        })
 
     return [
         m.model_copy(update={

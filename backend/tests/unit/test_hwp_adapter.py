@@ -677,3 +677,15 @@ def test_extract_hwpx_anchors_pictures_with_manifest_ids(tmp_path):
     host = page.text_blocks[1]
     assert host.text == "그림 설명"
     assert [(r.image_bytes, r.anchor) for r in page.image_regions] == [(JPG, host), (PNG, None)]
+
+
+def test_extract_reads_an_hwpx_file_named_hwp_by_its_content(tmp_path):
+    # 2026-11-27: 한글에서 HWPX로 저장한 파일의 이름이 .hwp 였다(복리후생규정). 확장자만 보고 구형 HWP로 읽어
+    # 글이 하나도 나오지 않았고 처리가 "상위 블록에서 전달된 텍스트가 없습니다"로 실패했다
+    path = tmp_path / "규정.hwp"
+    _write_hwpx(path, {"Contents/section0.xml": _hp(_p("복리후생규정"))})
+
+    doc = HWPAdapter().extract(path, {})
+
+    assert doc.format_id == "hwpx" and doc.warnings == []
+    assert [b.text for b in doc.pages[0].text_blocks] == ["복리후생규정"]

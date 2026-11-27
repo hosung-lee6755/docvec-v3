@@ -131,8 +131,8 @@ def test_tree_heading_stack_pops_to_same_or_higher_level():
     ]
     chunks = _tree(nodes, text, respect_headings=True)
     by_node = {tuple(c.source_node_ids): c.section_path for c in chunks}
-    assert by_node[("p",)] == ["새 상위"]
-    assert by_node[("p2",)] == ["레벨없음"]
+    assert by_node[("h3", "p")] == ["새 상위"]  # 본문이 있는 제목도 첫 청크 글로 담는다(2026-11-27)
+    assert by_node[("hn", "p2")] == ["레벨없음"]
     # 본문 없이 같은 수준 제목이 바로 오는 "상위"·"하위"는 글이 사라지지 않도록 문단처럼 담긴다(2026-11-20)
     assert by_node[("h1",)] == [] and by_node[("h2",)] == []
 
@@ -259,9 +259,10 @@ def test_short_sections_are_merged_with_a_neighbour_when_asked():
     chunks = _tree(nodes, text, max_chars=200, min_chars=20, respect_headings=True, merge_small_sections=True)
 
     bodies = [c.text for c in chunks]
-    assert bodies[0] == "요구사항 정의\n\n세부\n\n사전분석을 통한 제안사 의견 도출 및 제시입니다."
+    assert bodies[0] == "개요\n\n요구사항 정의\n\n세부\n\n사전분석을 통한 제안사 의견 도출 및 제시입니다."
     assert chunks[0].section_path == ["세부"]  # 더 긴 쪽의 구획 경로를 따른다
-    assert "| 항목 | 값 | 비고 | 가 | 1 | 없음 |" in bodies  # 표는 다른 내용과 섞지 않는다
+    # 표는 다른 내용과 섞지 않고, 바로 앞 제목만 표 앞에 붙는다(2026-11-27)
+    assert "결과\n\n| 항목 | 값 | 비고 | 가 | 1 | 없음 |" in bodies
 
 
 def test_short_sections_stay_apart_by_default():
@@ -269,7 +270,7 @@ def test_short_sections_stay_apart_by_default():
 
     chunks = _tree(nodes, text, max_chars=200, min_chars=20, respect_headings=True)
 
-    assert chunks[0].text == "요구사항 정의"
+    assert chunks[0].text == "개요\n\n요구사항 정의"
 
 
 def test_merging_never_exceeds_max_chars():
@@ -277,7 +278,7 @@ def test_merging_never_exceeds_max_chars():
 
     chunks = _tree(nodes, text, max_chars=30, min_chars=20, respect_headings=True, merge_small_sections=True)
 
-    assert chunks[0].text == "요구사항 정의"
+    assert chunks[0].text == "개요\n\n요구사항 정의"
 
 
 

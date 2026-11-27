@@ -118,6 +118,22 @@ def test_server_unreachable_raises_a_clear_error():
         provider.generate("s", [])
 
 
+@pytest.mark.parametrize("call", ["generate", "generate_stream"])
+def test_server_timeout_is_not_reported_as_an_unreachable_server(call):
+    # 2026-11-27: 서버는 닿았지만 GPU 메모리가 모자라 모델을 5분 안에 올리지 못했는데, 화면에는 "연결하지 못했습니다"로
+    # 나와 서버가 꺼진 것으로 오해했다. 제한 시간 초과는 따로 알린다
+    def slow(request):
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    provider, _ = _server(slow)
+    args = ("s", [], lambda _t: None) if call == "generate_stream" else ("s", [])
+
+    with pytest.raises(llm.LLMServerError) as caught:
+        getattr(provider, call)(*args)
+
+    assert "제한 시간" in str(caught.value) and "연결하지 못했습니다" not in str(caught.value)
+
+
 def test_server_missing_model_tells_how_to_pull_it():
     provider, _ = _server(lambda _req: httpx.Response(404, json={"error": "model not found"}))
 

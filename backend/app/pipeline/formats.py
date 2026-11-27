@@ -35,6 +35,23 @@ SUPPORTED_SUFFIXES = frozenset(EXTENSION_CONTENT_TYPES)
 SUPPORTED_LABEL = "PDF, DOCX, HWP, HWPX, XLSX, CSV, PPTX, TXT, MD, HTML, 이미지(PNG, JPG, TIFF, BMP, WEBP)"
 
 
+_OLE_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")  # 구형 HWP(HWP 5.0)는 OLE 복합 문서다
+_ZIP_MAGIC = b"PK\x03\x04"  # HWPX는 ZIP이다
+
+
+def hwp_suffix_by_content(suffix: str, head: bytes) -> str:
+    """HWP와 HWPX는 확장자가 아니라 파일 앞 바이트로 가린다. 한글에서 HWPX로 저장한 파일의 이름이 .hwp인
+    경우가 있어, 확장자만 보고 구형 HWP로 읽으면 글이 하나도 나오지 않았다(복리후생규정, 2026-11-27).
+    HWP 계열이 아니거나 앞 바이트로 가릴 수 없으면 받은 확장자를 그대로 돌려준다."""
+    if suffix not in (".hwp", ".hwpx"):
+        return suffix
+    if head.startswith(_ZIP_MAGIC):
+        return ".hwpx"
+    if head.startswith(_OLE_MAGIC):
+        return ".hwp"
+    return suffix
+
+
 def suffix_of(filename: str) -> str:
     return PurePath(filename).suffix.lower()
 

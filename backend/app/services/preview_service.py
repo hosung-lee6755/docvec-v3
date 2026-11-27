@@ -416,6 +416,9 @@ def preview_cache_key(document_id: str, ext: str) -> str:
 def _generate_preview(suffix: str, raw: bytes) -> tuple[bytes, str, str, bool]:
     """Returns (content, kind, content_type, approximate). 원본을 그대로 그리는 PDF를 먼저 시도하고, 안 되면
     재구성 PDF, 그다음 HTML 미리보기로 내려간다. approximate 는 원본 배치와 다를 수 있는 결과인지다."""
+    from app.pipeline.formats import hwp_suffix_by_content
+
+    suffix = hwp_suffix_by_content(suffix, raw[:8])  # 이름은 .hwp 인데 내용이 HWPX 인 파일(2026-11-27)
     for converters, approximate in ((_PDF_CONVERTERS, False), (_RECONSTRUCTED_PDF_CONVERTERS, True)):
         pdf_converter = converters.get(suffix)
         if pdf_converter is None:

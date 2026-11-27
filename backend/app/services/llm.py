@@ -115,7 +115,17 @@ class LLMServerProvider(LLMProvider):
         except httpx.HTTPError:
             logger.warning("could not unload model %s from the inference server", self._model_tag)
 
-    def _unreachable(self) -> LLMServerError:
+    def _unreachable(self, exc: Exception) -> LLMServerError:
+        """호출 실패를 사유별로 알린다. 서버에 닿았지만 제한 시간 안에 답이 없던 것(모델을 올리는 중이거나
+        GPU 메모리가 모자람)을 "연결하지 못했습니다"로 알리면 서버가 꺼진 것으로 오해한다(2026-11-27)."""
+        import httpx
+
+        if isinstance(exc, httpx.TimeoutException) and not isinstance(exc, httpx.ConnectTimeout):
+            limit = round(settings.llm_server_timeout_seconds)
+            return LLMServerError(
+                f"추론 서버가 제한 시간({limit}초) 안에 답하지 않았습니다. 모델을 올리는 중이거나 GPU 메모리가 "
+                "모자랄 수 있습니다. 잠시 뒤 다시 시도하세요."
+            )
         return LLMServerError(f"추론 서버에 연결하지 못했습니다({settings.llm_server_url}).")
 
     def generate(self, system_prompt: str, messages: list[dict[str, str]]) -> str:
@@ -124,7 +134,7 @@ class LLMServerProvider(LLMProvider):
         try:
             response = self._client.post("/api/chat", json=self._payload(system_prompt, messages, False))
         except httpx.HTTPError as exc:
-            raise self._unreachable() from exc
+            raise self._unreachable(exc) from exc
         self._raise_for_status(response)
         content = (response.json().get("message") or {}).get("content") or ""
         return _cut_template_leak(content)
@@ -145,7 +155,7 @@ class LLMServerProvider(LLMProvider):
         try:
             response = self._client.post("/api/chat", json=payload)
         except httpx.HTTPError as exc:
-            raise self._unreachable() from exc
+            raise self._unreachable(exc) from exc
         self._raise_for_status(response)
         return _cut_template_leak((response.json().get("message") or {}).get("content") or "")
 
@@ -169,7 +179,7 @@ class LLMServerProvider(LLMProvider):
                     if done:
                         break
         except httpx.HTTPError as exc:
-            raise self._unreachable() from exc
+            raise self._unreachable(exc) from exc
         return _cut_template_leak("".join(parts))
 
 

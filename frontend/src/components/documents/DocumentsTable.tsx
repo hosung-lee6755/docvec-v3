@@ -74,6 +74,8 @@ interface DocumentsTableProps {
   onDeleteClick: (id: string) => void
   onDocumentClick: (id: string) => void
   isDeleting: boolean
+  // 상세에서 돌아왔을 때 방금 연 문서. 그 행을 잠깐 강조한다(2026-11-27)
+  recentDocumentId?: string
 }
 
 export function DocumentsTable({
@@ -91,6 +93,7 @@ export function DocumentsTable({
   onDeleteClick,
   onDocumentClick,
   isDeleting,
+  recentDocumentId,
 }: DocumentsTableProps) {
   return (
     <div className="ds-table-wrap">
@@ -125,7 +128,8 @@ export function DocumentsTable({
         </thead>
         <tbody>
           {documents?.map((doc) => (
-            <tr key={doc.id} className={[rowClassFor(doc), selectedIds.has(doc.id) ? 'is-selected' : ''].filter(Boolean).join(' ')}>
+            <tr key={doc.id} data-document-id={doc.id}
+              className={[rowClassFor(doc), selectedIds.has(doc.id) ? 'is-selected' : '', doc.id === recentDocumentId ? 'is-recent' : ''].filter(Boolean).join(' ')}>
               <td className="ds-cell-check">
                 <input
                   type="checkbox"

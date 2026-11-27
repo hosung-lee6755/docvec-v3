@@ -705,7 +705,8 @@ class TextExtractBlock(BaseBlock):
         # 1.56.0: Docling 을 거치지 않는 PDF 읽기(pdf_adapter, pdfplumber)에도 기호 글꼴 글자를 적는다(법령심사 PDF 의
         #         "●" 가 코드로 남았다). PPTX 문단 안 줄바꿈과 필드를 읽는다(2026-11-26).
         # 1.57.0: HWP·HWPX 강제 줄바꿈을 빈칸이 아니라 줄바꿈으로 적는다(원문처럼 줄이 나뉜다, 2026-11-27).
-        return "1.57.0"
+        # 1.58.0: HWP와 HWPX를 확장자가 아니라 파일 내용으로 가린다(이름은 .hwp 인 HWPX 파일, 2026-11-27).
+        return "1.58.0"
 
     @property
     def category(self) -> str:
