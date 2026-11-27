@@ -15,6 +15,8 @@ const MAX_FIT_PASSES = 12
 interface ZoomableTextPaneProps {
   // 보이는 글이 바뀌면(쪽 이동, JSON 보기, 불러오기 끝) 맞춤 배율을 다시 잰다
   contentKey: string
+  // 이 값이 바뀌면(쪽 이동) 글의 처음부터 보여 준다. 원본 PDF 뷰어와 같은 동작이다(2026-11-27)
+  scrollResetKey?: string | number
   background: string
   children: ReactNode
 }
@@ -27,7 +29,7 @@ function overflowsHeight(box: HTMLElement): boolean {
   return box.scrollHeight > box.clientHeight + 1
 }
 
-export function ZoomableTextPane({ contentKey, background, children }: ZoomableTextPaneProps) {
+export function ZoomableTextPane({ contentKey, scrollResetKey, background, children }: ZoomableTextPaneProps) {
   const { zoom, chooseZoom, stepZoom } = useStoredZoom(TEXT_ZOOM_STORAGE_KEY)
   const [effectiveScale, setEffectiveScale] = useState<number | null>(null)
   const [frame, setFrame] = useState({ width: 0, height: 0 })
@@ -44,6 +46,10 @@ export function ZoomableTextPane({ contentKey, background, children }: ZoomableT
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
+
+  useEffect(() => {
+    boxRef.current?.scrollTo?.({ top: 0, left: 0 })
+  }, [scrollResetKey])
 
   // 배율을 글에 입히고, 맞춤이면 넘치지 않을 때까지 줄여 가며 잰다(그리기 전에 끝내 깜빡이지 않게 한다)
   useLayoutEffect(() => {

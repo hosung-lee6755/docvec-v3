@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { PdfPageViewer } from './PdfPageViewer'
 import { ZoomableTextPane } from './ZoomableTextPane'
@@ -13,6 +13,10 @@ import { splitByTables } from '../../lib/tableSpans'
 import { SpanTable } from './SpanTable'
 import { closeSplitTables, isEmptyTableHead } from './pageTableFragments'
 import { ErrorText } from '../ui'
+
+// 원본과 파싱된 텍스트 머리줄. 둘 다 같은 grid 행에 있어 높이가 같다(오른쪽 선택 버튼 높이에 맞춰진다)
+const PANE_HEADER_STYLE: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', minWidth: 0 }
+const PANE_TITLE_STYLE: CSSProperties = { fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }
 
 // 쪽 조각의 이어진 표에 붙인 빈 머리 행(closeSplitTables)은 그리지 않는다
 const PAGE_MARKDOWN_COMPONENTS: Components = {
@@ -151,11 +155,25 @@ export default function OriginalTab({
           이 형식은 원본을 직접 렌더링할 수 없어 재구성한 근사치입니다 — 레이아웃·글꼴·이미지 배치가 실제 원본과 다를 수 있습니다. 정확한 원본은 "원본 다운로드"를 이용하세요.
         </p>
       )}
-      <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--space-4)' }}>
-        <div style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)', flexShrink: 0 }}>
+      {/* 머리줄과 본문을 같은 grid 행에 둔다. 오른쪽 머리줄에는 텍스트/JSON 선택이 있어 왼쪽보다 높은데,
+          칸마다 따로 쌓으면 파싱된 텍스트 상자가 원본 상자보다 아래에서 시작했다(2026-11-27). */}
+      <div style={{
+        flex: 1, minHeight: 0, display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gridTemplateRows: 'auto minmax(0, 1fr)',
+        columnGap: 'var(--space-4)', rowGap: 'var(--space-2)',
+      }}>
+        <div style={PANE_HEADER_STYLE}>
+          <p style={PANE_TITLE_STYLE}>
             {isPdfPreview ? '원본 PDF' : '원본 (변환 미리보기)'}
           </p>
+        </div>
+        <div style={PANE_HEADER_STYLE}>
+          <p style={PANE_TITLE_STYLE}>
+            파싱된 텍스트 (RAG 저장 형태){isPageSynced && hasMultiplePages ? ` (${clampedPage}쪽)` : ''}
+          </p>
+          <ViewModeToggle showJson={showJson} onChange={onShowJsonChange} isInline />
+        </div>
+        <div data-testid="original-pane-body" style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {isPreviewError && (
             <p><ErrorText error={previewError} message="원문 미리보기를 만들지 못했습니다." /></p>
           )}
@@ -178,14 +196,9 @@ export default function OriginalTab({
             </div>
           )}
         </div>
-        <div style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-            <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: '0 0 var(--space-2)' }}>
-              파싱된 텍스트 (RAG 저장 형태){isPageSynced && hasMultiplePages ? ` (${clampedPage}쪽)` : ''}
-            </p>
-            <ViewModeToggle showJson={showJson} onChange={onShowJsonChange} />
-          </div>
+        <div data-testid="parsed-pane-body" style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <ZoomableTextPane
+            scrollResetKey={clampedPage}
             contentKey={`${clampedPage}|${showJson}|${isContentLoading}|${chunksResult ? 'chunks' : ''}|${content?.full_text.length ?? 0}`}
             background={showJson ? 'var(--color-surface-subtle)' : 'var(--color-surface)'}
           >

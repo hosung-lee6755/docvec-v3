@@ -56,9 +56,16 @@ const VIEW_MODE_OPTIONS = [
 ] as const
 
 /** 텍스트와 JSON 표시를 바꾸는 분절 단추. */
-export function ViewModeToggle({ showJson, onChange }: { showJson: boolean; onChange: (v: boolean) => void }) {
+interface ViewModeToggleProps {
+  showJson: boolean
+  onChange: (v: boolean) => void
+  // 머리줄 안에 놓일 때는 아래 여백을 두지 않는다(원문 대조, 2026-11-27)
+  isInline?: boolean
+}
+
+export function ViewModeToggle({ showJson, onChange, isInline = false }: ViewModeToggleProps) {
   return (
-    <div style={{ marginBottom: 'var(--space-3)' }}>
+    <div style={{ marginBottom: isInline ? 0 : 'var(--space-3)' }}>
       <Segmented
         label="표시 모드 선택"
         options={VIEW_MODE_OPTIONS}

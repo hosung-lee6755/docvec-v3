@@ -78,6 +78,30 @@ describe('OriginalTab page sync', () => {
     expect(screen.getByRole('toolbar', { name: '원본 배율' })).toBeInTheDocument()
   })
 
+  it('starts the original and parsed text boxes on the same grid row, below one shared header row', () => {
+    // 2026-11-27: 텍스트/JSON 선택이 파싱된 텍스트 칸 안에 있어 그 상자만 아래에서 시작했다
+    render(
+      <OriginalTab
+        {...baseProps}
+        isPdfDoc
+        originalPage={1}
+        pagesTextResult={{ pages: [{ page_number: 1, text: '본문' }], total_pages: 1, synced: true }}
+      />,
+    )
+
+    const originalBody = screen.getByTestId('original-pane-body')
+    const parsedBody = screen.getByTestId('parsed-pane-body')
+    const grid = originalBody.parentElement as HTMLElement
+    expect(parsedBody.parentElement).toBe(grid)
+    expect(grid.style.gridTemplateRows).toBe('auto minmax(0, 1fr)')
+    const cells = Array.from(grid.children)
+    expect(cells.indexOf(originalBody)).toBe(2)
+    expect(cells.indexOf(parsedBody)).toBe(3)
+    const toggle = screen.getByRole('group', { name: '표시 모드 선택' })
+    expect(cells[1].contains(toggle)).toBe(true)
+    expect(parsedBody.contains(toggle)).toBe(false)
+  })
+
   it('falls back to the browser PDF viewer when the PDF cannot be opened for drawing', async () => {
     pdfMocks.loadPdfDocument.mockRejectedValueOnce(new Error('broken'))
 

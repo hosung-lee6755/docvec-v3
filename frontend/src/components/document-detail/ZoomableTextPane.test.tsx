@@ -25,6 +25,23 @@ describe('ZoomableTextPane', () => {
     expect(screen.getByRole('status', { name: '배율' }).textContent).toBe('100%')
   })
 
+  it('goes back to the top of the text when the page changes', () => {
+    // 2026-11-27: 파싱된 텍스트를 내려 본 채로 쪽을 넘기면 새 쪽도 내려간 자리에서 보였다
+    const page = (n: number) => (
+      <ZoomableTextPane contentKey={`p${n}`} scrollResetKey={n} background="white"><p>{n}쪽 글</p></ZoomableTextPane>
+    )
+    const { rerender } = render(page(1))
+    const box = screen.getByTestId('parsed-text-scroll')
+    const calls: unknown[] = []
+    box.scrollTo = ((options: unknown) => { calls.push(options) }) as typeof box.scrollTo
+
+    rerender(page(1))
+    expect(calls).toHaveLength(0)
+
+    rerender(page(2))
+    expect(calls).toEqual([{ top: 0, left: 0 }])
+  })
+
   it('zooms the text and keeps the choice apart from the original PDF zoom', () => {
     const { unmount } = render(pane())
 
