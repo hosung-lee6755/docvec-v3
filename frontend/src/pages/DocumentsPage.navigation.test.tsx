@@ -82,6 +82,19 @@ describe('DocumentsPage navigation', () => {
     expect(screen.getByTestId('where').textContent).toBe('/documents?limit=50')
   })
 
+  it('filters the list from the 처리 중 box and clears every filter from the 전체 box', () => {
+    // 2026-11-27: 네 칸 가운데 검토 대기와 실패만 목록을 걸렀다
+    renderAt('/documents?q=규정&quality=warning&page=2')
+
+    fireEvent.click(screen.getByRole('button', { name: /^처리 중/ }))
+    const status = new URLSearchParams(screen.getByTestId('where').textContent?.split('?')[1]).get('status')
+    expect(status?.split(',')).toEqual(expect.arrayContaining(['QUEUED', 'PARSING', 'EMBEDDING', 'ANALYZING']))
+    expect(screen.getByRole('combobox', { name: '상태로 거르기' })).toHaveValue(status)
+
+    fireEvent.click(screen.getByRole('button', { name: /^전체/ }))
+    expect(screen.getByTestId('where').textContent).toBe('/documents')
+  })
+
   it('keeps the page in the address when moving between pages', () => {
     renderAt('/documents')
 

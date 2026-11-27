@@ -34,6 +34,7 @@ from app.services.access_policy import (
     is_relaxing_level,
 )
 from app.services.audit import log_audit
+from app.services.document_type import DocumentType
 from app.services.search_settings import SearchSettings, resolve_search_settings
 from app.services.workflow_scope import ensure_fits_project, fits_project
 from app.services.document_state import claim_document_status
@@ -76,6 +77,8 @@ class CollectionCreate(BaseModel):
     default_analysis_workflow_version: int | None = None
     # v3: 등급이 없는 문서에 적용할 기본 보안등급. null이면 Public.
     default_security_level: SecurityLevel | None = None
+    # 유형을 지정하지 않은 문서에 쓸 기본 문서 유형. null이면 자동 판별(2026-11-27)
+    default_document_type: DocumentType | None = None
 
     _validate_model = field_validator("embedding_model")(_validate_embedding_model)
 
@@ -105,6 +108,8 @@ class CollectionUpdate(BaseModel):
     # v3: 필드를 보내면 반영한다 — null을 보내면 기본 등급을 해제(Public)한다.
     # 보내지 않은 것과 null은 model_fields_set으로 구분한다.
     default_security_level: SecurityLevel | None = None
+    # 보내면 반영하고 null이면 자동 판별로 되돌린다. 기존 문서는 재처리해야 바뀐 유형으로 구조와 청크가 바뀐다
+    default_document_type: DocumentType | None = None
 
     _validate_model = field_validator("embedding_model")(
         lambda v: _validate_embedding_model(v) if v is not None else v
@@ -133,6 +138,7 @@ class CollectionResponse(BaseModel):
     default_analysis_workflow_id: UUID | None = None
     default_analysis_workflow_version: int | None = None
     default_security_level: str | None = None
+    default_document_type: str | None = None
     # 저장값이 없거나 틀리면 기본값을 돌려준다(검색과 채팅이 실제로 따르는 값)
     search_settings: SearchSettings = SearchSettings()
     reembed_status: str | None = None
@@ -200,6 +206,7 @@ async def create_collection(
         ),
         default_analysis_workflow_version=data.default_analysis_workflow_version,
         default_security_level=data.default_security_level,
+        default_document_type=data.default_document_type,
         created_by=str(current_user.id),
     )
     db.add(collection)
@@ -303,6 +310,7 @@ async def list_collections(
             "default_analysis_workflow_id": c.default_analysis_workflow_id,
             "default_analysis_workflow_version": c.default_analysis_workflow_version,
             "default_security_level": c.default_security_level,
+            "default_document_type": c.default_document_type,
             "created_at": c.created_at,
             "document_count": counts.get(c.id, 0),
             "is_owner": str(c.created_by) == str(current_user.id),
@@ -475,6 +483,9 @@ async def update_collection(
             db, str(current_user.id), "collection.security_level_update", "collection",
             str(collection.id), detail={"from": previous_level, "to": data.default_security_level},
         )
+
+    if "default_document_type" in data.model_fields_set:
+        collection.default_document_type = data.default_document_type
 
     settings_changed = False
     if "search_settings" in data.model_fields_set:

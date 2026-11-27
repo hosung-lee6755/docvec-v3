@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
+import type { DocumentType } from '../lib/documentTypes'
 
 // 메타 정보 생성 설계서(2026-07-23) Phase 2 — author/organization/
 // security_level/source_system은 문서 내용에서 자동 생성할 수 없어, 사용자가
@@ -26,6 +27,8 @@ export interface DocumentMetadataUpdate {
   // 메타 정보 생성.txt 1절 — hwp/hwpx처럼 자동 추출이 불가능한 문서의
   // document_created_at을 사용자가 직접 입력하는 경로(YYYY-MM-DD 문자열).
   document_created_at?: string | null
+  // 문서 유형(null = 자동 판별로 되돌림). 재처리해야 구조와 청크에 반영된다(2026-11-27)
+  document_type?: DocumentType | null
 }
 
 export function useUpdateDocumentMetadata() {

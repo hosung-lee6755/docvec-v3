@@ -428,11 +428,18 @@ def _retrieve_chunks(
     ]
 
 
+# 교차 인코더가 읽는 글. 검색 화면(services/search_service.py)도 같은 글을 읽힌다
+RERANK_TEXT_FIELD = "bm25_text"
+
+
 def _rank_candidates(query, search_query, candidates, search, limit, bm25_rerank, cross_encoder_rerank) -> list[dict]:
     """1단계(재현율): 하이브리드면 벡터와 BM25 점수를 섞고, 벡터 방식이면 벡터 점수 순서다.
     MMR을 켜면 비슷한 발췌문을 덜 뽑는다. 2단계(정밀도): 재순위를 켜면 교차 인코더가 (질문, 본문)을
-    함께 읽어 최종 근거를 고른다. 모델이 없으면 1단계 순서를 쓴다. 재순위는 맥락을 붙인 bm25_text가
-    아니라 실제 본문(text)을 원래 질문과 비교한다."""
+    함께 읽어 최종 근거를 고른다. 모델이 없으면 1단계 순서를 쓴다.
+    재순위는 문서 제목과 절 경로를 붙인 bm25_text 를 원래 질문과 비교한다(2026-11-27). 본문만 읽히면
+    "청원경찰 근무 시간"에 제3조(근무시간)보다 근무시간이라는 낱말이 나오는 제5조를 앞세웠다. 골든 쿼리에서
+    문서 1위 적중이 화성도시공사 0.91에서 1.00, 사실 1위 적중이 0.88에서 1.00 으로 올랐다.
+    인용과 답변에 쓰는 글은 그대로 본문(text)이다."""
     from app.services.mmr_service import mmr_rerank
 
     if search.mode == "hybrid":
@@ -449,7 +456,7 @@ def _rank_candidates(query, search_query, candidates, search, limit, bm25_rerank
     else:
         pool = ranked[:pool_size]
     if search.rerank:
-        return cross_encoder_rerank(query, pool, text_field="text", top_k=limit)
+        return cross_encoder_rerank(query, pool, text_field=RERANK_TEXT_FIELD, top_k=limit)
     return pool[:limit]
 
 
@@ -978,3 +985,12 @@ def generate_answer(self, chat_message_id: str) -> dict:
         return {"chat_message_id": chat_message_id, "status": "FAILED", "error": str(exc)}
     finally:
         db.close()
+
+
+# 검색 화면의 재순위(2026-11-27). API 프로세스에는 교차 인코더를 올리지 않으므로(CPU 에서 쌍 하나에 수 초) 모델이
+# 이미 올라 있는 worker-embed(llm 큐)에 점수만 맡긴다. API 는 시간 제한 안에 답이 없으면 재순위 없이 결과를 낸다.
+@celery_app.task(name="tasks.rerank_texts", queue="llm")
+def rerank_texts(query: str, texts: list[str]) -> list[float] | None:
+    from app.services.reranker import score_texts
+
+    return score_texts(query, texts)

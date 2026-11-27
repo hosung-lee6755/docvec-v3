@@ -31,6 +31,34 @@ def _limit_gpu_memory(**kwargs):
         logging.getLogger(__name__).exception("GPU memory fraction could not be applied")
 
 
+RERANK_QUEUE = "llm"
+
+
+def consumes_queue(argv: list[str], queue: str) -> bool:
+    """워커 명령줄(-Q a,b 또는 --queues=a,b)에 그 큐가 있는지."""
+    names: list[str] = []
+    for i, arg in enumerate(argv):
+        if arg in ("-Q", "--queues") and i + 1 < len(argv):
+            names += argv[i + 1].split(",")
+        elif arg.startswith("--queues="):
+            names += arg.split("=", 1)[1].split(",")
+        elif arg.startswith("-Q") and len(arg) > 2:
+            names += arg[2:].split(",")
+    return queue in names
+
+
+@worker_process_init.connect
+def _warm_up_reranker(**kwargs):
+    """재순위(llm 큐)를 맡은 워커만 교차 인코더를 미리 올린다. 다른 워커는 GPU 메모리를 쓰지 않게 건너뛴다."""
+    import sys
+
+    if not consumes_queue(sys.argv, RERANK_QUEUE):
+        return
+    from app.services.reranker import warm_up_in_background
+
+    warm_up_in_background()
+
+
 celery_app = Celery(
     "docvec",
     broker=settings.celery_broker_url,

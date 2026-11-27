@@ -122,3 +122,39 @@ describe('UploadModal opened from a collection', () => {
     expect(screen.getByLabelText('분석 워크플로우')).toBeTruthy()
   })
 })
+
+describe('UploadModal document type', () => {
+  it('sends the batch type and lets one file override it', async () => {
+    mocks.upload.mockClear()
+    mocks.collectionsFor.mockReturnValue([{ id: 'c1', name: '규정', project_id: null }])
+    mocks.workflowsFor.mockReturnValue([])
+    render(<UploadModal isOpen onClose={() => {}} defaultCollectionId="c1" />)
+
+    fireEvent.change(screen.getByLabelText('문서 유형'), { target: { value: 'regulation' } })
+    dropFiles(screen.getByTestId('upload-dropzone'), [
+      new File(['a'], '휴직규정.pdf', { type: 'application/pdf' }),
+      new File(['b'], '결과보고서.pdf', { type: 'application/pdf' }),
+    ])
+    fireEvent.change(screen.getByLabelText('결과보고서.pdf 문서 유형'), { target: { value: 'general' } })
+    fireEvent.click(screen.getByRole('button', { name: '2개 업로드' }))
+
+    await waitFor(() => expect(mocks.upload).toHaveBeenCalledTimes(2))
+    expect(mocks.upload.mock.calls[0][0]).toMatchObject({ document_type: 'regulation' })
+    expect(mocks.upload.mock.calls[1][0]).toMatchObject({ document_type: 'general' })
+  })
+
+  it('leaves the type to the collection default when nothing is chosen', async () => {
+    mocks.upload.mockClear()
+    mocks.collectionsFor.mockReturnValue([
+      { id: 'c1', name: '규정', project_id: null, default_document_type: 'regulation' } as never,
+    ])
+    render(<UploadModal isOpen onClose={() => {}} defaultCollectionId="c1" />)
+
+    expect(screen.getByRole('option', { name: '컬렉션 기본값 (규정·법령)' })).toBeTruthy()
+    dropFiles(screen.getByTestId('upload-dropzone'), [new File(['a'], '규정.pdf', { type: 'application/pdf' })])
+    fireEvent.click(screen.getByRole('button', { name: '업로드' }))
+
+    await waitFor(() => expect(mocks.upload).toHaveBeenCalled())
+    expect(mocks.upload.mock.calls[0][0].document_type).toBeUndefined()
+  })
+})

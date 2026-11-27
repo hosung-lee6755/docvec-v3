@@ -4,7 +4,7 @@ import { Upload, Trash2, X, RefreshCw } from 'lucide-react'
 import { useDocuments, useDeleteDocument, useBatchDeleteDocuments, useBatchReprocessDocuments, useBatchMoveDocuments, summarizeMoveResults, type DocumentLifecycleFilter, type DocumentQualityFilter, type DocumentSortBy } from '../hooks/useDocuments'
 import { PAGE_SIZE_OPTIONS, readDocumentListView, withDocumentListChange, withDocumentListPage, type DocumentListChange } from '../lib/documentListParams'
 import { useCollections } from '../hooks/useCollections'
-import { STATUS_FILTER_OPTIONS, statusFilterValue } from '../lib/documentStatus'
+import { PROCESSING_FILTER_VALUE, STATUS_FILTER_OPTIONS, statusFilterValue } from '../lib/documentStatus'
 import { useDocumentStats } from '../hooks/useDocumentStats'
 import { LIFECYCLE_FILTER_LABELS } from '../lib/documentLifecycle'
 import { DocumentsTable } from '../components/documents/DocumentsTable'
@@ -211,13 +211,19 @@ export default function DocumentsPage() {
       />
 
       <StatStrip>
+        {/* 네 칸 모두 누르면 목록을 그 범위로 거른다. '전체'는 상태만이 아니라 모든 거르기를 지운다(2026-11-27) */}
         <Stat
           label="전체"
           value={stats?.total_documents ?? 0}
-          isActive={filterStatus === ''}
-          onClick={() => setUrlFilter('status', '')}
+          isActive={!hasActiveFilters}
+          onClick={clearFilters}
         />
-        <Stat label="처리 중" value={stats?.processing ?? 0} />
+        <Stat
+          label="처리 중"
+          value={stats?.processing ?? 0}
+          isActive={filterStatus === PROCESSING_FILTER_VALUE}
+          onClick={() => setUrlFilter('status', PROCESSING_FILTER_VALUE)}
+        />
         <Stat
           label="검토 대기"
           value={waitingCount}
@@ -262,6 +268,7 @@ export default function DocumentsPage() {
           style={{ width: 140 }}
         >
           <option value="">전체 상태</option>
+          <option value={PROCESSING_FILTER_VALUE}>처리 중(전체)</option>
           {STATUS_FILTER_OPTIONS.map(({ value, label }) => (
             <option key={value} value={value}>{label}</option>
           ))}

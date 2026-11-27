@@ -152,6 +152,18 @@
 }
 .user-chat__cite-index { font-weight: var(--weight-semibold); }
 .user-chat__cite-file { display: flex; align-items: center; gap: 4px; }
+/* 근거의 쪽·절 위치. 이름표("문서 위치")를 앞에 붙여 경로가 무엇인지 드러낸다(2026-11-27) */
+.source-place__where { display: inline-flex; align-items: center; gap: 6px; }
+.source-place__label {
+  padding: 0 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
 .user-chat__cite-text { margin: 0; font-size: var(--text-sm); line-height: 1.5; }
 .user-chat__spacer { flex: 1 1 auto; }
 /* 인용 위치 보기: 원문 쪽 그림. 쪽이 길면 대화상자 안에서 스크롤한다 */

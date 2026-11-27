@@ -1,6 +1,7 @@
 ﻿import type { SecurityLevel } from './useDocumentMetadata'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/apiClient'
+import type { DocumentType } from '../lib/documentTypes'
 
 // v3 마일스톤 6 — 컬렉션별 검색 설정. 서버 services/search_settings.py와 범위를 맞춘다.
 export interface SearchSettings {
@@ -36,6 +37,8 @@ export interface Collection {
   default_analysis_workflow_version: number | null
   // v3: 자체 등급이 없는 문서에 적용할 기본 보안등급(null = 공개)
   default_security_level: 'Public' | 'Internal' | 'Confidential' | null
+  // 유형을 지정하지 않은 문서에 쓸 기본 문서 유형(null = 자동 판별, 2026-11-27)
+  default_document_type?: DocumentType | null
   // v3 마일스톤 6: 이 컬렉션의 검색과 채팅이 따르는 검색 방식(서버가 기본값을 채워 보낸다)
   search_settings?: SearchSettings
   reembed_status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | null
@@ -87,6 +90,8 @@ export interface CreateCollectionInput {
   default_analysis_workflow_version?: number
   // 등급이 없는 문서에 적용할 기본 보안등급. 비우면 공개
   default_security_level?: SecurityLevel
+  // 비우면 자동 판별
+  default_document_type?: DocumentType
 }
 
 export interface UpdateCollectionInput {
@@ -106,6 +111,8 @@ export interface UpdateCollectionInput {
   clear_default_analysis_workflow?: boolean
   // 보내면 반영(null = 해제). 생략하면 그대로 둔다.
   default_security_level?: 'Public' | 'Internal' | 'Confidential' | null
+  // 보내면 반영(null = 자동 판별). 생략하면 그대로 둔다.
+  default_document_type?: DocumentType | null
 }
 
 export function useEmbeddingModels() {

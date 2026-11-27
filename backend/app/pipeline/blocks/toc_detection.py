@@ -24,6 +24,14 @@ _TOC_TAIL_RE = re.compile(r"(?:[\s.…·ㆍ‥_\-]{2,}|\s+)\d{1,4}\s*$")
 _SPACE_RE = re.compile(r"\s+")
 
 
+_TOC_TITLE_ONLY_RE = re.compile(r"[<\[(【]?\s*(목\s*차|차\s*례|contents|table\s+of\s+contents)\s*[>\])】:]?", re.IGNORECASE)
+
+
+def is_toc_title(text: str) -> bool:
+    """줄 전체가 목차 제목("목 차", "[차례]", "CONTENTS")인가. 문장 끝의 "목차"는 아니다."""
+    return bool(_TOC_TITLE_ONLY_RE.fullmatch((text or "").strip()))
+
+
 def toc_key(text: str) -> str:
     return _SPACE_RE.sub("", _TOC_TAIL_RE.sub("", text.strip()))
 

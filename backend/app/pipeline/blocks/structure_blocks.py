@@ -26,7 +26,8 @@ from app.pipeline.blocks.base import BaseBlock, BlockContext, BlockResult
 from app.pipeline.blocks.content_blocks import _carry, _upstream_text
 from app.pipeline.blocks.structure_refine import refine_element_blocks
 from app.pipeline.blocks.title_box import shifted_level, starts_with_roman, title_box_heading
-from app.pipeline.blocks.toc_detection import titled_toc_indices
+from app.pipeline.blocks.legal_structure import apply_legal_structure, looks_like_regulation
+from app.pipeline.blocks.toc_detection import is_toc_title, titled_toc_indices
 from app.pipeline.blocks.title_resolver import LeadLine, _is_chapter_heading, resolve_title
 
 logger = logging.getLogger(__name__)
@@ -723,6 +724,21 @@ def _apply_document_title(doc, built_blocks) -> None:
     )
 
 
+def _apply_document_type(db, doc, built_blocks: list) -> list:
+    """문서 유형을 정해 판별값을 문서에 남기고, 규정이면 조문 구조를 입힌 블록 목록을 돌려준다.
+
+    유형은 사용자가 지정한 값(문서, 컬렉션 기본값)을 먼저 쓴다. 판별값은 지정값이 있어도 기록해 화면에서
+    "자동 판별: 규정·법령"처럼 보여 줄 수 있게 한다(services/document_type.py)."""
+    from app.services.document_type import GENERAL, REGULATION, chosen_document_type, collection_default_type
+
+    texts = [block[4] for block in built_blocks if block[0] != "TOC"]
+    doc.detected_document_type = REGULATION if looks_like_regulation(texts) else GENERAL
+    chosen = chosen_document_type(getattr(doc, "document_type", None), collection_default_type(db, doc))
+    if (chosen or doc.detected_document_type) != REGULATION:
+        return built_blocks
+    return apply_legal_structure(built_blocks)
+
+
 class StructureAnalyzeConfig(BaseModel):
     detect_headings: bool = True
     # 2026-11-20 3 → 5. 글자 크기로 나누는 무리는 그대로 셋이고, 4·5단계는 점 번호·기호 순서와 HWP 개요 수준으로 정한다
@@ -805,7 +821,11 @@ class StructureAnalyzeBlock(BaseBlock):
         # 1.24.0: 붙임표 번호 절 제목("1-1. 개발 범위")을 점 번호처럼 제목으로 받는다(AIDE 제안서 DOCX, 2026-11-25).
         # 1.25.0: 파서가 목록 항목으로 읽은 줄(Docling list_item)은 번호가 붙어도 목록 항목으로 둔다. 목록 기호를 본문에
         #         되살리면서 "1. 데이터 파이프라인" 같은 짧은 항목이 제목이 되지 않게 했다(2026-11-26).
-        return "1.25.0"
+        # 1.26.0: 줄 전체가 "목차"/"차례"인 제목은 목차(TOC) 노드로 둔다. 본문이 "목 차" 아래로 들어가 검색 결과의
+        #         절 경로가 "목 차 > …"로 보였다(행정·공공기관 예방점검 가이드 청크 313개, 2026-11-27).
+        # 1.27.0: 문서 유형을 정해 detected_document_type 을 기록하고, 규정·법령이면 편·장·절·관·조 번호 체계로 제목 단계를
+        #         다시 매기며 "제1조(목적) 본문"을 조 제목과 본문으로 나눈다(legal_structure.py, 2026-11-27).
+        return "1.27.0"
 
     @property
     def category(self) -> str:
@@ -873,6 +893,7 @@ class StructureAnalyzeBlock(BaseBlock):
                     markup_headings=_uses_markup_headings(getattr(doc, "original_filename", None)),
                 )
             )
+            built_blocks = _apply_document_type(db, doc, built_blocks)
 
             page_locator = _node_page_locator(doc, text)
             for node_type, level, span_start, span_end, block_text, layout in built_blocks:
@@ -889,6 +910,10 @@ class StructureAnalyzeBlock(BaseBlock):
                     # 설정된 최대 레벨을 넘는 번호 매김은 제목이 아니라 본문
                     # 취급(예: 조항 번호를 제목으로 오인하지 않도록).
                     node_type, level = "PARAGRAPH", None
+                if node_type == "HEADING" and is_toc_title(block_text):
+                    # "목 차" 제목 줄은 목차 영역의 머리다. 제목으로 두면 뒤에 1단계 제목이 다시 나오지 않는 문서에서
+                    # 본문 전체가 "목차" 아래로 들어가, 청크 313개의 절 경로가 "목 차 > …"였다(예방점검 가이드, 2026-11-27)
+                    node_type, level = ("TOC", None) if cfg.detect_toc else ("PARAGRAPH", None)
 
                 if node_type == "HEADING":
                     while len(stack) > 1 and stack[-1][0] >= level:

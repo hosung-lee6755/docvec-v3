@@ -706,7 +706,16 @@ class TextExtractBlock(BaseBlock):
         #         "●" 가 코드로 남았다). PPTX 문단 안 줄바꿈과 필드를 읽는다(2026-11-26).
         # 1.57.0: HWP·HWPX 강제 줄바꿈을 빈칸이 아니라 줄바꿈으로 적는다(원문처럼 줄이 나뉜다, 2026-11-27).
         # 1.58.0: HWP와 HWPX를 확장자가 아니라 파일 내용으로 가린다(이름은 .hwp 인 HWPX 파일, 2026-11-27).
-        return "1.58.0"
+        # 1.59.0: (2026-11-27) PDF 표를 쪽 위에서 아래 순서로 놓고 번호를 문서 처음부터 다시 매긴다(table_order).
+        #         칸이 모두 빈 표 안 글자가 윤곽선 도형이면 칸마다 OCR 로 읽는다(outline_table_cells).
+        #         같은 자리에 겹쳐 그린 글자를 한 번만 읽는다(휴직규정 "제 조 목적 1 ( )", native_spacing).
+        # 1.60.0: (2026-11-27) 윤곽선 글자 표 OCR 을 칸 8개 이상, 평균 신뢰도 60 이상, 그림이 덮지 않은 표로 좁힌다.
+        #         도식 틀(칸 2~6개)의 OCR 글이 "BY TI AILII …"처럼 깨져 표로 들어왔다(법령심사 보고서 8쪽).
+        #         두 겹 글자층 쪽은 원본 글이 Docling 한글을 다 담으면 원본 글을 쓴다(휴직규정 "제 조 적용범위 2 ( )").
+        # 1.61.0: 한글은 같은데 Docling 글에 원본에 없는 기호가 여러 개 끼면(띄어쓰기를 ' 로, 따옴표를 NKo 문자로 읽음) 원본
+        #         글자층을 쓴다(native_spacing._has_phantom_symbols, 임금피크제시행내규, 2026-11-27).
+        # 1.62.0: Docling 영역의 원본 글을 글자 중심 기준으로 읽는다(영역 윗변에 걸친 줄이 통째로 빠지던 문제, 2026-11-27).
+        return "1.62.0"
 
     @property
     def category(self) -> str:
@@ -781,6 +790,12 @@ class TextExtractBlock(BaseBlock):
                     from app.pipeline.adapters.scan_layout import enrich_scanned_pdf
 
                     enrich_scanned_pdf(parsed, tmp_path)
+                if parsed.format_id == "pdf" and engine == "legacy":
+                    # 선 표, 선 없는 표, OCR 쪽 표가 따로 매긴 번호를 읽기 순서 하나로 맞춘다(2026-11-27).
+                    # Docling 경로는 본문과 표가 이미 읽기 순서로 섞여 있고 요소 위치가 블록 순서에 묶여 있어 두지 않는다
+                    from app.pipeline.adapters.table_order import renumber_tables
+
+                    renumber_tables(parsed)
                 native_layer_text = _pdf_native_text(tmp_path)
             finally:
                 tmp_path.unlink(missing_ok=True)

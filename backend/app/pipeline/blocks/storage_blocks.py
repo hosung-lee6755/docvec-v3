@@ -38,6 +38,15 @@ class ChunkSplitConfig(BaseModel):
     table_chunk_max_rows: int | None = None
 
 
+def _is_regulation(db, doc) -> bool:
+    """처리에 쓸 문서 유형이 규정·법령인지(지정값 → 컬렉션 기본값 → 구조 분석 판별값, services/document_type.py)."""
+    from app.services.document_type import REGULATION, collection_default_type, effective_document_type
+
+    chosen = getattr(doc, "document_type", None)
+    detected = getattr(doc, "detected_document_type", None)
+    return effective_document_type(chosen, collection_default_type(db, doc), detected) == REGULATION
+
+
 def _run_structure_nodes(db, node_model, document_id, run_id) -> list:
     return (
         db.query(node_model)
@@ -144,7 +153,9 @@ class ChunkSplitBlock(BaseBlock):
         # 1.11.0: 쪽이나 단이 넘어가며 두 노드로 나뉜 문장을 잇는다. 앞 글이 문장 끝 없이 끝나고 다음 노드가 영문
         # 소문자로 시작하면, 청크를 앞 문장 끝에서 닫고 끝나지 않은 문장을 다음 노드와 함께 담는다(2026-11-23).
         # 1.12.0: 본문이 있는 제목도 그 구획 첫 청크의 글로 담는다(조문 첫 항이 발췌문에서 빠졌다, 2026-11-27).
-        return "1.12.0"
+        # 1.13.0: 규정·법령 문서는 짧은 조를 이웃 조와 합치지 않는다. 조 하나가 청크 하나가 된다(2026-11-27).
+        # 1.14.0: 본문 있는 제목만 든 버퍼는 하위 제목이 오면 청크로 만들지 않는다. 그 제목은 뒤 청크의 구획 경로에 남는다(2026-11-27).
+        return "1.14.0"
 
     @property
     def category(self) -> str:
@@ -260,8 +271,9 @@ class ChunkSplitBlock(BaseBlock):
                     # 큰 표 조각은 표 칸으로 만든다. 글과 같은 민감정보 가리기를 칸에도 적용한다(2026-11-20 감사)
                     tables=mask_table_cells(doc.tables, _pii_cell_masks(db, context.run_id)),
                     table_chunk_max_rows=cfg.table_chunk_max_rows,
-                    # 자동으로 구조 기준을 쓸 때만 짧은 구획을 이웃과 합친다(명시적 section_aware는 그대로)
-                    merge_small_sections=structure_nodes is not None,
+                    # 자동으로 구조 기준을 쓸 때만 짧은 구획을 이웃과 합친다(명시적 section_aware는 그대로).
+                    # 규정·법령은 조 하나가 청크 하나여야 하므로 짧은 조도 합치지 않는다(2026-11-27)
+                    merge_small_sections=structure_nodes is not None and not _is_regulation(db, doc),
                 )
                 spans = [(s.text, s.start, s.end, s.section_path, s.source_node_ids) for s in tree_spans]
             else:  # "fixed" — 인식되지 않는 값도 여기로 폴백(기존 동작 그대로)

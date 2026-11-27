@@ -33,3 +33,12 @@ def _directory_login_off_by_default(monkeypatch):
     monkeypatch.setattr(settings, "ldap_enabled", False)
     # 기존 회원가입 테스트는 가입이 열린 상태를 전제로 한다. 꺼진 동작은 test_auth_local_accounts가 따로 시험한다
     monkeypatch.setattr(settings, "self_signup_enabled", True)
+
+
+@pytest.fixture(autouse=True)
+def _search_rerank_worker_off(monkeypatch):
+    """검색 화면 재순위는 워커(llm 큐)에 점수를 맡긴다. 테스트에는 브로커와 워커가 없으므로 기본은 재순위 없음이다.
+    재순위를 시험하는 테스트는 각자 점수 함수를 바꾼다(2026-11-27)."""
+    from app.services import search_rerank
+
+    monkeypatch.setattr(search_rerank, "_scores_from_worker", lambda query, texts: None)

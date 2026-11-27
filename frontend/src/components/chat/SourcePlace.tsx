@@ -28,7 +28,13 @@ export function SourcePlace({ project_name, collection_name, filename, ...place 
         <FileText size={12} aria-hidden="true" />
         {filename ?? '문서'}
       </span>
-      {where && <span title="쪽과 문서 구조 위치">{where}</span>}
+      {/* 쪽과 절 경로만 "3쪽 · 목 차 > …"처럼 붙어 있으면 무엇인지 알기 어려웠다. 이름표를 붙인다(2026-11-27 사용자 지적) */}
+      {where && (
+        <span className="source-place__where" title="근거가 문서 안에서 놓인 쪽과 장·절(조) 위치">
+          <span className="source-place__label">문서 위치</span>
+          {where}
+        </span>
+      )}
     </>
   )
 }

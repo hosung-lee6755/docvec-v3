@@ -4,6 +4,7 @@ import { STATUS_BADGE_CLASSES, STATUS_LABELS } from '../../lib/documentStatus'
 import type { TabKey } from './documentDetailHelpers'
 import {
   Row, CopyableValue, EditableMetaField, DateMetaField, SecurityLevelField, LanguageMetaField, AutoValueControls,
+  DocumentTypeMetaField,
 } from './documentDetailParts'
 import { qualityStatusDisplay, RUN_TRIGGER_LABELS, RUN_STATUS_BADGE, RUN_STATUS_LABELS } from './documentDetailHelpers'
 import type { useAcceptTagSuggestion, useDismissTagSuggestion, useUpdateDocumentTags } from '../../hooks/useDocuments'
@@ -138,6 +139,11 @@ export default function DocumentSidebar({
           label="부서/기관"
           value={doc.organization}
           onSave={(value) => updateMetadata.mutate({ documentId: doc.id, organization: value })}
+        />
+        <DocumentTypeMetaField
+          value={doc.document_type}
+          detected={doc.detected_document_type}
+          onSave={(value) => updateMetadata.mutate({ documentId: doc.id, document_type: value })}
         />
         <SecurityLevelField
           value={doc.security_level}

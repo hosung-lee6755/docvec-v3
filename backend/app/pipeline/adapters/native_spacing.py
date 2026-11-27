@@ -39,6 +39,55 @@ _DOCLING_SANITIZED = str.maketrans({"⁄": "/", "’": "'", "‘": "'", "“": '
 _ASCENT_RATIO = 0.8
 # 영역 테두리에 걸친 글자를 놓치지 않을 여유(pt)
 _REGION_PAD = 2.0
+# 겹쳐 그린 글자를 같은 자리로 볼 때의 좌표 단위(pt)
+_DUPLICATE_GLYPH_STEP = 0.5
+
+
+def _rounded(value: float) -> float:
+    return round(value / _DUPLICATE_GLYPH_STEP) * _DUPLICATE_GLYPH_STEP
+
+
+# 쪽 글자 가운데 겹쳐 그린 글자가 이보다 많으면 두 겹 글자층 쪽으로 본다. 휴직규정은 45~47%, 다른 PDF 는 0%였다
+DUPLICATE_LAYER_SHARE = 0.2
+
+
+def _hangul(text: str) -> str:
+    return "".join(ch for ch in text if "가" <= ch <= "힣")
+
+
+def _is_subsequence(part: str, whole: str) -> bool:
+    letters = iter(whole)
+    return all(ch in letters for ch in part)
+
+
+def prefer_native_on_duplicate_layer(docling_text: str, native_text: str) -> str:
+    """두 겹 글자층 쪽의 글. Docling 은 한 겹(한글만)을 읽어 숫자와 괄호를 옮기고 따옴표를 바꿔 적는다
+    ("제 조 적용범위 2 ( ) … 직원 이라"). 원본 글이 Docling 의 한글을 순서대로 다 담고 있으면 원본 글을 쓴다(2026-11-27)."""
+    native_flat = " ".join(native_text.split())
+    docling_hangul = _hangul(docling_text)
+    if native_flat and docling_hangul and _is_subsequence(docling_hangul, _hangul(native_flat)):
+        return native_flat
+    return docling_text
+
+
+# Docling 에만 있는 기호가 이만큼 넘으면 글리프를 잘못 옮긴 것으로 본다. 기호 한두 개는 원본 쪽 누락일 수 있다
+_PHANTOM_SYMBOL_MIN = 3
+
+
+def _has_phantom_symbols(docling_text: str, native_flat: str) -> bool:
+    """한글은 순서까지 같은데 Docling 글에 원본에 한 번도 없는 기호가 여러 개 끼었는지.
+
+    한컴 글꼴로 만든 PDF 에서 Docling 이 띄어쓰기를 "'"로, 따옴표 “ ”를 NKo 문자(߫ ߬)로 읽었다
+    ("이' 시행내규는' 임금피크제'", 임금피크제시행내규 2,269자 중 276곳, 2026-11-27). 원본 글자층은 정상이었다."""
+    docling_hangul = _hangul(docling_text)
+    if not docling_hangul or docling_hangul != _hangul(native_flat):
+        return False
+    native_symbols = set(native_flat)
+    phantom = [
+        ch for ch in docling_text
+        if not ch.isspace() and not ch.isalnum() and ch not in native_symbols
+    ]
+    return len(phantom) >= _PHANTOM_SYMBOL_MIN
 
 
 def spacing_score(text: str) -> int:
@@ -127,6 +176,8 @@ def choose_spacing(docling_text: str, native_text: str) -> str:
     docling_chars, native_chars = _compact(docling_text), _compact(native_flat)
     if not docling_chars or not native_chars:
         return docling_text
+    if _has_phantom_symbols(docling_text, native_flat):
+        return native_flat
     native_view = _docling_view(docling_chars, native_chars)
     if native_view != docling_chars and _restores_symbols(docling_chars, native_view):
         if not _only_marker_before(docling_chars, native_view):
@@ -138,18 +189,31 @@ def choose_spacing(docling_text: str, native_text: str) -> str:
     return _with_native_chars(docling_text, native_chars[len(native_chars) - len(docling_chars):])
 
 
-def _page_chars(page) -> list[dict]:
+def _page_chars(page, counts: dict | None = None) -> list[dict]:
     """PyMuPDF 쪽의 글자를 pdfplumber 글자 모양(x0, x1, top, bottom, text, upright)으로 바꾼다.
+    counts 를 주면 읽은 글자 수("chars")와 겹쳐 그려 뺀 글자 수("duplicates")를 적는다.
 
     글자 높이는 pdfplumber 처럼 기준선에서 글꼴 크기로 잡는다. 글 조립(공백, 줄 나눔)은 pdfplumber 의
     extract_text 에 맡겨 원본 글자 층 읽기 결과를 그대로 유지한다."""
     chars: list[dict] = []
+    seen: set[tuple] = set()
     for block in page.get_text("rawdict")["blocks"]:
         for line in block.get("lines", []):
             upright = abs(line["dir"][1]) < 1e-3 and line["dir"][0] > 0
             for span in line["spans"]:
                 size = span["size"]
                 for ch in span["chars"]:
+                    # 같은 자리에 같은 글자를 두 번 그린 PDF 는 한 번만 센다. 한글에서 내보낸 휴직규정은 한 겹에 한글만,
+                    # 다른 겹에 숫자와 괄호까지 그려 원본 글이 "제제1조조((목목적적))"가 되었고, 그래서 Docling 이
+                    # 숫자를 옮긴 "제 조 목적 1 ( )"를 원본 글로 바로잡지 못했다(2026-11-27)
+                    key = (ch["c"], _rounded(ch["bbox"][0]), _rounded(ch["origin"][1]))
+                    if key in seen:
+                        if counts is not None:
+                            counts["duplicates"] = counts.get("duplicates", 0) + 1
+                        continue
+                    seen.add(key)
+                    if counts is not None:
+                        counts["chars"] = counts.get("chars", 0) + 1
                     top = ch["origin"][1] - size * _ASCENT_RATIO
                     chars.append({
                         "x0": ch["bbox"][0], "x1": ch["bbox"][2], "top": top, "bottom": top + size,
@@ -273,6 +337,18 @@ class NativeRegionReader:
         self._size: tuple[float, float] = (0.0, 0.0)
         self._symbols: dict[str, str] = {}
         self._font_names: dict[int, str | None] = {}
+        self._duplicate_share = 0.0
+
+    def has_duplicate_layer(self, page_no: int) -> bool:
+        """이 쪽이 같은 글을 두 겹으로 그린 쪽인가(겹쳐 그린 글자가 DUPLICATE_LAYER_SHARE 넘게 섞임)."""
+        if self._failed:
+            return False
+        try:
+            if self._chars_for(page_no) is None:
+                return False
+        except Exception:  # noqa: BLE001 - 판정 보조일 뿐이다. 읽지 못하면 겹친 쪽이 아닌 것으로 본다
+            return False
+        return self._duplicate_share > DUPLICATE_LAYER_SHARE
 
     def _chars_for(self, page_no: int) -> list[dict] | None:
         if self._doc is None:
@@ -283,7 +359,10 @@ class NativeRegionReader:
             return None
         if self._page_no != page_no:
             page = self._doc[page_no - 1]
-            self._chars, self._size, self._page_no = _page_chars(page), (page.rect.width, page.rect.height), page_no
+            counts: dict = {}
+            self._chars, self._size, self._page_no = _page_chars(page, counts), (page.rect.width, page.rect.height), page_no
+            read = counts.get("chars", 0) + counts.get("duplicates", 0)
+            self._duplicate_share = counts.get("duplicates", 0) / read if read else 0.0
             symbol_spans = [(c["font"], c["text"]) for c in self._chars if is_symbol_code(c["text"])]
             self._symbols = page_symbol_chars(symbol_spans, self._font_namer(page)) if symbol_spans else {}
         return self._chars
@@ -323,7 +402,13 @@ class NativeRegionReader:
             y0, y1 = max(0.0, top - _REGION_PAD), min(height, bottom + _REGION_PAD)
             if x1 <= x0 or y1 <= y0:
                 return ""
-            inside = [c for c in chars if c["x0"] >= x0 and c["x1"] <= x1 and c["top"] >= y0 and c["bottom"] <= y1]
+            # 글자 중심이 영역 안이면 담는다. 예전에는 글자 전체가 들어와야 해서, Docling 영역이 글자 윗변보다 4pt 아래에서
+            # 시작한 문단은 원본 글이 통째로 비었다(임금피크제시행내규 요소 40개 중 28개, PDF 26건 요소 31,686개 중 653개 →
+            # 497개, 2026-11-27 실측)
+            inside = [
+                c for c in chars
+                if x0 <= (c["x0"] + c["x1"]) / 2 <= x1 and y0 <= (c["top"] + c["bottom"]) / 2 <= y1
+            ]
             return (extract_text(inside) or "") if inside else ""
         except Exception as exc:  # 띄어쓰기 보강일 뿐이다. 실패하면 Docling 글을 그대로 쓴다
             self._failed = True

@@ -158,6 +158,8 @@ class Settings(BaseSettings):
     mcp_deep_answer_timeout_seconds: int = 300
     # v3 마일스톤 6: 이보다 낮은 OCR 신뢰도의 쪽에서 나온 검색 결과와 인용에 경고를 붙인다(품질 블록 기본값과 같다)
     ocr_low_confidence: float = Field(0.5, ge=0.0, le=1.0)
+    # 검색 화면이 워커에 맡긴 재순위를 기다리는 최대 시간(초). 넘기면 재순위 없이 결과를 낸다(services/search_rerank.py)
+    search_rerank_timeout_seconds: float = Field(8.0, ge=0.5, le=60.0)
     # v3 마일스톤 7: 골든 평가 지표(적중률, 재현율, MRR)가 기준 실행보다 이만큼 넘게 떨어지면 회귀다
     golden_regression_tolerance: float = Field(0.05, ge=0.0, le=1.0)
     # 검색 설정·사전·문서 버전이 바뀐 뒤 자동 재평가까지 기다리는 시간(연달아 바뀌면 한 번만 돈다)

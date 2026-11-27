@@ -11,6 +11,8 @@ import { getBlockMeta } from '../../lib/workflowBlocks'
 import { apiClient } from '../../lib/apiClient'
 import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../../hooks/useAccess'
 import type { SecurityLevel } from '../../hooks/useDocumentMetadata'
+import type { DocumentType } from '../../lib/documentTypes'
+import { DocumentTypeField } from '../documents/DocumentTypeField'
 import { Alert, Button, ErrorAlert, Field, Input, Modal, Select, Textarea } from '../ui'
 import { ANALYSIS_WORKFLOW_HINT } from '../../lib/analysisOutputs'
 import { projectChangeNotice, workflowsForProject } from '../../lib/workflowScope'
@@ -121,6 +123,7 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
   const [name, setName] = useState(collection.name)
   const [description, setDescription] = useState(collection.description ?? '')
   const [securityLevel, setSecurityLevel] = useState<'' | SecurityLevel>(collection.default_security_level ?? '')
+  const [documentType, setDocumentType] = useState<string>(collection.default_document_type ?? '')
   const [projectId, setProjectId] = useState(collection.project_id ?? '')
   const [isNameMissing, setIsNameMissing] = useState(false)
   const [workflowId, setWorkflowId] = useState(collection.default_workflow_id ?? '')
@@ -182,6 +185,7 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
         description: description.trim() || undefined,
         project_id: projectId || undefined,
         default_security_level: securityLevel || null,
+        default_document_type: (documentType || null) as DocumentType | null,
         ...(workflowId
           ? { default_workflow_id: workflowId, default_workflow_version: versionMode === 'pinned' ? versionNumber : null }
           : { clear_default_workflow: true }),
@@ -293,6 +297,12 @@ export function CollectionEditModal({ collection, projects, routeProjectId, onCl
             </Select>
           )}
         </Field>
+
+        <DocumentTypeField
+          value={documentType}
+          onChange={setDocumentType}
+          hint="유형을 따로 고르지 않은 문서에 적용합니다. 바꾼 뒤에는 문서를 재처리해야 제목 구조와 청크에 반영됩니다."
+        />
 
         {!routeProjectId && (
           <Field

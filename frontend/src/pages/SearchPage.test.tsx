@@ -77,4 +77,20 @@ describe('SearchPage results', () => {
     expect(open).toHaveBeenCalledWith('/projects/p9/documents/d1', '_blank', 'noopener')
     open.mockRestore()
   })
+
+  it('searches like chat by default and says whether the results were reranked', async () => {
+    // 2026-11-27: 화면 기본값이 의미 검색이라 채팅보다 결과가 나빴고, 재순위는 채팅에서만 한다고 안내했다
+    post.mockResolvedValue({ data: {
+      items: [{ ...RESULT, final_score: 0.4, bm25_score: 0.3, rerank_score: 0.91 }],
+      expanded_query: '요양보상', added_terms: [],
+      applied: { mode: 'hybrid', diversify: false, vector_weight: 0.6, rerank_in_chat: true, from_collection: false, reranked: true },
+    } })
+    renderSearch()
+
+    await searchFor('요양보상')
+
+    expect(post.mock.calls[0][1]).toMatchObject({ mode: 'hybrid' })
+    expect(screen.getByText(/재순위 적용/)).toBeInTheDocument()
+    expect(screen.getByText(/91.0%/)).toBeInTheDocument()
+  })
 })

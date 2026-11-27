@@ -245,6 +245,32 @@ def test_run_builds_tree_with_headings_lists_tables():
     db.close.assert_called_once()
 
 
+def test_toc_title_heading_does_not_become_the_parent_of_the_body():
+    # 2026-11-27: "목 차" 가 1단계 제목이 되어 뒤의 본문 제목이 모두 그 아래로 들어갔다(예방점검 가이드 청크 313개)
+    text = "목   차\n◈ 예방점검 개요\n본문"
+    elements = [
+        {"id": "t", "type": "section_header", "content": {"text": "목   차"}, "metadata": {"level": 1},
+         "span_start": 0, "span_end": 5, "page": 2},
+        {"id": "h", "type": "section_header", "content": {"text": "◈ 예방점검 개요"}, "metadata": {"level": 2},
+         "span_start": 6, "span_end": 15, "page": 3},
+        {"id": "p", "type": "text", "content": {"text": "본문"}, "span_start": 16, "span_end": 18, "page": 3},
+    ]
+    _, _, nodes = _run(_doc(elements=elements), text=text)
+
+    root = nodes[0]
+    by_text = {n.text: n for n in nodes[1:]}
+    assert by_text["목   차"].node_type == "TOC"
+    assert by_text["◈ 예방점검 개요"].node_type == "HEADING"
+    assert by_text["◈ 예방점검 개요"].parent_node_id == root.id
+
+
+def test_is_toc_title_matches_a_whole_line_only():
+    from app.pipeline.blocks.toc_detection import is_toc_title
+
+    assert all(is_toc_title(t) for t in ["목   차", "[차례]", "CONTENTS", "Table of Contents", "< 목 차 >"])
+    assert not any(is_toc_title(t) for t in ["사업 추진 목차", "목차 작성 기준", ""])
+
+
 def test_run_deletes_previous_tree():
     _, db, _ = _run(_doc())
     db.query.return_value.filter.return_value.delete.assert_called_once()
@@ -342,7 +368,7 @@ def test_run_elements_path_keeps_toc_when_enabled():
 def test_block_metadata():
     block = sb.StructureAnalyzeBlock()
     assert block.block_type == "structure_analyze"
-    assert block.block_version == "1.25.0"
+    assert block.block_version == "1.27.0"
     assert block.category == "구조·보호"
     assert block.config_schema is sb.StructureAnalyzeConfig
     assert sb.StructureAnalyzeConfig().heading_max_level == 5
@@ -468,3 +494,38 @@ def test_markup_numbered_list_lines_stay_list_items():
     text = "\n".join(e["text"] for e in entries)
     blocks = sb._build_blocks(text, entries, max_level=3, markup_headings=True)
     assert [(b[0], b[4]) for b in blocks[:2]] == [("LIST_ITEM", "1. 첫째 항목"), ("LIST_ITEM", "2. 둘째 항목")]
+
+
+# ---- 문서 유형(2026-11-27) ----
+REG_TEXT = "휴직규정\n제1장 총칙\n제1조(목적) 이 규정은 휴직을 정한다.\n제2조(정의) 정의는 다음과 같다.\n제2장 휴직\n제3조(종류) 종류는 다음과 같다."
+
+
+def test_regulation_chosen_by_user_gets_article_headings_and_levels():
+    doc = _doc(document_type="regulation", collection_id=None)
+
+    _result, _db, nodes = _run(doc, text=REG_TEXT)
+
+    headings = [(n.text, n.level) for n in nodes if n.node_type == "HEADING"]
+    assert ("제1조(목적)", 2) in headings and ("제3조(종류)", 2) in headings
+    assert ("제1장 총칙", 1) in headings and ("제2장 휴직", 1) in headings
+    body = [n.text for n in nodes if n.node_type == "PARAGRAPH"]
+    assert "이 규정은 휴직을 정한다." in body
+    assert doc.detected_document_type == "general"  # 조가 셋뿐이라 자동 판별 기준(5)에는 못 미친다
+
+
+def test_document_type_general_keeps_existing_structure():
+    doc = _doc(document_type="general", collection_id=None)
+
+    _result, _db, nodes = _run(doc, text=REG_TEXT)
+
+    assert not any(n.text == "제1조(목적)" for n in nodes)
+
+
+def test_regulation_is_detected_when_many_articles_follow():
+    text = "\n".join(f"제{n}조(항목{n}) 본문 {n}입니다." for n in range(1, 7))
+    doc = _doc(collection_id=None)
+
+    _result, _db, nodes = _run(doc, text=text)
+
+    assert doc.detected_document_type == "regulation"
+    assert [n.text for n in nodes if n.node_type == "HEADING"][:2] == ["제1조(항목1)", "제2조(항목2)"]

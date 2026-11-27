@@ -64,3 +64,45 @@ def test_tail_merge_still_combines_two_short_non_table_chunks_in_same_section():
 
     assert len(chunks) == 1
     assert chunks[0].source_node_ids == ["p1", "p2"]
+
+
+def test_a_chapter_heading_followed_by_an_article_is_not_a_chunk_of_its_own():
+    # 규정의 "제2장 복무" 한 줄 청크가 검색 후보를 차지해 정답 조문을 밀어냈다(청원경찰복무규정, 2026-11-27).
+    # 장 제목은 뒤 조 청크의 구획 경로에 남는다
+    chapter, article, body = "제2장 복무\n", "제3조(근무제)\n", "① 근무는 격일제로 한다."
+    text = chapter + article + body
+    a, b = len(chapter), len(chapter) + len(article)
+    nodes = [
+        _node("HEADING", "제2장 복무", 0, a - 1, level=1, id="h1"),
+        _node("HEADING", "제3조(근무제)", a, b - 1, level=2, id="h2"),
+        _node("PARAGRAPH", body, b, len(text), id="p1"),
+    ]
+
+    chunks = _tree_based_chunks(
+        nodes, text, max_chars=500, min_chars=1,
+        respect_headings=True, include_previous_heading=False,
+        preserve_table=True, split_long_paragraph=True,
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].section_path == ["제2장 복무", "제3조(근무제)"]
+    assert chunks[0].text.startswith("제3조(근무제)")
+
+
+def test_a_heading_without_body_is_still_kept_as_text():
+    # 본문 없는 제목은 어느 구획 경로에도 남지 않으므로 예전처럼 글로 담는다
+    first, second = "제4조(효력기간) 본 협정서는 1년간 유효하다.\n", "제5조(해석)\n"
+    text = first + second + "해석은 협의한다."
+    nodes = [
+        _node("HEADING", first.strip(), 0, len(first) - 1, level=1, id="h1"),
+        _node("HEADING", "제5조(해석)", len(first), len(first + second) - 1, level=1, id="h2"),
+        _node("PARAGRAPH", "해석은 협의한다.", len(first + second), len(text), id="p1"),
+    ]
+
+    chunks = _tree_based_chunks(
+        nodes, text, max_chars=500, min_chars=1,
+        respect_headings=True, include_previous_heading=False,
+        preserve_table=True, split_long_paragraph=True,
+    )
+
+    assert any("효력기간" in c.text for c in chunks)

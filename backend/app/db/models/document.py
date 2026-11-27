@@ -167,6 +167,10 @@ class Document(Base):
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 처리 방식을 가르는 문서 유형(2026-11-27, services/document_type.py). document_type 은 사용자가 지정한 값이고
+    # None 이면 컬렉션 기본값, 그것도 없으면 구조 분석이 판별한 detected_document_type 을 쓴다.
+    document_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    detected_document_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 원본 파일이 스스로 가진 제목 속성(PDF info dict/DOCX core.title) — text_extract 가 기록하고
     # structure_analyze 의 제목 판정(title_resolver)이 후보로 쓴다. 신뢰할 수 없는 값은 판정 쪽에서 거른다.

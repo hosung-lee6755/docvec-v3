@@ -4,6 +4,7 @@ import type { DocumentLanguage, SecurityLevel } from '../../hooks/useDocumentMet
 import { DOCUMENT_LANGUAGE_OPTIONS, documentLanguageLabel } from './documentDetailHelpers'
 import { Segmented } from '../ui'
 import { SECURITY_LEVEL_LABELS } from '../../hooks/useAccess'
+import { DOCUMENT_TYPE_OPTIONS, documentTypeLabel, type DocumentType } from '../../lib/documentTypes'
 
 // 메타정보 편집 컨트롤 공통 모양 — 버튼은 테두리 상자로, 셀렉트는 오른쪽 ▼ 화살표로 "누르는 것"임을 드러낸다.
 const CHEVRON_ICON =
@@ -275,6 +276,31 @@ export function SecurityLevelField({
           <option key={level} value={level}>{SECURITY_LEVEL_LABELS[level] ?? level}</option>
         ))}
       </select>
+    </Row>
+  )
+}
+
+// 문서 유형(2026-11-27). 비워 두면 컬렉션 기본값, 그것도 없으면 구조 분석의 판별값을 쓴다. 바꾸면 재처리해야 반영된다
+export function DocumentTypeMetaField({
+  value, detected, onSave,
+}: { value: string | null | undefined; detected: string | null | undefined; onSave: (value: DocumentType | null) => void }) {
+  const detectedLabel = documentTypeLabel(detected)
+  return (
+    <Row label="문서 유형">
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <select
+          aria-label="문서 유형"
+          value={value ?? ''}
+          onChange={(e) => onSave((e.target.value || null) as DocumentType | null)}
+          style={SELECT_STYLE}
+        >
+          <option value="">{detectedLabel ? `자동 (판별: ${detectedLabel})` : '자동'}</option>
+          {DOCUMENT_TYPE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>바꾸면 재처리해야 제목 구조와 청크에 반영됩니다</span>
+      </span>
     </Row>
   )
 }

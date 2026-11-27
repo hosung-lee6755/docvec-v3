@@ -15,7 +15,12 @@ from app.pipeline.adapters.base import (
     RawTextBlock,
 )
 from app.pipeline.adapters.native_spacing import PdfSymbolPages, with_symbol_map
+from app.pipeline.adapters.outline_table_cells import CONFIDENCE as OUTLINE_CONFIDENCE
+from app.pipeline.adapters.outline_table_cells import DETECTED_AS as OUTLINE_DETECTED_AS
+from app.pipeline.adapters.outline_table_cells import OutlineTableReader
+from app.pipeline.adapters.ruled_table_grid import merged_cell_grid
 from app.pipeline.adapters.symbol_fonts import is_symbol_code
+from app.pipeline.adapters.table_order import sorted_by_reading_order
 
 _POINTS_PER_CM = 72 / 2.54
 # Reference density for a "fully covered" text page, per engine_design.md
@@ -87,7 +92,8 @@ def _dedupe_tables(tables: list, page_area: float) -> list:
         if any(_table_iou(table.bbox, k.bbox) > 0.5 for k in kept):
             continue
         kept.append(table)
-    return kept
+    # 큰 표를 남기려고 면적 순서로 고른 것이다. 돌려줄 때는 쪽 위에서 아래 순서로 둔다(2026-11-27)
+    return sorted(kept, key=lambda t: (round(t.bbox[1], 1), t.bbox[0]))
 
 
 # BYOK cloud VLM OCR: only used when the caller (process.py::parse_document)
@@ -520,6 +526,7 @@ class PDFAdapter(BaseAdapter):
         ocr_used = False
         fitz_doc = None
         symbol_pages = PdfSymbolPages(file_path, warnings)
+        outline_tables = OutlineTableReader(file_path, warnings)
         line_layout: list[dict] = []
         # 메타 정보 생성.txt 1절 document_created_at — PDF info dict의
         # creationDate("D:YYYYMMDDHHmmSS..." 형식)를 읽는다. 별도의 짧은 fitz
@@ -563,15 +570,22 @@ class PDFAdapter(BaseAdapter):
                         try:
                             # 합친 칸은 선 표, HWP, DOCX 와 같은 규칙으로 두고 합친 칸 목록을 남긴다(2026-11-25).
                             # 예전 extract() 는 합친 칸의 나머지 자리를 비우고 목록도 없었다
-                            from app.pipeline.adapters.ruled_table_grid import merged_cell_grid
-
                             rows, spans = merged_cell_grid(table)
                         except Exception as table_exc:
                             warnings.append(f"page {page_num} table extract failed: {table_exc}")
                             continue
                         cleaned_rows = [[(cell or "").strip() for cell in row] for row in rows]
-                        # 칸이 모두 빈 표는 낸 적이 없는 표다. 윤곽선 글자 쪽의 선만 표로 잡히면 빈 "[표 N]" 이 남는다
-                        # (만도 보고서, 2026-11-25). 그런 쪽의 표는 OCR 표 찾기(scan_layout)가 글과 함께 낸다
+                        detected_as, confidence = "ruled", 1.0
+                        if not any(cell for row in cleaned_rows for cell in row):
+                            # 칸이 모두 빈 표. 표 안 글자가 윤곽선 도형이면 칸마다 OCR 로 읽는다(2026-11-27, 법령심사
+                            # 보고서 7쪽). 도형이 적으면 빈 서식 표이거나 윤곽선 글자 쪽의 선만 잡힌 것이라
+                            # 예전처럼 버린다(만도 보고서 2026-11-25, 그런 쪽의 표는 scan_layout 이 낸다)
+                            ocr_texts = outline_tables.read(page_num, [tuple(cell) for cell in table.cells])
+                            if not ocr_texts:
+                                continue
+                            rows, spans = merged_cell_grid(table, extra=ocr_texts)
+                            cleaned_rows = [[(cell or "").strip() for cell in row] for row in rows]
+                            detected_as, confidence = OUTLINE_DETECTED_AS, OUTLINE_CONFIDENCE
                         if any(cell for row in cleaned_rows for cell in row):
                             table_candidates.append(
                                 RawTableCandidate(
@@ -580,6 +594,8 @@ class PDFAdapter(BaseAdapter):
                                     spans=spans or None,
                                     bbox=table.bbox,
                                     cell_bboxes=[tuple(cell) for cell in table.cells],
+                                    detected_as=detected_as,
+                                    confidence=confidence,
                                 )
                             )
 
@@ -602,6 +618,9 @@ class PDFAdapter(BaseAdapter):
                             )
                         except Exception as implicit_exc:
                             warnings.append(f"page {page_num} implicit table detection failed: {implicit_exc}")
+                    # 쪽 안에서 위에서 아래로 번호를 매긴다. 선 표가 면적 순서로, 선 없는 표가 맨 뒤에 와서 위 표가
+                    # 아래 표보다 큰 번호를 받았다(법령심사 보고서 2쪽 결재표와 개정이력표, 2026-11-27)
+                    table_candidates = sorted_by_reading_order(table_candidates)
 
                     exclusion_rects = _table_exclusion_rects(table_candidates)
                     text = _text_excluding_tables(page, exclusion_rects)
@@ -766,6 +785,7 @@ class PDFAdapter(BaseAdapter):
             )
         finally:
             symbol_pages.close()
+            outline_tables.close()
             if fitz_doc is not None:
                 fitz_doc.close()
 

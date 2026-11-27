@@ -23,6 +23,7 @@ from app.services.lexical_index import hybrid_query_vector
 from app.services.mmr_service import mmr_rerank
 from app.services.qdrant_service import qdrant_service
 from app.services.retrieval_evidence import matched_terms, ocr_evidence, page_confidences
+from app.services.search_rerank import rerank_candidates
 from app.services.search_settings import DEFAULT_SEARCH_SETTINGS, stored_collection_search_settings
 
 # 4: hybrid search (vector + BM25) needs broader initial candidate pool because
@@ -36,6 +37,11 @@ _MMR_CANDIDATE_MULTIPLIER = 3
 # 0.7: favors relevance (70%) over diversity (30%) — standard balance for retrieval;
 # queries expecting maximum diversity can override to lower values
 _MMR_LAMBDA = 0.7
+# 재순위할 후보는 결과 수의 두 배다(채팅 _rank_candidates 와 같다)
+_RERANK_POOL_MULTIPLIER = 2
+# 교차 인코더가 읽는 글. 채팅과 같이 문서 제목과 절 경로를 붙인 글(bm25_text)이다. 본문(content)만 읽히면
+# 조 제목에 답이 있는 규정에서 순위가 떨어졌다(2026-11-27 골든 쿼리 비교, pipeline/tasks/chat.py)
+_RERANK_TEXT_FIELD = "bm25_text"
 
 
 def _embed_query(query: str) -> list[float]:
@@ -58,13 +64,11 @@ async def perform_search(
     # froze uploads and document listing for all users). Offload to a worker thread.
     query_vector = await asyncio.to_thread(_embed_query, expanded_query)
 
-    # v3 마일스톤 6: 요청에 없으면 컬렉션 검색 설정을 따른다. 재순위는 API 프로세스에 모델을 올리지 않도록
-    # 검색 화면에서는 하지 않는다(채팅 워커만 한다).
-    # 설정을 저장하지 않은 컬렉션이나 컬렉션 없는 검색에서 방식을 빼먹은 호출(MCP, 스크립트)은
-    # 예전처럼 의미 검색이다. 채팅의 기본값(하이브리드)과는 일부러 다르다.
+    # v3 마일스톤 6: 요청에 없으면 컬렉션 검색 설정을 따르고, 설정이 없으면 채팅과 같은 기본값(하이브리드, 재순위)이다.
+    # 예전에는 설정이 없으면 의미 검색만 해서 같은 질문에 검색 화면과 채팅의 근거가 달랐다(2026-11-27).
     stored = await stored_collection_search_settings(db, request.collection_id)
     collection_settings = stored or DEFAULT_SEARCH_SETTINGS
-    mode = request.mode or (stored.mode if stored else "vector")
+    mode = request.mode or collection_settings.mode
     diversify = collection_settings.diversify if request.diversify is None else request.diversify
     applied = AppliedSearchSettings(
         mode=mode, diversify=diversify, vector_weight=collection_settings.vector_weight,
@@ -135,13 +139,22 @@ async def perform_search(
         candidates = bm25_rerank(expanded_query, candidates, text_field="bm25_text",
                                  alpha_vector=weight, alpha_bm25=round(1 - weight, 4))
 
+    # 채팅과 같은 2단계: 후보를 결과 수의 두 배로 추린 뒤 교차 인코더가 다시 고른다(services/search_rerank.py)
+    use_rerank = collection_settings.rerank
+    pool_size = request.limit * _RERANK_POOL_MULTIPLIER if use_rerank else request.limit
     if diversify and candidates:
         relevance_field = "final_score" if mode == "hybrid" else "score"
         candidates = mmr_rerank(
-            candidates, k=request.limit, relevance_field=relevance_field, lambda_param=_MMR_LAMBDA
+            candidates, k=pool_size, relevance_field=relevance_field, lambda_param=_MMR_LAMBDA
         )
     else:
-        candidates = candidates[: request.limit]
+        candidates = candidates[:pool_size]
+    reranked = False
+    if use_rerank:
+        candidates, reranked = await rerank_candidates(
+            request.query, candidates, text_field=_RERANK_TEXT_FIELD, limit=request.limit,
+        )
+    applied = applied.model_copy(update={"reranked": reranked})
 
     evidence = await _result_evidence(db, expanded_query, candidates)
     places = await _result_places(db, candidates)
@@ -154,6 +167,7 @@ async def perform_search(
             metadata=c["metadata"],
             bm25_score=c.get("bm25_score"),
             final_score=c.get("final_score"),
+            rerank_score=c.get("rerank_score"),
             evidence=item_evidence,
             **place,
         )

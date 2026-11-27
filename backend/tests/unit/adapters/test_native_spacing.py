@@ -5,7 +5,13 @@ Pub120bk 에서는 "V oluntary"처럼 영어 첫 글자를 떼었다. 사례집 
 낱말을 붙여 읽는 경우도 있어, 글자가 같을 때만 덜 깨진 쪽을 고른다."""
 import fitz
 
-from app.pipeline.adapters.native_spacing import NativeRegionReader, choose_spacing, restore_marker, spacing_score
+from app.pipeline.adapters.native_spacing import (
+    NativeRegionReader,
+    choose_spacing,
+    prefer_native_on_duplicate_layer,
+    restore_marker,
+    spacing_score,
+)
 
 
 def test_broken_korean_spacing_scores_worse_than_natural_spacing():
@@ -136,6 +142,51 @@ def _pdf_with_text(tmp_path):
     return path
 
 
+def test_region_reader_reads_a_glyph_drawn_twice_at_the_same_spot_once(tmp_path):
+    # 2026-11-27: 한글에서 내보낸 휴직규정 PDF 는 한 겹에 한글만, 다른 겹에 숫자까지 같은 자리에 그렸다.
+    # 원본 글이 "제제1조조"가 되어 Docling 이 옮긴 숫자("제 조 1")를 바로잡지 못했다
+    doc = fitz.open()
+    page = doc.new_page(width=300, height=200)
+    for x, ch in ((10, "A"), (28, "B")):
+        page.insert_text((x, 50), ch, fontsize=12)
+    for x, ch in ((10, "A"), (19, "1"), (28, "B")):
+        page.insert_text((x, 50), ch, fontsize=12)
+    path = tmp_path / "double.pdf"
+    doc.save(path)
+    reader = NativeRegionReader(path, [])
+
+    text = reader.read(1, (0.0, 30.0, 300.0, 60.0))
+    reader.close()
+
+    assert text.replace(" ", "") == "A1B"
+
+
+def test_page_drawn_in_two_layers_is_flagged_and_a_single_layer_page_is_not(tmp_path):
+    doc = fitz.open()
+    doubled = doc.new_page(width=300, height=200)
+    for _ in range(2):
+        doubled.insert_text((10, 50), "Article one", fontsize=12)
+    single = doc.new_page(width=300, height=200)  # 새 쪽을 만들면 앞 쪽 객체를 다시 쓸 수 없어 쪽마다 바로 그린다
+    single.insert_text((10, 50), "Article one", fontsize=12)
+    path = tmp_path / "layers.pdf"
+    doc.save(path)
+    reader = NativeRegionReader(path, [])
+
+    assert reader.has_duplicate_layer(1) is True
+    assert reader.has_duplicate_layer(2) is False
+    reader.close()
+
+
+def test_native_text_is_used_on_a_two_layer_page_when_it_holds_all_docling_hangul():
+    # 휴직규정 제2조: Docling 은 한 겹을 읽어 숫자와 괄호를 옮기고 둥근 따옴표를 곧은 따옴표로 바꿨다
+    docling = "제 조 적용범위 2 ( ) 이 규정은 본국직원 이하 직원 이라 한다 에게 적용한다 다만 ( ' ' ) . ,"
+    native = "제2조(적용범위) 이 규정은 본국직원(이하 “직원”이라 한다)에게 적용한다. 다만,"
+
+    assert prefer_native_on_duplicate_layer(docling, native) == native
+    # 원본 글이 Docling 한글을 다 담지 못하면(다른 영역을 읽었으면) Docling 글을 그대로 둔다
+    assert prefer_native_on_duplicate_layer(docling, "제2조(적용범위)") == docling
+
+
 def test_region_reader_reads_only_the_bbox_in_either_origin(tmp_path):
     path = _pdf_with_text(tmp_path)
     warnings: list[str] = []
@@ -224,3 +275,39 @@ def test_pdf_symbol_pages_maps_codes_for_the_pdfplumber_path(monkeypatch, tmp_pa
 
     assert native_spacing.with_symbol_map(" 법제처", symbols) == "● 법제처"
     assert native_spacing.with_symbol_map("그대로", {}) == "그대로" and warnings == []
+
+
+def test_native_text_replaces_phantom_symbols_docling_misread():
+    # 한컴 글꼴 PDF 에서 Docling 이 띄어쓰기를 "'"로, 따옴표를 NKo 문자로 읽었다(임금피크제시행내규, 2026-11-27)
+    docling = "제1조(목적) 이' 시행내규는' 임금피크제' 대상' 직원의' 인사 ߫ 임금피크제 '߬ 란"
+    native = "제1조(목적) 이 시행내규는 임금피크제 대상 직원의 인사 “임금피크제” 란"
+
+    assert choose_spacing(docling, native) == native
+
+
+def test_one_extra_symbol_alone_does_not_replace_docling_text():
+    docling = "이 규정은 시행한다'"
+    native = "이 규정은 시행한다"
+
+    assert choose_spacing(docling, native) in (docling, native)  # 한 개는 판정 기준(3개) 밖이다
+    from app.pipeline.adapters import native_spacing
+
+    assert not native_spacing._has_phantom_symbols(docling, native)
+
+
+def test_region_read_takes_characters_whose_centre_is_inside(tmp_path):
+    # Docling 영역이 글자 윗변보다 몇 pt 아래에서 시작해도 그 줄의 글자를 읽는다(임금피크제시행내규, 2026-11-27)
+    from app.pipeline.adapters.native_spacing import NativeRegionReader
+
+    doc = fitz.open()
+    page = doc.new_page(width=300, height=200)
+    page.insert_text((20, 50), "ABC DEF", fontsize=12)
+    path = tmp_path / "centre.pdf"
+    doc.save(path)
+    reader = NativeRegionReader(path, [])
+
+    # 글자 윗변(약 40.4)보다 5pt 아래(45)에서 시작하는 영역
+    text = reader.read(1, (15.0, 45.0, 200.0, 56.0))
+    reader.close()
+
+    assert "ABC" in text and "DEF" in text

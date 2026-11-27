@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field, model_validator
 
+from app.services.document_type import DocumentType
+
 
 class DocumentUploadResponse(BaseModel):
     id: UUID
@@ -46,6 +48,9 @@ class DocumentResponse(BaseModel):
     title: str | None = None
     language: str | None = None
     category: str | None = None
+    # 사용자가 지정한 문서 유형(None 이면 자동)과 구조 분석이 판별한 유형(services/document_type.py)
+    document_type: str | None = None
+    detected_document_type: str | None = None
     page_count: int | None = None
     # 사용자가 직접 수정해 재처리가 덮어쓰지 않는 자동 생성 필드명 목록.
     user_edited_fields: list[str] | None = None
@@ -368,6 +373,8 @@ class DocumentMetadataUpdateRequest(BaseModel):
     language: Literal["ko", "en", "ja", "zh"] | None = None
     category: str | None = Field(None, max_length=50)
     reset_fields: list[Literal["title", "language", "category"]] | None = None
+    # 처리 방식을 가르는 문서 유형. None 을 보내면 자동 판별로 되돌린다. 바꾼 뒤 재처리해야 구조와 청크에 반영된다
+    document_type: DocumentType | None = None
 
     model_config = {"extra": "forbid"}
 

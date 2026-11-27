@@ -20,6 +20,7 @@ interface SearchResult {
   metadata: Record<string, unknown>
   bm25_score: number | null
   final_score: number | null
+  rerank_score?: number | null
   // v3 마일스톤 6: 질문과 겹친 낱말, 그 쪽의 OCR 신뢰도
   evidence?: RetrievalEvidence | null
   // 출처 위치(2026-11-27): 채팅 인용과 같은 정보
@@ -43,6 +44,7 @@ interface AppliedSearchSettings {
   vector_weight: number
   rerank_in_chat: boolean
   from_collection: boolean
+  reranked?: boolean
 }
 
 interface SearchResponse {
@@ -61,12 +63,18 @@ const MODE_OPTIONS: ReadonlyArray<{ value: SearchMode; label: string }> = [
   { value: 'hybrid', label: '하이브리드(BM25)' },
 ]
 
+// 재순위: 교차 인코더가 질문과 본문을 함께 읽고 다시 고른다. 워커가 바쁘면 이번 검색만 건너뛴다(2026-11-27)
+function rerankSummary(applied: AppliedSearchSettings): string {
+  if (!applied.rerank_in_chat) return '재순위 끔'
+  return applied.reranked ? '재순위 적용' : '재순위 건너뜀(처리 서버가 바쁨)'
+}
+
 function appliedSummary(applied: AppliedSearchSettings): string {
   const how = applied.mode === 'hybrid'
     ? `하이브리드(의미 ${Math.round(applied.vector_weight * 100)}%, 키워드 ${Math.round((1 - applied.vector_weight) * 100)}%)`
     : '의미 검색'
   const origin = applied.from_collection ? '컬렉션 설정 기준' : '이 화면에서 고른 설정'
-  return `${how}${applied.diversify ? ', 다양성 검색' : ''} · ${origin} · 재순위는 채팅에서만 합니다(이 설정: ${applied.rerank_in_chat ? '켬' : '끔'})`
+  return `${how}${applied.diversify ? ', 다양성 검색' : ''} · ${origin} · ${rerankSummary(applied)}`
 }
 
 export default function SearchPage() {
@@ -76,7 +84,8 @@ export default function SearchPage() {
     projectId ? `/projects/${projectId}/documents/${documentId}` : `/documents/${documentId}`
   const [query, setQuery] = useState('')
   const [collectionId, setCollectionId] = useState('')
-  const [mode, setMode] = useState<SearchMode>('vector')
+  // 기본은 채팅과 같은 하이브리드다. 컬렉션을 고르면 그 컬렉션의 검색 설정으로 바뀐다(2026-11-27)
+  const [mode, setMode] = useState<SearchMode>('hybrid')
   const [diversify, setDiversify] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [tagFilter, setTagFilter] = useState('')
@@ -273,8 +282,8 @@ export default function SearchPage() {
                   <LowOcrBadge evidence={result.evidence} />
                   <span className="user-chat__spacer" />
                   <Badge tone="neutral">
-                    {((result.final_score ?? result.score) * 100).toFixed(1)}%
-                    {result.bm25_score != null && ' (하이브리드)'}
+                    {((result.rerank_score ?? result.final_score ?? result.score) * 100).toFixed(1)}%
+                    {result.rerank_score != null ? ' (재순위)' : result.bm25_score != null && ' (하이브리드)'}
                   </Badge>
                   <CitationLocation
                     documentId={result.document_id}
@@ -297,6 +306,9 @@ export default function SearchPage() {
                     {result.bm25_score != null && (
                       <Badge tone="neutral">BM25 {(result.bm25_score * 100).toFixed(1)}</Badge>
                     )}
+                    {result.rerank_score != null && (
+                      <Badge tone="info">재순위 {(result.rerank_score * 100).toFixed(1)}</Badge>
+                    )}
                     {result.final_score != null && (
                       <Badge tone="info">최종 {(result.final_score * 100).toFixed(1)}</Badge>
                     )}
@@ -318,6 +330,7 @@ export default function SearchPage() {
                     vector: result.score,
                     ...(result.bm25_score != null ? { bm25: result.bm25_score } : {}),
                     ...(result.final_score != null ? { fused: result.final_score } : {}),
+                    ...(result.rerank_score != null ? { rerank: result.rerank_score } : {}),
                   },
                 }} />
               </div>

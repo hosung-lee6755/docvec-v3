@@ -28,6 +28,9 @@ export interface Document {
   title: string | null
   language: string | null
   category: string | null
+  // 사용자가 지정한 문서 유형(null = 자동)과 구조 분석이 판별한 유형(2026-11-27)
+  document_type?: string | null
+  detected_document_type?: string | null
   page_count: number | null
   author: string | null
   organization: string | null
@@ -569,6 +572,8 @@ export interface UploadDocumentInput {
   new_document?: boolean
   // 이 문서를 분석할 워크플로우. 없으면 컬렉션 기본 분석(없으면 표준 분석)을 쓴다(2026-11-24)
   analysis_workflow_id?: string
+  // 문서 유형(regulation/general). 없으면 컬렉션 기본값, 그것도 없으면 자동 판별이다(2026-11-27)
+  document_type?: string
 }
 
 export interface UploadDocumentResult {
@@ -583,6 +588,7 @@ function appendUploadOptions(form: FormData, input: Omit<UploadDocumentInput, 'f
   if (input.workflow_version_id) form.append('workflow_version_id', input.workflow_version_id)
   if (input.new_document) form.append('new_document', 'true')
   if (input.analysis_workflow_id) form.append('analysis_workflow_id', input.analysis_workflow_id)
+  if (input.document_type) form.append('document_type', input.document_type)
 }
 
 export function useUploadDocument() {

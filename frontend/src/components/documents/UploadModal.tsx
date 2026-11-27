@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { FileDropzone } from './FileDropzone'
+import { DocumentTypeField } from './DocumentTypeField'
 import { DOCUMENT_EXTENSIONS, ZIP_EXTENSIONS } from '../../lib/uploadFormats'
 import { useUploadDocument, useUploadZip, type BulkUploadResponse } from '../../hooks/useDocuments'
 import { useCollections } from '../../hooks/useCollections'
@@ -9,6 +10,9 @@ import { Alert, Badge, Button, Field, IconButton, Modal, Select, Spinner, Tabs }
 import type { BadgeTone } from '../ui'
 import { describeError } from '../../lib/apiError'
 import { workflowsForProject } from '../../lib/workflowScope'
+import {
+  DOCUMENT_TYPE_HINT, DOCUMENT_TYPE_OPTIONS, documentTypeLabel, resolveUploadDocumentType,
+} from '../../lib/documentTypes'
 import '../../styles/screens/documents.css'
 
 interface UploadModalProps {
@@ -61,6 +65,9 @@ export function UploadModal({
   const [analysisWorkflowId, setAnalysisWorkflowId] = useState('')
   const [skipReview, setSkipReview] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  // 문서 유형: 업로드 전체에 하나(batch), 파일마다 바꾼 값(fileTypes, selectedFiles 와 같은 순서). 빈 값은 자동이다
+  const [batchDocumentType, setBatchDocumentType] = useState('')
+  const [fileTypes, setFileTypes] = useState<string[]>([])
   const [uploadProgress, setUploadProgress] = useState<{ name: string; status: UploadRowStatus; error?: string }[]>([])
   const [isBatchUploading, setIsBatchUploading] = useState(false)
   const [uploadMode, setUploadMode] = useState<UploadMode>('files')
@@ -97,6 +104,8 @@ export function UploadModal({
     setAnalysisWorkflowId('')
     setSkipReview(false)
     setSelectedFiles([])
+    setBatchDocumentType('')
+    setFileTypes([])
     setUploadProgress([])
     setIsBatchUploading(false)
     setUploadMode('files')
@@ -110,6 +119,16 @@ export function UploadModal({
 
   const removeSelectedFile = (index: number) => {
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index))
+    setFileTypes((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const addFiles = (files: File[]) => {
+    setSelectedFiles((prev) => [...prev, ...files])
+    setFileTypes((prev) => [...prev, ...files.map(() => '')])
+  }
+
+  const setFileType = (index: number, value: string) => {
+    setFileTypes((prev) => prev.map((t, i) => (i === index ? value : t)))
   }
 
   const handleZipUploadSubmit = async (e: React.FormEvent) => {
@@ -124,6 +143,7 @@ export function UploadModal({
         workflow_version_id: resolvedUploadWorkflowVersionId,
         new_document: newDocument,
         analysis_workflow_id: analysisWorkflowId || undefined,
+        document_type: batchDocumentType || undefined,
       })
       setZipResult(result)
     } catch (err) {
@@ -158,6 +178,7 @@ export function UploadModal({
           workflow_version_id: resolvedUploadWorkflowVersionId,
           new_document: newDocument,
           analysis_workflow_id: analysisWorkflowId || undefined,
+          document_type: resolveUploadDocumentType(fileTypes[i], batchDocumentType),
         })
         const notice = versionNoticeFor(result.version_number)
         if (notice) versionNotices.push(`${selectedFiles[i].name}: ${notice}`)
@@ -212,6 +233,18 @@ export function UploadModal({
         )}
       </Field>
     </>
+  )
+
+  // 컬렉션 기본 유형이 있으면 "자동"이 그 값을 따른다는 것을 알린다
+  const collectionTypeLabel = documentTypeLabel(selectedUploadCollection?.default_document_type)
+  const autoTypeLabel = collectionTypeLabel ? `컬렉션 기본값 (${collectionTypeLabel})` : '자동 판별'
+  const documentTypeField = (
+    <DocumentTypeField
+      value={batchDocumentType}
+      onChange={setBatchDocumentType}
+      autoLabel={autoTypeLabel}
+      hint={isMultiUpload ? `${DOCUMENT_TYPE_HINT} 파일마다 다르면 아래 목록에서 그 파일만 바꾸세요.` : DOCUMENT_TYPE_HINT}
+    />
   )
 
   const collectionMissingHint =!collectionsData?.length ? '컬렉션이 없습니다. 먼저 컬렉션을 생성하세요.' : undefined
@@ -277,6 +310,7 @@ export function UploadModal({
             </Field>
 
             {uploadCollectionId && workflowFields}
+            {documentTypeField}
 
             <div className="ds-field">
               <span className="ds-field__label">파일 <span className="documents-text-danger">*</span></span>
@@ -286,7 +320,7 @@ export function UploadModal({
                     isMultiple
                     onClick={() => fileRef.current?.click()}
                     onFiles={(accepted, rejected) => {
-                      setSelectedFiles((prev) => [...prev, ...accepted])
+                      addFiles(accepted)
                       setDropNotice(rejectedNotice(rejected))
                     }}
                   >
@@ -301,8 +335,7 @@ export function UploadModal({
                     accept={DOCUMENT_EXTENSIONS.join(',')}
                     aria-label="업로드할 파일"
                     onChange={(e) => {
-                      const newFiles = Array.from(e.target.files ?? [])
-                      setSelectedFiles((prev) => [...prev, ...newFiles])
+                      addFiles(Array.from(e.target.files ?? []))
                       if (fileRef.current) fileRef.current.value = ''
                     }}
                   />
@@ -313,6 +346,20 @@ export function UploadModal({
                         return (
                           <div key={`${f.name}-${i}`} className="documents-file-row" style={progress?.error ? { flexWrap: 'wrap' } : undefined}>
                             <span className="documents-ellipsis" title={progress?.error}>{f.name}</span>
+                            {/* 여러 파일 가운데 일부만 유형이 다르면 그 파일만 바꾼다. 기본은 위에서 고른 전체 유형이다 */}
+                            {isMultiUpload && !progress && (
+                              <select
+                                className="documents-file-type"
+                                aria-label={`${f.name} 문서 유형`}
+                                value={fileTypes[i] ?? ''}
+                                onChange={(e) => setFileType(i, e.target.value)}
+                              >
+                                <option value="">전체 설정 따름</option>
+                                {DOCUMENT_TYPE_OPTIONS.map((o) => (
+                                  <option key={o.value} value={o.value}>{o.label}</option>
+                                ))}
+                              </select>
+                            )}
                             {progress?.status === 'success' && <span className="documents-text-success" aria-label="성공">✓</span>}
                             {progress?.status === 'error' && <span className="documents-text-danger" title={progress.error} aria-label="실패">✕</span>}
                             {progress?.status === 'pending' && isBatchUploading && <Spinner size={12} />}
@@ -384,6 +431,7 @@ export function UploadModal({
             </Field>
 
             {uploadCollectionId && workflowFields}
+            {documentTypeField}
 
             <div className="ds-field">
               <span className="ds-field__label">ZIP 파일 <span className="documents-text-danger">*</span></span>
@@ -415,7 +463,8 @@ export function UploadModal({
                   />
                   <p className="documents-note">
                     ZIP 안에서 개별 업로드와 같은 형식(PDF, HWP, DOCX, XLSX, CSV 등)의 파일을 꺼내 각각 문서로 등록합니다.
-                    지원하지 않는 형식이나 중복 파일은 건너뜁니다.
+                    지원하지 않는 형식이나 중복 파일은 건너뜁니다. 문서 유형은 ZIP 안의 모든 파일에 같이 적용됩니다.
+                    파일마다 다르게 하려면 개별 파일로 올리거나, 올린 뒤 문서 화면에서 바꾸고 재처리하세요.
                   </p>
             </div>
 

@@ -66,6 +66,8 @@ class Collection(Base):
     # v3 권한 모델: 문서에 security_level이 없을 때 적용할 기본 보안등급. 둘 다 없으면
     # Public으로 본다(v2 문서의 기존 동작 보존) — app/services/access_policy.py.
     default_security_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 문서에 유형을 지정하지 않았을 때 쓸 기본 문서 유형(2026-11-27, services/document_type.py). null 이면 자동 판별
+    default_document_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # v3 마일스톤 6: 이 컬렉션의 검색과 채팅이 따를 검색 방식(services/search_settings.py). null이면 기본값
     search_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # The preprocessing workflow run automatically against every document

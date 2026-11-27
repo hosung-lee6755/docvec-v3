@@ -254,8 +254,8 @@ async def test_perform_search_request_overrides_collection_mode():
 
 
 @pytest.mark.asyncio
-async def test_perform_search_without_mode_or_saved_settings_stays_vector():
-    # MCP나 스크립트처럼 방식을 빼먹은 호출은 마일스톤 6 이전처럼 의미 검색이다
+async def test_perform_search_without_mode_or_saved_settings_uses_chat_defaults():
+    # 방식을 빼먹은 호출도 채팅과 같은 기본값(하이브리드)이다(2026-11-27)
     user = MagicMock(id=uuid4())
     db = AsyncMock()
     db.add = MagicMock()
@@ -271,7 +271,7 @@ async def test_perform_search_without_mode_or_saved_settings_stays_vector():
 
         response = await search_service.perform_search(db, user, SearchRequest(query="q"))
 
-    assert response.applied.mode == "vector" and response.applied.from_collection is False
+    assert response.applied.mode == "hybrid" and response.applied.from_collection is False
 
 
 @pytest.mark.asyncio
@@ -314,3 +314,74 @@ async def test_perform_search_without_any_visible_collection_returns_an_empty_re
 
     assert response.items == [] and response.expanded_query == "hello"
     mock_qdrant.search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_perform_search_reranks_with_worker_scores_when_collection_asks_for_it():
+    """검색 화면도 채팅처럼 교차 인코더로 다시 고른다(2026-11-27)."""
+    from app.services import search_rerank
+    from app.services.search_settings import SearchSettings
+
+    user = MagicMock(id=uuid4())
+    document_id = str(uuid4())
+    db = AsyncMock()
+    db.add = MagicMock()
+    collection_settings = SearchSettings(mode="vector", vector_weight=0.5, diversify=False, rerank=True)
+    seen = {}
+
+    def _scores(query, texts):
+        seen["texts"] = texts
+        return [0.1, 0.9, 0.5]
+
+    with (
+        patch("app.services.search_service.get_embedding_provider") as mock_provider,
+        patch("app.services.search_service.qdrant_service") as mock_qdrant,
+        patch.object(search_service, "stored_collection_search_settings", new=AsyncMock(return_value=collection_settings)),
+        patch.object(search_service, "page_confidences", new=AsyncMock(return_value={})),
+        patch.object(search_rerank, "_scores_from_worker", new=_scores),
+    ):
+        mock_provider.return_value.embed.return_value = [[0.1, 0.2, 0.3]]
+        mock_qdrant.search.return_value = [
+            _make_hit("c1", 0.9, document_id, "제5조 근무요령"),
+            _make_hit("c2", 0.8, document_id, "제3조 근무시간"),
+            _make_hit("c3", 0.7, document_id, "제1조 목적"),
+        ]
+
+        response = await search_service.perform_search(
+            db, user, SearchRequest(query="근무시간", limit=2, collection_id=uuid4())
+        )
+
+    assert seen["texts"] == ["제5조 근무요령", "제3조 근무시간", "제1조 목적"]
+    assert [i.chunk_id for i in response.items] == ["c2", "c3"]
+    assert response.items[0].rerank_score == 0.9
+    assert response.applied.reranked is True
+
+
+@pytest.mark.asyncio
+async def test_perform_search_without_worker_answer_keeps_fused_order():
+    from app.services.search_settings import SearchSettings
+
+    user = MagicMock(id=uuid4())
+    document_id = str(uuid4())
+    db = AsyncMock()
+    db.add = MagicMock()
+    collection_settings = SearchSettings(mode="vector", vector_weight=0.5, diversify=False, rerank=True)
+
+    with (
+        patch("app.services.search_service.get_embedding_provider") as mock_provider,
+        patch("app.services.search_service.qdrant_service") as mock_qdrant,
+        patch.object(search_service, "stored_collection_search_settings", new=AsyncMock(return_value=collection_settings)),
+        patch.object(search_service, "page_confidences", new=AsyncMock(return_value={})),
+    ):
+        mock_provider.return_value.embed.return_value = [[0.1, 0.2, 0.3]]
+        mock_qdrant.search.return_value = [
+            _make_hit("c1", 0.9, document_id, "a"), _make_hit("c2", 0.8, document_id, "b"),
+            _make_hit("c3", 0.7, document_id, "c"),
+        ]
+
+        response = await search_service.perform_search(
+            db, user, SearchRequest(query="q", limit=2, collection_id=uuid4())
+        )
+
+    assert [i.chunk_id for i in response.items] == ["c1", "c2"]
+    assert response.applied.reranked is False and response.items[0].rerank_score is None

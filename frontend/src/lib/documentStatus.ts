@@ -29,6 +29,9 @@ export const STATUS_LABELS: Record<string, string> = {
   ANALYZING: '분석중',
 }
 
+/** 처리 중인 상태 전부를 한 번에 거르는 값. 요약 띠의 '처리 중' 칸과 같은 상태 묶음이다(2026-11-27). */
+export const PROCESSING_FILTER_VALUE = PROCESSING_STATUSES.join(',')
+
 export interface StatusFilterOption {
   /** 문서 목록 API의 status 값. 이름이 같은 상태가 여럿이면 쉼표로 묶는다. */
   value: string

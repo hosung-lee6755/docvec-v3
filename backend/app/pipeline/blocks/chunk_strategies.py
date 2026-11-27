@@ -333,6 +333,11 @@ def _split_table_rows(
     return rendered
 
 
+def _only_open_headings(buf_node_ids: list[str], heading_ids: set[str], body_less: set[str]) -> bool:
+    """버퍼가 본문을 가진 제목(구획 경로에 남는 제목)으로만 차 있는지. 본문 없는 제목은 문단처럼 담으므로 빼지 않는다."""
+    return bool(buf_node_ids) and all(i in heading_ids and i not in body_less for i in buf_node_ids)
+
+
 def _headings_without_body(nodes: list) -> set[str]:
     """아래에 본문(표 포함) 없이 같은 수준 이상의 제목이나 문서 끝이 바로 오는 제목의 id.
     한 줄짜리 조문("제4조(효력기간) 본 협정서는 …")이나 제목으로 분류된 번호 줄이 여기에 든다(2026-11-20 감사)."""
@@ -498,7 +503,12 @@ def _tree_based_chunks(
             continue  # 쪽마다 반복되는 머리말·꼬리말과 목차 줄은 검색 근거로 쓰지 않는다(2026-11-13)
 
         if node.node_type == "HEADING":
-            if respect_headings:
+            if respect_headings and _only_open_headings(buf_node_ids, heading_node_ids, body_less_headings):
+                # 버퍼에 본문 있는 제목만 있고 바로 하위 제목이 오면, 그 제목은 뒤 청크들의 구획 경로에 들어간다.
+                # 제목 한 줄짜리 청크("제2장 복무")를 따로 만들면 검색 후보만 차지해 정답 조문을 밀어냈다(2026-11-27)
+                set_buffer([])
+                open_tail = False
+            elif respect_headings:
                 flush()
             level = node.level if node.level is not None else 1
             while stack and stack[-1][0] >= level:

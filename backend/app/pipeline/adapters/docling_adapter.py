@@ -30,7 +30,15 @@ from app.pipeline.adapters.base import (
     RawTextBlock,
 )
 from app.pipeline.adapters.docling_toc import TOC_LABELS, choose_toc_lines, grid_text, toc_columns
-from app.pipeline.adapters.native_spacing import NativeRegionReader, choose_spacing, restore_marker, with_page_symbols
+from app.pipeline.adapters.native_spacing import (
+    NativeRegionReader,
+    choose_spacing,
+    prefer_native_on_duplicate_layer,
+    restore_marker,
+    with_page_symbols,
+)
+from app.pipeline.adapters.outline_table_cells import DETECTED_AS as OUTLINE_DETECTED_AS
+from app.pipeline.adapters.outline_table_cells import OutlineTableReader
 from app.pipeline.adapters.hwpx_structure import grid_from_cells
 from app.pipeline.adapters.ruled_tables import RuledTable, find_ruled_tables, match_ruled_table
 from app.pipeline.adapters.table_text_coverage import TextLine, lines_from_words, missing_lines, refill_cells
@@ -104,6 +112,18 @@ def _table_rows(table_item) -> list[list[str]]:
     if header == [str(i) for i in range(len(header))]:
         return body
     return [header, *body]
+
+
+def _outline_cell_texts(page_height: float, cells: list, reader: OutlineTableReader, page_no: int) -> list[str] | None:
+    """칸마다 OCR 글(칸 순서). 윤곽선 글자 표가 아니거나 하나도 읽지 못하면 None 이다."""
+    if not page_height or not cells:
+        return None
+    boxes = [_cell_box(cell, page_height) for cell in cells]
+    known = [box for box in boxes if box is not None]
+    texts = reader.read(page_no, known)
+    if not texts:
+        return None
+    return [texts.get(box, "") if box is not None else "" for box in boxes]
 
 
 def _table_grid(table_item, texts: list[str] | None = None) -> tuple[list[list[str]], list[dict] | None]:
@@ -717,6 +737,7 @@ class DoclingAdapter(BaseAdapter):
         native_text = _NativeTextReader(file_path, warnings)
         # 본문 글의 띄어쓰기를 원본 글자 층과 견준다(Docling 이 "텅레 일의", "V oluntary"처럼 낱말을 떼던 문제, 2026-11-20)
         native_region = NativeRegionReader(file_path, warnings)
+        outline_tables = OutlineTableReader(file_path, warnings)
 
         def page_for(page_no: int) -> RawPage:
             if page_no not in pages_by_no:
@@ -784,12 +805,18 @@ class DoclingAdapter(BaseAdapter):
                             lambda box, page_no=page_no: native_region.read(page_no, box),
                         )
                     rows, spans = _table_grid(item, cell_texts)
+                    detected_as = "docling_table"
                     if not any((cell or "").strip() for row in rows for cell in row):
-                        # 칸을 하나도 읽지 못한 표는 빈 "[표 N]" 만 남긴다(윤곽선 글자 쪽, 만도 보고서 2026-11-25)
-                        continue
+                        # 칸을 하나도 읽지 못한 표. 표 안 글자가 윤곽선 도형이면 칸마다 OCR 로 읽는다(2026-11-27).
+                        # 아니면 빈 "[표 N]" 만 남으므로 버린다(윤곽선 글자 쪽, 만도 보고서 2026-11-25)
+                        ocr_texts = _outline_cell_texts(page.height, docling_cells, outline_tables, page_no)
+                        if ocr_texts is None:
+                            continue
+                        rows, spans = _table_grid(item, ocr_texts)
+                        detected_as = OUTLINE_DETECTED_AS
                     table_ordinal += 1
                     _emit_table(
-                        page, elements, section_path, symbol_rows(rows), spans, bbox, "docling_table",
+                        page, elements, section_path, symbol_rows(rows), spans, bbox, detected_as,
                         table_title(),
                     )
                 continue
@@ -847,7 +874,9 @@ class DoclingAdapter(BaseAdapter):
             if _already_in_toc(toc_bands, page_no, bbox, text):
                 continue  # 쪽 너비로 읽은 차례 줄에 이미 든 옆 단 항목이다(Pub120bk 나라별 차례, 2026-11-26)
             region_text = native_region.read(page_no, bbox) if text else ""
-            if text:
+            if text and native_region.has_duplicate_layer(page_no):
+                text = prefer_native_on_duplicate_layer(text, region_text)
+            elif text:
                 text = choose_spacing(text, region_text)
             if label in _LIST_ITEM_LABELS:
                 text = _with_list_marker(item, text, region_text)
@@ -864,6 +893,7 @@ class DoclingAdapter(BaseAdapter):
         ruled_source.close()
         native_text.close()
         native_region.close()
+        outline_tables.close()
         _attach_native_text_to_pictures(file_path, pages_by_no, warnings)
 
         vision_backend = options.get("vision_backend")

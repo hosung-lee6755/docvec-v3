@@ -221,6 +221,17 @@ def _resolve_content_type(filename: str, declared: str | None) -> str:
     return mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
 
+def _validated_document_type(value: str | None) -> str | None:
+    """업로드 때 고른 문서 유형. 자동 판별(빈 값, auto)이면 None, 모르는 값이면 422."""
+    from app.services.document_type import normalize_document_type
+
+    try:
+        # 엔드포인트를 함수로 직접 부르면(내부 호출·테스트) 기본값 Form 객체가 들어온다. 자동 판별로 본다
+        return normalize_document_type(value if isinstance(value, str) else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 async def _read_bounded(file: UploadFile, limit: int, too_large_detail: str) -> bytes:
     """업로드 본문을 상한+1바이트까지만 읽어, 거대한 요청이 메모리를 채우기 전에 413으로 끊는다."""
     content = await file.read(limit + 1)
@@ -258,6 +269,7 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     new_document: bool = Form(False),
     analysis_workflow_id: str | None = Form(None),
+    document_type: str | None = Form(None),
 ):
     from pathlib import PurePath
 
@@ -267,6 +279,7 @@ async def upload_document(
         await check_collection_access(db, collection_id, current_user, min_role="editor")
     # 원본을 저장하기 전에 확인한다. 잘못 고른 분석 워크플로우로 문서만 남으면 안 된다
     chosen_analysis_id = await _resolve_analysis_workflow_id(db, collection_id, analysis_workflow_id, current_user)
+    chosen_type = _validated_document_type(document_type)
 
     # Defect 4: Validate file size before storing (읽는 단계에서 상한을 강제한다)
     content = await _read_bounded(
@@ -345,6 +358,7 @@ async def upload_document(
         created_by=str(current_user.id),
         collection_id=collection_id,
         analysis_workflow_id=chosen_analysis_id,
+        document_type=chosen_type,
         **version,
     )
     db.add(document)
@@ -380,6 +394,7 @@ async def upload_documents_zip(
     current_user: User = Depends(get_current_user),
     new_document: bool = Form(False),
     analysis_workflow_id: str | None = Form(None),
+    document_type: str | None = Form(None),
 ):
     """Extracts a .zip and registers each supported document inside it, one by
     one, so a batch that arrives pre-bundled (e.g. downloaded elsewhere) doesn't
@@ -396,6 +411,9 @@ async def upload_documents_zip(
     if collection_id is not None:
         await check_collection_access(db, collection_id, current_user, min_role="editor")
     chosen_analysis_id = await _resolve_analysis_workflow_id(db, collection_id, analysis_workflow_id, current_user)
+    # ZIP 안의 파일은 모두 같은 유형을 받는다. 파일마다 다르면 압축을 풀어 여러 파일 업로드로 고르거나, 올린 뒤 문서
+    # 화면에서 바꾸고 재처리한다(2026-11-27)
+    chosen_type = _validated_document_type(document_type)
 
     zip_bytes = await _read_bounded(
         file, _ZIP_MAX_ARCHIVE_BYTES,
@@ -496,6 +514,7 @@ async def upload_documents_zip(
                 created_by=str(current_user.id),
                 collection_id=collection_id,
                 analysis_workflow_id=chosen_analysis_id,
+                document_type=chosen_type,
                 **version,
             )
             db.add(document)

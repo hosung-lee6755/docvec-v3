@@ -4,6 +4,8 @@ import { useCreateCollection } from '../../hooks/useCollections'
 import { useWorkflows } from '../../hooks/useWorkflows'
 import { SECURITY_LEVELS, SECURITY_LEVEL_LABELS } from '../../hooks/useAccess'
 import type { SecurityLevel } from '../../hooks/useDocumentMetadata'
+import type { DocumentType } from '../../lib/documentTypes'
+import { DocumentTypeField } from '../documents/DocumentTypeField'
 import { ANALYSIS_WORKFLOW_HINT } from '../../lib/analysisOutputs'
 import { projectChangeNotice, workflowsForProject } from '../../lib/workflowScope'
 import { Alert, Button, ErrorAlert, Field, Input, Modal, Select, Textarea } from '../ui'
@@ -36,6 +38,7 @@ export function CollectionCreateModal({ projects, routeProjectId, initialProject
   const [workflowId, setWorkflowId] = useState('')
   const [analysisWorkflowId, setAnalysisWorkflowId] = useState('')
   const [securityLevel, setSecurityLevel] = useState<'' | SecurityLevel>('')
+  const [documentType, setDocumentType] = useState('')
   const [isNameMissing, setIsNameMissing] = useState(false)
   const { data: preprocessWorkflows } = useWorkflows(projectId || null, 'PREPROCESS')
   const { data: analysisWorkflows } = useWorkflows(projectId || null, 'ANALYSIS')
@@ -66,6 +69,7 @@ export function CollectionCreateModal({ projects, routeProjectId, initialProject
       default_workflow_id: workflowId || undefined,
       default_analysis_workflow_id: analysisWorkflowId || undefined,
       default_security_level: securityLevel || undefined,
+      default_document_type: (documentType || undefined) as DocumentType | undefined,
     })
     onClose()
   }
@@ -125,6 +129,12 @@ export function CollectionCreateModal({ projects, routeProjectId, initialProject
             </Select>
           )}
         </Field>
+
+        <DocumentTypeField
+          value={documentType}
+          onChange={setDocumentType}
+          hint="이 컬렉션에 올리는 문서에 유형을 따로 고르지 않으면 이 유형으로 처리합니다. 규정·법령은 조 단위로 제목과 청크를 나눕니다."
+        />
 
         {!routeProjectId && (
           <Field label="프로젝트" hint="프로젝트를 지정하면 해당 프로젝트의 모든 멤버가 이 컬렉션에 자동으로 접근할 수 있습니다.">
